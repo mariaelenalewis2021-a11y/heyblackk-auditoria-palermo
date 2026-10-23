@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hey Blackk Auditorías</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="theme-color" content="#111113">
+<meta name="description" content="Auditoría de la sucursal Palermo de Hey Blackk">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="HB Auditoría">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: banda negra con el logo HEYBLACKK, pestañas pegajosas, ficha de auditoría en tarjetas por punto con semáforo de colores (igual al Excel), barra de resultado fija abajo */
+:root{
+  --bg:#F3F3F5; --surface:#FFFFFF; --ink:#141416; --muted:#5F5F68; --line:#E0E0E6; --chip:#ECECF0;
+  --band:#111113; --band-ink:#F5F5F3; --accent:#141416; --accent-ink:#FFFFFF;
+  --s1:#D92D20; --s1bg:#FEE4E2; --s2:#E8590C; --s2bg:#FFE8D9; --s3:#CA8A04; --s3bg:#FEF3C7;
+  --s4:#16A34A; --s4bg:#DCFCE7; --s5:#0E7A3E; --s5bg:#C9F2D9;
+  --ok:#15803D; --ok-bg:#DCFCE7; --warn:#B45309; --warn-bg:#FEF3C7; --bad:#C81E1E; --bad-bg:#FEE2E2; --pend:#5F5F68; --pend-bg:#ECECF0;
+  --f-body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --r:12px;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0F0F11; --surface:#1A1A1E; --ink:#F2F2F0; --muted:#A3A3AC; --line:#2D2D33; --chip:#24242A;
+  --band:#000000; --band-ink:#F2F2F0; --accent:#F2F2F0; --accent-ink:#111113;
+  --s1:#F97066; --s1bg:#3A1716; --s2:#FB8A4A; --s2bg:#3A2012; --s3:#FACC15; --s3bg:#352B0C; --s4:#4ADE80; --s4bg:#11301C; --s5:#34D399; --s5bg:#0D3324;
+  --ok:#4ADE80; --ok-bg:#11301C; --warn:#FBBF24; --warn-bg:#352B0C; --bad:#F87171; --bad-bg:#3A1716; --pend:#A3A3AC; --pend-bg:#24242A; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#0F0F11; --surface:#1A1A1E; --ink:#F2F2F0; --muted:#A3A3AC; --line:#2D2D33; --chip:#24242A;
+  --band:#000000; --band-ink:#F2F2F0; --accent:#F2F2F0; --accent-ink:#111113;
+  --s1:#F97066; --s1bg:#3A1716; --s2:#FB8A4A; --s2bg:#3A2012; --s3:#FACC15; --s3bg:#352B0C; --s4:#4ADE80; --s4bg:#11301C; --s5:#34D399; --s5bg:#0D3324;
+  --ok:#4ADE80; --ok-bg:#11301C; --warn:#FBBF24; --warn-bg:#352B0C; --bad:#F87171; --bad-bg:#3A1716; --pend:#A3A3AC; --pend-bg:#24242A; color-scheme:dark; }
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--band)}
+.wrap{max-width:1080px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+button,input,select,textarea{font:inherit;color:inherit}
+button,a,label{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+:focus-visible{outline:2px solid var(--s4);outline-offset:2px}
+.mono,.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+
+.band{background:var(--band);color:var(--band-ink)}
+.band .wrap{padding-block:18px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.logo{height:clamp(22px,5.4vw,34px);width:auto;max-width:100%;display:block;filter:invert(1) brightness(1.05)}
+.sub{font-family:var(--f-mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;opacity:.72;margin-top:8px}
+.who{font-size:12.5px;opacity:.85}
+
+.tabs{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--band);border-top:1px solid rgba(255,255,255,.08)}
+.tabs .wrap{display:flex;gap:2px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.tabs .wrap::-webkit-scrollbar{display:none}
+.tab{-webkit-appearance:none;appearance:none;min-height:46px;border:0;background:transparent;color:var(--band-ink);opacity:.62;padding:10px 12px;font-weight:600;font-size:14px;cursor:pointer;border-bottom:3px solid transparent;display:flex;gap:6px;align-items:center;white-space:nowrap}
+.tab[aria-selected="true"]{opacity:1;border-bottom-color:#F5F5F3}
+.tab .lk{font-size:11px;opacity:.8}
+
+main .wrap{padding-block:18px 40px;display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+main .wrap > *, #kpi-body > *, .split > *{min-width:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.card h2{font-weight:700;font-size:19px;margin:0 0 4px;text-wrap:balance;letter-spacing:-.01em}
+.card h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:700}
+.lead{color:var(--muted);margin:0 0 12px;max-width:65ch}
+.grid2{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))}
+label.f{display:grid;gap:4px;font-size:13.5px;color:var(--ink);font-weight:600}
+input[type=text],input[type=date],input[type=number],input[type=password],select,textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--ink);font-size:16px;font-weight:400;-webkit-appearance:none;appearance:none;min-height:44px}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
+select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px;background-repeat:no-repeat;padding-right:32px}
+textarea{min-height:64px;resize:vertical}
+.btn{-webkit-appearance:none;appearance:none;min-height:44px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;justify-content:center;text-decoration:none;font-size:14.5px}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.xl{background:#107C41;color:#fff;border-color:#107C41}
+.btn.pdf{background:#C81E1E;color:#fff;border-color:#C81E1E}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
+.btn.sm{padding:6px 10px;font-size:13px;min-height:36px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.spacer{flex:1}
+
+/* Ficha por punto */
+.puntos{display:grid;gap:10px}
+.punto{display:grid;gap:10px;padding:14px;border-radius:var(--r);border:1px solid var(--line);background:var(--surface);transition:background .15s,border-color .15s}
+.punto[data-s="1"]{background:var(--s1bg);border-color:var(--s1)} .punto[data-s="2"]{background:var(--s2bg);border-color:var(--s2)}
+.punto[data-s="3"]{background:var(--s3bg);border-color:var(--s3)} .punto[data-s="4"]{background:var(--s4bg);border-color:var(--s4)}
+.punto[data-s="5"]{background:var(--s5bg);border-color:var(--s5)}
+.punto-head{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.punto-head b{font-weight:700;font-size:15.5px;display:flex;gap:8px;align-items:center}
+.punto-head .em{font-size:20px;line-height:1}
+.punto-head .idx{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.score{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.score button{-webkit-appearance:none;appearance:none;min-height:56px;border:2px solid transparent;border-radius:10px;padding:6px 2px;cursor:pointer;display:grid;gap:0;justify-items:center;align-content:center;min-width:0;font-weight:600}
+.score button .n{font-size:16px;line-height:1.1}
+.score button .t{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.score button[data-v="1"]{background:var(--s1bg);color:var(--s1)} .score button[data-v="2"]{background:var(--s2bg);color:var(--s2)}
+.score button[data-v="3"]{background:var(--s3bg);color:var(--s3)} .score button[data-v="4"]{background:var(--s4bg);color:var(--s4)}
+.score button[data-v="5"]{background:var(--s5bg);color:var(--s5)}
+.punto[data-s] .score button{background:var(--surface)}
+.score button[aria-pressed="true"]{color:#fff!important;transform:scale(1.04);box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.score button[data-v="1"][aria-pressed="true"]{background:var(--s1)!important} .score button[data-v="2"][aria-pressed="true"]{background:var(--s2)!important}
+.score button[data-v="3"][aria-pressed="true"]{background:var(--s3)!important} .score button[data-v="4"][aria-pressed="true"]{background:var(--s4)!important}
+.score button[data-v="5"][aria-pressed="true"]{background:var(--s5)!important}
+:root[data-theme="dark"] .score button[aria-pressed="true"]{color:#111!important}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .score button[aria-pressed="true"]{color:#111!important} }
+.punto-extra{display:grid;grid-template-columns:1fr 128px;gap:8px;align-items:start}
+@media (max-width:460px){.punto-extra{grid-template-columns:1fr 118px}}
+@media (max-width:360px){.score button .t{font-size:9px}.score{gap:4px}}
+.inf{display:grid;gap:2px}
+.inf span{font-size:11px;color:var(--muted);text-align:center}
+.stepper{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.stepper button{-webkit-appearance:none;appearance:none;border:0;background:transparent;width:40px;min-height:44px;cursor:pointer;font-size:20px;color:var(--ink)}
+.stepper input{border:0;border-radius:0;text-align:center;padding:8px 0;background:transparent;min-width:0;min-height:44px}
+.punto input[type=text]{background:var(--surface)}
+
+/* Barra de resultado */
+.resultbar{position:sticky;bottom:0;z-index:4;border-radius:var(--r);padding:12px 14px;display:flex;gap:10px 14px;align-items:center;flex-wrap:wrap;box-shadow:0 -6px 22px rgba(0,0,0,.12);background:var(--pend-bg);border:2px solid var(--line);margin-bottom:env(safe-area-inset-bottom,0px)}
+.resultbar[data-r="Excelente"]{background:var(--ok-bg);border-color:var(--ok)}
+.resultbar[data-r="Advertencia"]{background:var(--warn-bg);border-color:var(--warn)}
+.resultbar[data-r="Reclamo"]{background:var(--bad-bg);border-color:var(--bad)}
+.big{font-weight:700;font-size:30px;line-height:1;font-variant-numeric:tabular-nums}
+.big small{font-size:13px;color:var(--muted);font-weight:500}
+.rlabel{font-weight:700;font-size:16px}
+.meter{height:8px;border-radius:4px;background:rgba(127,127,127,.2);overflow:hidden;min-width:80px;flex:1}
+.meter i{display:block;height:100%;background:var(--ink);transition:width .2s}
+@media (max-width:480px){.resultbar .btn{flex:1 1 100%}}
+
+.pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:3px 10px;font-size:12.5px;font-weight:700;background:var(--pend-bg);color:var(--pend);white-space:nowrap}
+.pill.ok{background:var(--ok-bg);color:var(--ok)} .pill.warn{background:var(--warn-bg);color:var(--warn)} .pill.bad{background:var(--bad-bg);color:var(--bad)}
+.sc{display:inline-grid;place-items:center;min-width:30px;height:24px;border-radius:6px;font-family:var(--f-mono);font-weight:600;font-size:13px;padding:0 6px;flex:none}
+
+.fotos{display:flex;gap:8px;flex-wrap:wrap}
+.foto{width:84px;height:84px;border-radius:10px;overflow:hidden;border:1px solid var(--line);position:relative;background:var(--chip);display:block}
+.foto img{width:100%;height:100%;object-fit:cover;display:block}
+.foto button{position:absolute;top:3px;right:3px;border:0;border-radius:50%;width:24px;height:24px;background:rgba(0,0,0,.65);color:#fff;cursor:pointer;line-height:1}
+.addfoto{width:84px;height:84px;border:2px dashed var(--muted);border-radius:10px;display:grid;place-items:center;cursor:pointer;color:var(--muted);font-size:12px;text-align:center;padding:4px;font-weight:600}
+
+.notice{border-radius:10px;padding:10px 12px;font-size:14px;background:var(--chip);color:var(--ink)}
+.notice.bad{background:var(--bad-bg);color:var(--bad)} .notice.ok{background:var(--ok-bg);color:var(--ok)} .notice.warn{background:var(--warn-bg);color:var(--warn)}
+.msgbox{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:14px}
+.sent-head{display:flex;gap:12px;align-items:center}
+.sent-head .em{font-size:34px;line-height:1}
+
+.lockcard{max-width:440px;margin:20px auto;width:100%}
+.lockicon{font-size:34px;margin-bottom:8px}
+
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:620px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--band-ink);font-weight:700;background:var(--band);position:sticky;top:0}
+td.n,th.n{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+tr.clk{cursor:pointer} tr.clk:hover td{background:var(--bg)}
+.detail td{background:var(--bg)}
+.dgrid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr))}
+.dgrid > div{font-size:13.5px;display:flex;gap:8px;align-items:flex-start}
+.dl{display:grid;gap:10px;padding:12px;border-radius:10px;background:var(--surface);border:1px solid var(--line)}
+
+.kpis{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(100%,155px),1fr))}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:grid;gap:3px;align-content:start;border-top:4px solid var(--line)}
+.kpi.ok{border-top-color:var(--ok)} .kpi.warn{border-top-color:var(--warn)} .kpi.bad{border-top-color:var(--bad)}
+.kpi .k{font-size:12px;color:var(--muted);font-weight:700}
+.kpi .v{font-weight:700;font-size:28px;line-height:1.1;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12.5px;color:var(--muted)}
+.bars{display:grid;gap:10px}
+.bar{display:grid;grid-template-columns:minmax(130px,240px) 1fr 44px;gap:10px;align-items:center;font-size:13.5px}
+@media (max-width:520px){.bar{grid-template-columns:1fr 44px}.bar .track{grid-column:1/-1;order:3}}
+.bar .track{height:14px;background:var(--chip);border-radius:4px;position:relative;overflow:hidden}
+.bar .track i{position:absolute;inset:0 auto 0 0;border-radius:4px}
+.bar .v{text-align:right;font-family:var(--f-mono);font-size:13px;font-weight:600}
+.weak{outline:2px solid var(--bad);outline-offset:3px}
+.chart svg{width:100%;height:auto;display:block}
+.chart text{fill:var(--muted);font-family:var(--f-mono);font-size:11px}
+.split{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
+.action{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.action li{padding:10px 12px;border-radius:10px;background:var(--bg);font-size:14px;display:flex;gap:10px}
+.empty{color:var(--muted);text-align:center;padding:28px 10px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--band);color:var(--band-ink);padding:10px 16px;border-radius:10px;font-size:14px;z-index:20;max-width:calc(100% - 32px);box-shadow:0 6px 20px rgba(0,0,0,.25)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}.score button[aria-pressed="true"]{transform:none}}
+
+body{margin:0}
+.gate{position:fixed;inset:0;z-index:30;background:var(--bg);overflow:auto;display:grid;place-items:start center}
+.gate .band{width:100%}
+.gate .card{margin:24px 16px;max-width:420px;width:calc(100% - 32px)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<!-- Portón de entrada: clave -->
+<div class="gate" id="gate">
+  <header class="band"><div class="wrap"><div><img class="logo" alt="HEYBLACKK" src=""><div class="sub">Auditoría · Sucursal Palermo</div></div></div></header>
+  <div class="card">
+    <div class="lockicon">🔐</div>
+    <h2 id="g-title">Conectando…</h2>
+    <p class="lead" id="g-lead"><span class="spin"></span> Un momento.</p>
+    <form id="g-login" hidden autocomplete="off" style="display:grid;gap:10px">
+      <label class="f">Clave<input type="password" id="g-pw" autocomplete="current-password" maxlength="128"></label>
+      <div id="g-err" class="notice bad" hidden></div>
+      <button class="btn primary" type="submit" id="g-btn">🔓 Entrar</button>
+    </form>
+    <form id="g-setup" hidden autocomplete="off" style="display:grid;gap:10px">
+      <label class="f">🧾 Código de instalación<input type="text" id="s-code" autocomplete="off" autocapitalize="characters" maxlength="12" placeholder="Lo genera el servidor (8 caracteres)"></label>
+      <label class="f">🔑 Clave de jefes (ve Registro, KPI y Ajustes)<input type="password" id="s-j1" autocomplete="new-password"></label>
+      <label class="f">Repetí la clave de jefes<input type="password" id="s-j2" autocomplete="new-password"></label>
+      <label class="f">📝 Clave de auditor (solo carga auditorías)<input type="password" id="s-a1" autocomplete="new-password"></label>
+      <label class="f">Repetí la clave de auditor<input type="password" id="s-a2" autocomplete="new-password"></label>
+      <div id="s-err" class="notice bad" hidden></div>
+      <button class="btn primary" type="submit" id="s-btn">🔐 Crear claves</button>
+    </form>
+  </div>
+</div>
+
+<header class="band">
+  <div class="wrap">
+    <div>
+      <img class="logo" alt="HEYBLACKK" src="">
+      <div class="sub">Auditoría · Sucursal Palermo</div>
+    </div>
+    <div class="row" style="gap:8px"><span class="who" id="who"></span><button class="btn sm" id="btn-instalar" hidden style="background:transparent;color:var(--band-ink);border-color:rgba(255,255,255,.3)">📲 Instalar</button><button class="btn sm" id="btn-salir" style="background:transparent;color:var(--band-ink);border-color:rgba(255,255,255,.3)">Salir</button></div>
+  </div>
+</header>
+<nav class="tabs" aria-label="Secciones">
+  <div class="wrap" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-view="auditar">📝 Auditar</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="registro">🗂️ Registro <span class="lk">🔒</span></button>
+    <button class="tab" role="tab" aria-selected="false" data-view="kpi">📊 KPI <span class="lk">🔒</span></button>
+    <button class="tab" role="tab" aria-selected="false" data-view="ajustes">⚙️ Ajustes <span class="lk">🔒</span></button>
+  </div>
+</nav>
+
+<main>
+  <section class="wrap" id="v-auditar">
+    <div class="card">
+      <h2>📝 Nueva auditoría · Palermo</h2>
+      <p class="lead">Completá tu nombre y la fecha. Elegí un puntaje de 1 (muy mal) a 5 (excelente) en cada punto. Si ves fallas, sumá cuántas con el +.</p>
+      <div class="grid2">
+        <label class="f">👤 Auditor<input type="text" id="f-auditor" autocomplete="name" placeholder="Nombre y apellido" maxlength="60"></label>
+        <label class="f">📅 Fecha<input type="date" id="f-fecha"></label>
+      </div>
+    </div>
+    <div class="puntos" id="puntos"></div>
+    <div class="card">
+      <div class="grid2">
+        <label class="f">⏳ Días del pedido más viejo sin retirar<input type="number" id="f-dias" min="0" max="365" inputmode="numeric" placeholder="0"></label>
+        <label class="f" style="grid-column:1/-1">💬 Comentario general<textarea id="f-general" maxlength="600" placeholder="Ej.: hablar con el encargado esta semana"></textarea></label>
+      </div>
+      <div style="margin-top:14px">
+        <div style="font-weight:600;font-size:13.5px;margin-bottom:6px">📷 Fotos de evidencia <span style="font-weight:400;color:var(--muted)">(opcional, hasta 4)</span></div>
+        <div class="fotos" id="fotos"></div>
+        <input type="file" id="f-foto" accept="image/*" hidden>
+      </div>
+    </div>
+    <div class="resultbar" id="resultbar">
+      <div class="big" id="r-prom">–<small> / 5</small></div>
+      <span class="rlabel" id="r-label">⏳ Falta completar</span>
+      <span class="pill" id="r-inf" hidden></span>
+      <div class="meter" title="Puntos evaluados"><i id="r-meter" style="width:0%"></i></div>
+      <span class="mono" id="r-count" style="font-size:12px;color:var(--muted)">0 de 7</span>
+      <button class="btn primary" id="btn-enviar" disabled>✔ Validar y enviar</button>
+    </div>
+    <div class="card" id="sent" hidden>
+      <div class="sent-head"><span class="em" id="sent-em">✅</span><div><h2>Auditoría registrada</h2><p class="lead" style="margin:0" id="sent-lead"></p></div></div>
+      <h3 style="margin-top:14px">✉️ Mensaje para el equipo</h3>
+      <div class="msgbox" id="sent-msg"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="btn-copy">📋 Copiar mensaje</button>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-nueva">+ Nueva auditoría</button>
+      </div>
+    </div>
+    <div class="card" id="mine-card" hidden>
+      <h3>🕘 Últimas auditorías cargadas en este teléfono</h3>
+      <div id="mine"></div>
+    </div>
+  </section>
+
+  <section class="wrap" id="v-locked" hidden>
+    <div class="card lockcard">
+      <div class="lockicon">🔒</div>
+      <h2 id="lk-title">Sección protegida</h2>
+      <p class="lead">Ingresá la clave de jefes. Se pide en cada sección y se vuelve a bloquear al salir.</p>
+      <form id="lk-form" autocomplete="off">
+        <div style="display:grid;gap:10px">
+          <label class="f">Clave de jefes<input type="password" id="lk-p1" autocomplete="current-password" maxlength="128"></label>
+          <div id="lk-err" class="notice bad" hidden></div>
+          <button class="btn primary" id="lk-btn" type="submit">🔓 Desbloquear</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section class="wrap" id="v-registro" hidden>
+    <div class="card">
+      <div class="row"><h2 style="margin:0">🗂️ Registro de auditorías</h2><span class="spacer"></span><button class="btn sm" id="reg-refresh">↻ Actualizar</button></div>
+      <p class="lead" style="margin:4px 0 0" id="reg-lead"></p>
+      <div class="row" style="margin-top:12px">
+        <button class="btn xl" id="exp-xlsx">⬇️ Excel</button>
+        <button class="btn pdf" id="exp-pdf">⬇️ PDF</button>
+        <button class="btn sm" id="exp-sheet">📗 Abrir planilla</button>
+        <span class="mono" id="exp-status" style="font-size:12px;color:var(--muted)"></span>
+        <span class="spacer"></span>
+        <button class="btn danger sm" id="vac-open">🧹 Vaciar registro</button>
+      </div>
+      <form id="vac-form" hidden autocomplete="off" style="margin-top:14px;display:grid;gap:10px;padding:14px;border-radius:10px;background:var(--bad-bg);border:1px solid var(--bad)">
+        <b style="color:var(--bad)">🧹 Vaciar el registro</b>
+        <span style="font-size:14px">Se quitan <b id="vac-n">0</b> auditorías de la app. Antes, se guarda automáticamente una <b>copia completa de la planilla en tu Drive</b> como respaldo. Parámetros, claves y fotos se mantienen.</span>
+        <label class="f">Clave de jefes<input type="password" id="vac-pw" autocomplete="current-password"></label>
+        <div id="vac-err" class="notice bad" hidden></div>
+        <div class="row"><button type="submit" class="btn danger" id="vac-go" style="background:var(--bad);color:#fff">Vaciar con respaldo</button><button type="button" class="btn" id="vac-cancel">Cancelar</button></div>
+      </form>
+      <div id="vac-ok" class="notice ok" hidden style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <div class="grid2" style="margin-bottom:12px">
+        <label class="f">📅 Desde<input type="date" id="rf-desde"></label>
+        <label class="f">📅 Hasta<input type="date" id="rf-hasta"></label>
+        <label class="f">🚦 Resultado<select id="rf-res"><option value="">Todos</option><option>Excelente</option><option>Advertencia</option><option>Reclamo</option></select></label>
+        <label class="f">🔎 Buscar<input type="text" id="rf-q" placeholder="Auditor o comentario"></label>
+      </div>
+      <div class="tablewrap"><table><thead><tr>
+        <th>Fecha</th><th>Auditor</th><th class="n">Puntaje</th><th>Resultado</th><th class="n">Infrac.</th><th>Checklist</th><th class="n">Días pedido</th></tr></thead><tbody id="reg-body"></tbody></table></div>
+      <p class="lead" style="margin:8px 0 0;font-size:13px">Tocá una fila para ver el detalle y las fotos. Las descargas respetan los filtros.</p>
+    </div>
+  </section>
+
+  <section class="wrap" id="v-kpi" hidden>
+    <div class="card">
+      <div class="row">
+        <div><h2>📊 Indicadores de control · Palermo</h2><p class="lead" style="margin:0" id="kpi-lead"></p></div>
+        <span class="spacer"></span>
+        <label class="f" style="min-width:170px">Período<select id="kf-per">
+          <option value="30">Últimos 30 días</option><option value="90">Últimos 90 días</option><option value="365">Último año</option><option value="0" selected>Todo</option></select></label>
+      </div>
+    </div>
+    <div id="kpi-body" style="display:grid;gap:14px"></div>
+  </section>
+
+  <section class="wrap" id="v-ajustes" hidden>
+    <div class="card">
+      <h2>⚙️ Parámetros de control</h2>
+      <p class="lead">Los mismos de la hoja Configuración. Aplican a las auditorías nuevas; las ya registradas conservan el resultado con que se cerraron.</p>
+      <div class="grid2">
+        <label class="f">⭐ Promedio mínimo para Excelente<input type="number" step="0.1" min="1" max="5" id="p-promExc"></label>
+        <label class="f">⚠️ Promedio mínimo para Advertencia<input type="number" step="0.1" min="1" max="5" id="p-promAdv"></label>
+        <label class="f">🔢 Máx. infracciones para Advertencia<input type="number" min="0" id="p-maxInf"></label>
+        <label class="f">⏳ Días máx. de un pedido sin retirar<input type="number" min="0" id="p-dias"></label>
+        <label class="f" style="grid-column:1/-1">✅ Mensaje · Felicitaciones<textarea id="p-mExc"></textarea></label>
+        <label class="f" style="grid-column:1/-1">⚠️ Mensaje · Advertencia<textarea id="p-mAdv"></textarea></label>
+        <label class="f" style="grid-column:1/-1">❌ Mensaje · Reclamo<textarea id="p-mRec"></textarea></label>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="p-save">💾 Guardar parámetros</button><span id="p-ok" class="pill ok" hidden>Guardado</span></div>
+    </div>
+    <div class="card">
+      <h2>🔐 Claves</h2>
+      <p class="lead">La de <b>jefes</b> abre Registro, KPI y Ajustes. La de <b>auditor</b> solo permite cargar auditorías. Se guardan cifradas en el servidor.</p>
+      <form id="pw-form" autocomplete="off" style="display:grid;gap:10px;max-width:420px">
+        <label class="f">¿Qué clave cambiás?<select id="pw-cual"><option value="auditor">Clave de auditor</option><option value="jefe">Clave de jefes</option></select></label>
+        <label class="f">Clave de jefes actual<input type="password" id="pw-cur" autocomplete="current-password"></label>
+        <label class="f">Nueva clave (mín. 6)<input type="password" id="pw-new" autocomplete="new-password"></label>
+        <label class="f">Repetí la nueva<input type="password" id="pw-new2" autocomplete="new-password"></label>
+        <div id="pw-msg" class="notice" hidden></div>
+        <button class="btn" type="submit">Cambiar clave</button>
+      </form>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
