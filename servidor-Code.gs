@@ -18,9 +18,14 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.1';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.2';                        // revisión del servidor (para verificar despliegues)
 
-const TTL = { empleado: 10 * 60, responsable: 2 * 60 * 60, admin: 2 * 60 * 60 };
+/* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
+   la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
+   versión de credenciales, permiso del módulo y, si corresponde, reautenticación reciente (ELEV). */
+const SESION = { empleado: { inact: 10 * 60, max: 10 * 60 }, responsable: { inact: 30 * 60, max: 10 * 60 * 60 }, admin: { inact: 30 * 60, max: 10 * 60 * 60 } };
+const politica_ = rol => SESION[rol] || SESION.empleado;
+const politicaPub_ = rol => ({ inactividadSeg: politica_(rol).inact, maximoSeg: politica_(rol).max });
 const ELEV_MS = 5 * 60 * 1000;            // reautenticación válida 5 min
 const FALLAS_USUARIO = 5, BLOQUEO_USUARIO_SEG = 15 * 60;
 const FALLAS_GLOBAL = 60, VENTANA_GLOBAL_SEG = 10 * 60;
@@ -311,14 +316,18 @@ function sesion_(token, perm, necesitaElev) {
   const s = JSON.parse(raw);
   const u = usuarios_().find(x => x.id === s.uid);
   if (!u || u.estado !== 'activo' || Number(u.ver || 0) !== Number(s.ver || 0)) { CACHE.remove('s_' + token); throw new Error('AUTH'); }
+  const pol = politica_(u.rol), ahora = Date.now();
+  // Máximo absoluto de la sesión (aunque se use sin parar) y renovación por actividad: la caché vence sola tras `inact` sin llamadas.
+  if (ahora - Number(s.t || 0) > pol.max * 1000) { CACHE.remove('s_' + token); throw new Error('AUTH'); }
+  if (ahora - Number(s.a || s.t || 0) > 60000) { s.a = ahora; CACHE.put('s_' + token, JSON.stringify(s), pol.inact); }
   const perms = permisos_(u);
   if (perm && perms.indexOf(perm) < 0) throw new Error('PERM');
-  if (necesitaElev && !(s.elev && Date.now() - s.elev < ELEV_MS)) throw new Error('ELEV');
+  if (necesitaElev && !(s.elev && ahora - s.elev < ELEV_MS)) throw new Error('ELEV');
   return { token: token, data: s, user: u, perms: perms };
 }
 function estado() {
   const hayUsuarios = usuarios_().some(u => u.rol === 'admin' && u.estado === 'activo');
-  return { v: VERSION, rev: REV, usuarios: hayUsuarios, legado: !!PROPS.getProperty('KEY_JEFE'), aviso: cfg_().avisoFotos };
+  return { v: VERSION, rev: REV, usuarios: hayUsuarios, legado: !!PROPS.getProperty('KEY_JEFE'), aviso: cfg_().avisoFotos, politica: politicaPub_('responsable') };
 }
 /** Datos del día para el panel inicial (solo de los módulos que el usuario puede ver). Una llamada liviana. */
 function resumenHoy(token) {
@@ -419,14 +428,14 @@ function login(legajo, pin, opts) {
     throw new Error('Usuario o PIN incorrecto.');
   }
   CACHE.remove(kf);
-  const token = Utilities.getUuid();
-  CACHE.put('s_' + token, JSON.stringify({ uid: u.id, ver: Number(u.ver || 0), t: Date.now() }), TTL[u.rol] || 600);
-  const out = { token: token, user: publico_(u), params: params_(), ttl: TTL[u.rol] || 600 };
+  const token = Utilities.getUuid(), pol = politica_(u.rol), ahora = Date.now();
+  CACHE.put('s_' + token, JSON.stringify({ uid: u.id, ver: Number(u.ver || 0), t: ahora, a: ahora }), pol.inact);
+  const out = { token: token, user: publico_(u), params: params_(), ttl: pol.inact, politica: politicaPub_(u.rol) };
   if (opts && opts.jornada) out.jornada = jornadaDe_(u);   // fichada: identificarse y ver la jornada en una sola llamada
   return out;
 }
 function logout(token) { if (token && /^[0-9a-f-]{36}$/.test(String(token))) CACHE.remove('s_' + token); return true; }
-function yo(token) { const s = sesion_(token); return { user: publico_(s.user), params: params_(), elev: !!(s.data.elev && Date.now() - s.data.elev < ELEV_MS) }; }
+function yo(token) { const s = sesion_(token); return { user: publico_(s.user), params: params_(), elev: !!(s.data.elev && Date.now() - s.data.elev < ELEV_MS), politica: politicaPub_(s.user.rol) }; }
 function reauth(token, pin) {
   const s = sesion_(token);
   const kb = 'b_' + s.user.legajo;
@@ -437,8 +446,8 @@ function reauth(token, pin) {
     if (f >= FALLAS_USUARIO) { CACHE.put(kb, '1', BLOQUEO_USUARIO_SEG); CACHE.remove('s_' + token); }
     throw new Error('PIN incorrecto.');
   }
-  s.data.elev = Date.now();
-  CACHE.put('s_' + token, JSON.stringify(s.data), TTL[s.user.rol] || 600);
+  s.data.elev = Date.now(); s.data.a = s.data.elev;
+  CACHE.put('s_' + token, JSON.stringify(s.data), politica_(s.user.rol).inact);
   return true;
 }
 function cambiarMiPin(token, actual, nuevo) {
@@ -1408,7 +1417,7 @@ function setConfig(token, d) {
   return c;
 }
 function setParams(token, p) {
-  const s = sesion_(token, 'config');
+  const s = sesion_(token, 'config', true);   // 3.2: parámetros que cambian cómo se califica = operación sensible (PIN reciente)
   p = p || {};
   const n = (v, d, lo, hi) => { v = Number(v); return isFinite(v) && String(v) !== '' ? Math.min(hi, Math.max(lo, v)) : d; };
   const out = {

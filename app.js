@@ -25,15 +25,18 @@ const LIBS = {
 const $ = id => document.getElementById(id);
 const BACKEND = String((window.HB_CONFIG||{}).BACKEND_URL||"").trim();
 const BACKEND_OK = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(BACKEND);
-const S = { token:null, user:null, perms:[], params:{...DEF}, lista:[], fotoCache:{}, form:null, fotos:[], openRow:null, view:null, nav:0, acciones:[], elevTs:0, resumen:undefined, resumenTs:0 };
-const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u";
+const S = { token:null, user:null, perms:[], params:{...DEF}, lista:[], fotoCache:{}, form:null, fotos:[], openRow:null, view:null, nav:0, acciones:[], elevTs:0, resumen:undefined, resumenTs:0,
+  politica:{inactividadSeg:1800, maximoSeg:36000}, persistente:false, ultimaAct:0, ultimoApi:0 };
+/* Sesión (3.2): la de jefes/administración se guarda en el teléfono (sobrevive a cerrar la app) y vence por inactividad,
+   igual que en el servidor, que es quien manda: cada llamada se valida allá. La del personal que ficha es efímera (pestaña). */
+const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
 /* Tope de espera: lecturas 40 s; escrituras 150 s (una auditoría con 12 fotos en 3G puede tardar más de un minuto en subir
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
 const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig"]);
+const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -60,7 +63,7 @@ const msgErr = e => esAuth(e) ? "La sesión venció. Volvé a ingresar." : esPer
 /** Llamada con sesión de staff. Las operaciones sensibles piden el PIN antes (si no se confirmó hace poco); si el servidor igual lo exige, se pide y se reintenta una vez. */
 async function apiS(fn, ...args){
   if (SENSIBLES.has(fn) && Date.now()-S.elevTs > ELEV_VIGENCIA_MS) await pedirPin();
-  try { return await api(fn, S.token, ...args); }
+  try { const r = await api(fn, S.token, ...args); S.ultimoApi=Date.now(); return r; }
   catch(e){
     if (esAuth(e)) { sesionVencida(); throw e; }
     if (e.message === "ELEV") { S.elevTs=0; await pedirPin(); return await api(fn, S.token, ...args); }
@@ -212,8 +215,10 @@ function route(){
 function pintarVista(id){
   S.view = id; window.scrollTo(0,0);
   $("nav-home").hidden = id==="home";
+  $("btn-salir").hidden = id==="home" || !S.user;   // en el panel, "Cerrar sesión" está en la fila de sesión
   if (id==="home") return renderHome();
   document.body.classList.remove("is-home");
+  if (id==="acceso") return vAcceso($("main"));
   const m = modDe(id); if (!m) return ir("home");
   const main=$("main"); main.textContent="";
   main.append(el("div",{class:"modhead",style:`--mc:${m.c}`}, el("span",{class:"mod-ico"}, icono(m.id,24)), el("div",{}, el("h1",{text:m.t}), el("p",{class:"lead",text:m.d}))));
@@ -228,17 +233,34 @@ addEventListener("hashchange", route);
 /* Regiones desplazables (tablas y gráficos anchos): accesibles con teclado. */
 new MutationObserver(()=>{ document.querySelectorAll("#main .tablewrap:not([tabindex]), #main .hscroll:not([tabindex])").forEach(x=>{ x.tabIndex=0; x.setAttribute("role","region"); if (!x.getAttribute("aria-label")) x.setAttribute("aria-label", x.classList.contains("hscroll") ? "Gráfico desplazable" : "Tabla desplazable"); }); }).observe($("main"),{childList:true,subtree:true});
 
-/* ----- Sesión de staff ----- */
+/* ----- Sesión de staff -----
+   Jefes/administración: la sesión queda guardada en el teléfono y se cierra sola tras `politica.inactividadSeg` sin actividad
+   (el servidor aplica la misma regla y además un máximo absoluto). Personal que entra a un módulo: sesión efímera de la pestaña. */
+const rolTxt = u => u.rol==="admin"?"Administración":u.rol==="responsable"?"Jefe/Responsable":"Empleado";
+const limInact = () => (S.politica.inactividadSeg||1800)*1000;
+function sesGuardar(t, datos){
+  if (S.persistente){ lsSet(SESSION_KEY,t); lsSet(USER_KEY,datos); lsSet(ACT_KEY,Date.now()); ssSet(SESSION_KEY,null); ssSet(USER_KEY,null); }
+  else { ssSet(SESSION_KEY,t); ssSet(USER_KEY,JSON.stringify(datos)); sesBorrarLocal(); }
+}
+function sesBorrarLocal(){ [SESSION_KEY,USER_KEY,ACT_KEY].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} }); }
+function sesLeer(){
+  const lt = lsGet(SESSION_KEY);
+  if (lt) return { t:lt, datos:lsGet(USER_KEY), act:Number(lsGet(ACT_KEY))||0, persistente:true };
+  const st = ssGet(SESSION_KEY);
+  return st ? { t:st, datos:lsParse(ssGet(USER_KEY)), act:Date.now(), persistente:false } : null;
+}
 function setUser(r){
   S.token=r.token; S.user=r.user; S.perms=r.user.permisos||[]; S.params={...DEF,...(r.params||{})};
+  if (r.politica) S.politica=r.politica;
   if (r.elev) S.elevTs=Date.now();
-  ssSet(SESSION_KEY, r.token); ssSet(USER_KEY, JSON.stringify({user:r.user, params:S.params}));
-  $("who").textContent = `${r.user.nombre} · ${r.user.rol==="admin"?"Administración":r.user.rol==="responsable"?"Jefe/Responsable":"Empleado"}`;
-  $("btn-salir").hidden=false; bumpIdle();
+  S.persistente = r.user.rol!=="empleado"; S.ultimoApi=Date.now();
+  sesGuardar(r.token, {user:r.user, params:S.params, politica:S.politica});
+  $("who").textContent = `${r.user.nombre} · ${rolTxt(r.user)}`;
+  $("btn-salir").hidden = S.view==="home"; bumpIdle();
 }
 function limpiarSesion(){
-  S.token=null; S.user=null; S.perms=[]; S.lista=[]; S.fotoCache={}; S.acciones=[]; S.elevTs=0; S.resumen=undefined; S.resumenTs=0;
-  ssSet(SESSION_KEY,null); ssSet(USER_KEY,null); ssSet(RESUMEN_KEY,null); $("who").textContent=""; $("btn-salir").hidden=true;
+  S.token=null; S.user=null; S.perms=[]; S.lista=[]; S.fotoCache={}; S.acciones=[]; S.elevTs=0; S.resumen=undefined; S.resumenTs=0; S.persistente=false;
+  ssSet(SESSION_KEY,null); ssSet(USER_KEY,null); ssSet(RESUMEN_KEY,null); sesBorrarLocal(); $("who").textContent=""; $("btn-salir").hidden=true; clearTimeout(idleT);
 }
 function salir(msg){
   if (S.token) api("logout",S.token).catch(()=>{});
@@ -248,8 +270,29 @@ function salir(msg){
 /* Sesión vencida: se limpia y se vuelve a pedir usuario y PIN en el mismo módulo (sin mandar al inicio). */
 function sesionVencida(){ limpiarSesion(); toast("La sesión venció. Volvé a ingresar."); route(); }
 let idleT=null;
-function bumpIdle(){ if (!S.token) return; clearTimeout(idleT); idleT=setTimeout(()=>salir("🔒 Sesión cerrada por inactividad"), 20*60*1000); }
+/* Actividad: reinicia el vencimiento local, lo persiste (como mucho cada 30 s) y, si hace rato que no hay llamadas,
+   avisa al servidor que la sesión sigue en uso (así la renovación es la misma de los dos lados). */
+function bumpIdle(){
+  if (!S.token) return;
+  const ahora=Date.now(); S.ultimaAct=ahora;
+  if (S.persistente && ahora-(bumpIdle._g||0) > 30000){ bumpIdle._g=ahora; lsSet(ACT_KEY, ahora); }
+  clearTimeout(idleT); idleT=setTimeout(()=>salir("🔒 Sesión cerrada por inactividad"), limInact());
+  if (S.perms.length && ahora-S.ultimoApi > 10*60*1000){ S.ultimoApi=ahora; apiS("yo").catch(()=>{}); }
+}
 ["pointerdown","keydown"].forEach(ev=>addEventListener(ev,bumpIdle,{passive:true}));
+/* Al volver a la app (el teléfono suspende los temporizadores en segundo plano): si pasó el tiempo de inactividad, se cierra. */
+document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState!=="visible" || !S.token) return; if (Date.now()-S.ultimaAct > limInact()) salir("🔒 Sesión cerrada por inactividad"); else bumpIdle(); });
+
+/* Acceso de jefes y administración: usuario y PIN una sola vez; después, el panel y la navegación entre módulos no vuelven a pedirlo. */
+function vAcceso(main){
+  if (S.user && S.perms.length) return ir("home");
+  if (S.user) limpiarSesion();   // una sesión de empleado no sirve para el panel
+  main.textContent="";
+  main.append(el("div",{class:"modhead",style:"--mc:#334155"}, el("span",{class:"mod-ico"}, icono("acceso",24)), el("div",{}, el("h1",{text:"Jefes y Administración"}), el("p",{class:"lead",text:"Panel de gestión y control"}))));
+  const min = Math.round(limInact()/60000);
+  loginCard(main, `Ingresá con tu usuario y PIN de 6 números. La sesión queda abierta mientras usás la app y se cierra sola tras ${min} minutos sin actividad.`,
+    ()=>{ if (!S.perms.length) toast("Tu usuario no tiene módulos de gestión. Para fichar, usá «Fichar entrada o salida»."); ir("home"); });
+}
 
 function loginCard(main, texto, alEntrar){
   const u = el("input",{type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",placeholder:"Usuario",maxlength:"20","aria-label":"Usuario"});
@@ -273,20 +316,25 @@ function iniciar(){
   $("nav-home").addEventListener("click",()=>ir("home"));
   fuente();
   if (!BACKEND_OK){ $("main").textContent=""; $("main").append(el("div",{class:"card notice bad",text:"Falta conectar el servidor (config.js)."})); return; }
-  const t = ssGet(SESSION_KEY), guardado = t && lsParse(ssGet(USER_KEY));
-  if (guardado && guardado.user){ S.token=t; S.user=guardado.user; S.perms=guardado.user.permisos||[]; S.params={...DEF,...(guardado.params||{})};
-    $("who").textContent = `${S.user.nombre} · ${S.user.rol==="admin"?"Administración":S.user.rol==="responsable"?"Jefe/Responsable":"Empleado"}`; $("btn-salir").hidden=false; bumpIdle(); }
+  const ses = sesLeer(), g = ses && ses.datos;
+  if (g && g.user){
+    if (g.politica) S.politica=g.politica;
+    if (ses.persistente && Date.now()-ses.act > limInact()){ api("logout", ses.t).catch(()=>{}); limpiarSesion(); }   // venció por inactividad con la app cerrada
+    else { S.token=ses.t; S.user=g.user; S.perms=g.user.permisos||[]; S.params={...DEF,...(g.params||{})}; S.persistente=ses.persistente; S.ultimoApi=Date.now();
+      $("who").textContent = `${S.user.nombre} · ${rolTxt(S.user)}`; $("btn-salir").hidden=false; bumpIdle(); }
+  }
   route();
-  conectar(t);
+  conectar(S.token);
 }
 const lsParse = s => { try { return JSON.parse(s); } catch(e){ return null; } };
 async function conectar(t){
   let est;
   try{ est = await api("inicio", t||null); }
-  catch(e){ redAviso("⚠️ Sin conexión con el servidor: "+msgErr(e)+" "); $("netbar").append(el("button",{class:"btn sm",type:"button",text:"Reintentar",onclick:()=>{ $("netbar").hidden=true; conectar(ssGet(SESSION_KEY)); }})); return; }
+  catch(e){ redAviso("⚠️ Sin conexión con el servidor: "+msgErr(e)+" "); $("netbar").append(el("button",{class:"btn sm",type:"button",text:"Reintentar",onclick:()=>{ $("netbar").hidden=true; conectar(S.token); }})); return; }
+  if (est.politica && !S.user) S.politica=est.politica;
   if (!est.usuarios){ limpiarSesion(); return vBootstrap(est); }
   if (t){
-    if (est.sesion) setUser({token:t, user:est.sesion.user, params:est.sesion.params, elev:est.sesion.elev});
+    if (est.sesion) setUser({token:t, user:est.sesion.user, params:est.sesion.params, elev:est.sesion.elev, politica:est.sesion.politica});
     else { const habia = !!S.user; limpiarSesion(); if (habia){ toast("La sesión venció. Volvé a ingresar."); return route(); } }
   }
   if (S.view==="home") renderHome();
@@ -322,7 +370,9 @@ const ICONOS = {
   otros: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/>',
   config: '<path d="M4 7h10M18 7h2M4 12h2M10 12h10M4 17h8M16 17h4"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="17" r="2"/>',
   camara: '<path d="M4 8.5h3l1.5-2h7l1.5 2h3v10H4z"/><circle cx="12" cy="13" r="3"/>',
-  flecha: '<path d="M5 12h14M13 6l6 6-6 6"/>'
+  flecha: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  acceso: '<rect x="3" y="7.5" width="18" height="12.5" rx="2.5"/><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5"/><path d="M3 12.5h18"/><path d="M10.5 12.5v2.5h3v-2.5"/>',
+  salir: '<path d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10"/><path d="M15 8l4 4-4 4M19 12H9"/>'
 };
 /* Íconos: trazos fijos definidos arriba (no son datos), por eso se cargan con innerHTML sobre un SVG propio. */
 function icono(nombre, tam=22){
@@ -426,6 +476,7 @@ function renderHome(){
   const R = staff ? S.resumen : null;   // undefined = cargando, null = sin resumen
   const home = el("div",{class:"home"});
   home.append(el("header",{class:"saludo"}, el("h1",{tabindex:"-1",text: nombre ? `${saludoHora()}, ${nombre}` : saludoHora()}), el("p",{class:"fecha",text:fechaLarga()})));
+  if (staff) home.append(filaSesion());
   if (staff && S.perms.length) home.append(tiraHoy(R));
   home.append(el("button",{class:"cta",type:"button",style:"--i:1",onclick:()=>{ location.hash="#/empleados/fichar"; }},
     el("span",{class:"ic"}, icono("camara",26)),
@@ -437,12 +488,22 @@ function renderHome(){
   const grid = el("div",{class:"mods"});
   visibles.forEach((m,i)=>grid.append(tarjetaMod(m, i+2, R, false)));
   home.append(grid);
-  if (!staff){
-    const g2 = el("div",{class:"mods"}); resto.filter(m=>m.perm).forEach((m,i)=>g2.append(tarjetaMod(m, 0, null, true)));
-    home.append(el("details",{class:"grupo"}, el("summary",{text:"Jefes y administración: entrar con usuario y PIN"}), g2));
-  }
+  /* Acceso de jefes y administración (3.2): tarjeta secundaria de ancho completo; pide usuario y PIN una sola vez y abre el panel. */
+  if (!staff) home.append(el("button",{class:"acceso",type:"button",style:`--i:${visibles.length+2}`,onclick:()=>ir("acceso")},
+    el("span",{class:"ic"}, icono("acceso",24)),
+    el("span",{class:"tx"}, el("b",{text:"Jefes y Administración"}), el("span",{text:"Panel de gestión y control"})),
+    el("span",{class:"fl"}, icono("flecha",20))));
   main.append(home);
   if (staff && S.perms.length) cargarResumen();
+}
+/* Fila de sesión del panel: quién está adentro, qué rol tiene, cuándo se cierra sola y el botón para cerrarla. */
+function filaSesion(){
+  const u = S.user, min = Math.round(limInact()/60000), gestion = S.perms.length>0;
+  return el("div",{class:"sesion",style:"--i:0"},
+    el("span",{class:"ic"}, icono("acceso",18)),
+    el("span",{class:"tx"}, el("b",{text: gestion ? "Panel de gestión y control" : "Sesión personal"}),
+      el("span",{text:`${u.nombre} · ${rolTxt(u)} · se cierra sola tras ${min} min sin uso`})),
+    el("button",{class:"btn sm",type:"button",onclick:()=>salir("Sesión cerrada")}, icono("salir",16), " Cerrar sesión"));
 }
 /* Actualiza en el lugar la tira "Hoy" y los chips con el resumen recibido, sin redibujar el panel. */
 function aplicarResumen(R){

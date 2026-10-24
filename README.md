@@ -1,4 +1,4 @@
-# Hey Blackk · Palermo — app de gestión (v3.1)
+# Hey Blackk · Palermo — app de gestión (v3.2)
 
 App interna (PWA) para Palermo: fichada de entrada y salida, personal, auditorías con fotos por punto,
 cierre diario leído de la planilla (solo lectura), KPIs comerciales con recomendaciones, historial protegido y RR. HH.
@@ -11,3 +11,8 @@ cierre diario leído de la planilla (solo lectura), KPIs comerciales con recomen
 - **Rendimiento (3.1):** arranque inmediato con una sola llamada al servidor, fichada en una llamada, cámara cancelable,
   reintento automático de lecturas, aviso de conexión y service worker con tope de espera. El servidor memoriza lecturas
   por pedido, formatea la auditoría en lote y limpia fotos vencidas en lotes acotados.
+- **Acceso de jefes (3.2):** tarjeta "Jefes y Administración" en el inicio; usuario y PIN una sola vez y se abre el panel
+  de gestión, desde donde se navega entre módulos sin volver a ingresar. La sesión se guarda en el teléfono y se cierra
+  sola tras 30 min sin uso (el servidor aplica la misma regla y un máximo de 10 h); "Cerrar sesión" la invalida al instante.
+  Las operaciones sensibles (usuarios, PIN, roles, configuración, parámetros, aprobar correcciones, borrar) siguen pidiendo
+  el PIN antes de ejecutarse. El fichaje del personal no cambia.
