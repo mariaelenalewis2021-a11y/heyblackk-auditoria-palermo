@@ -19,13 +19,15 @@ const LIBS = {
   pdf:[["https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js","sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk"],["https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js","sha384-fCAW/rDWORTbQXSiB7mOg0QtQ5c+r0f544y6XoKjuVva0nMBlCpNUjiFeG5iMdS3"]]
 };
 const IDLE_MS = 10*60*1000, HIDDEN_MS = 2*60*1000;
-
+/* ===== Hey Blackk · Palermo — app v3 =====
+   Seguridad: no hay claves en el navegador; cada operación se valida en el servidor con la sesión del usuario.
+   Los datos nunca se insertan como HTML: todo el DOM se arma con textContent (función el). */
 const $ = id => document.getElementById(id);
-const S = { token:null, rol:null, jt:null, params:{...DEF}, view:"auditar", lista:[], form:null, fotos:[], openRow:null, fotoCache:{} };
-
-/* ---------- Servidor ---------- */
 const BACKEND = String((window.HB_CONFIG||{}).BACKEND_URL||"").trim();
 const BACKEND_OK = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(BACKEND);
+const S = { token:null, user:null, perms:[], params:{...DEF}, lista:[], fotoCache:{}, form:null, fotos:[], openRow:null, view:"home", acciones:[] };
+const SESSION_KEY = "hb3_t";
+
 async function api(fn, ...args){
   if (!BACKEND_OK) throw new Error("La app todavía no está conectada al servidor.");
   let r;
@@ -35,8 +37,19 @@ async function api(fn, ...args){
   if (!j || !j.ok) throw new Error((j && j.error) || "Error del servidor.");
   return j.data;
 }
-const esAuth = e => /AUTH/.test(e && e.message);
-const msgErr = e => esAuth(e) ? "La sesión venció. Volvé a ingresar la clave." : (e && e.message ? e.message.replace(/^Exception:\s*/,"") : "Error inesperado.");
+const esAuth = e => /^AUTH$/.test(e && e.message);
+const esPerm = e => /^PERM$/.test(e && e.message);
+const msgErr = e => esAuth(e) ? "La sesión venció. Volvé a ingresar." : esPerm(e) ? "No tenés permiso para esta acción." :
+  (e && e.message ? e.message.replace(/^Exception:\s*/,"") : "Error inesperado.");
+/** Llamada con sesión de staff. Si el servidor pide confirmar el PIN (operación sensible), lo pide y reintenta una vez. */
+async function apiS(fn, ...args){
+  try { return await api(fn, S.token, ...args); }
+  catch(e){
+    if (esAuth(e)) { sesionVencida(); throw e; }
+    if (e.message === "ELEV") { await pedirPin(); return await api(fn, S.token, ...args); }
+    throw e;
+  }
+}
 
 function el(tag, attrs, ...kids){
   const e = document.createElement(tag);
@@ -49,65 +62,555 @@ function el(tag, attrs, ...kids){
   for (const c of kids.flat()) if (c!=null && c!==false) e.append(c.nodeType?c:document.createTextNode(String(c)));
   return e;
 }
-const toast = t => { const x=$("toast"); x.textContent=t; x.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>x.hidden=true,3200); };
+const toast = t => { const x=$("toast"); x.textContent=t; x.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>x.hidden=true,3600); };
 const hoy = () => { const d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,10); };
-const fmtF = s => s ? s.split("-").reverse().join("/") : "";
+const fmtF = s => s ? String(s).slice(0,10).split("-").reverse().join("/") : "";
 const fmt1 = n => (n==null||isNaN(n)) ? "–" : Number(n).toFixed(1).replace(".",",");
-const pct = n => isNaN(n) ? "–" : Math.round(n*100)+"%";
+const pct = n => (n==null||isNaN(n)) ? "–" : Math.round(n*100)+"%";
+const money = n => (n==null||isNaN(n)) ? "–" : "$ " + Math.round(n).toLocaleString("es-AR");
+const moneyK = n => (n==null||isNaN(n)) ? "–" : Math.abs(n)>=1e6 ? "$ "+(n/1e6).toFixed(2).replace(".",",")+" M" : money(n);
+const sign = n => n==null ? "–" : (n>0?"+":"")+String(n).replace(".",",")+"%";
+const horas = m => m==null ? "–" : Math.floor(m/60)+" h "+String(m%60).padStart(2,"0")+" min";
 const lsGet = k => { try { return JSON.parse(localStorage.getItem(k)); } catch(e){ return null; } };
 const lsSet = (k,v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} };
 const ssGet = k => { try { return sessionStorage.getItem(k); } catch(e){ return null; } };
 const ssSet = (k,v) => { try { v==null?sessionStorage.removeItem(k):sessionStorage.setItem(k,v); } catch(e){} };
-
+const okImg = src => /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(String(src||""));
 function resAud(prom, p=S.params){ if (prom==null) return null; return prom>=p.promExc?"Excelente":prom>=p.promAdv?"Advertencia":"Reclamo"; }
 function resChk(tot, p=S.params){ return tot===0?"Excelente":tot<=p.maxInf?"Advertencia":"Reclamo"; }
 const cls = r => r==="Excelente"?"ok":r==="Advertencia"?"warn":r==="Reclamo"?"bad":"";
 const scChip = v => el("span",{class:"sc",style:v?`background:var(--s${v}bg);color:var(--s${v})`:null,text:v??"–"});
+const tiene = p => S.perms.includes(p);
+function spinBtn(b, txt){ b.disabled=true; b.dataset.t=b.textContent; b.textContent=""; b.append(el("span",{class:"spin"})," "+(txt||"Procesando…")); }
+function unspin(b){ b.disabled=false; if (b.dataset.t) b.textContent=b.dataset.t; }
 
-/* ---------- Portón ---------- */
-async function iniciarGate(){
-  const t=ssGet("hb_t"), r=ssGet("hb_r");
-  if (t && r){ S.token=t; S.rol=r; abrirApp(); api("getParams").then(p=>{S.params={...DEF,...p}; onChange();}).catch(()=>{}); return; }
-  try{
-    if (!BACKEND_OK){ $("g-title").textContent="App instalada · falta conectar el servidor"; $("g-lead").textContent="La app ya está en este teléfono. Cuando se active el servidor de Hey Blackk, se conecta sola: no hace falta reinstalarla."; return; }
-    const st = await api("estado");
-    if (!st.configurado){
-      $("g-title").textContent="Configurá las claves"; $("g-lead").textContent="Es la primera vez. Ingresá el código de instalación del servidor y creá una clave para jefes y otra para auditores. No las compartas por chat ni por mail."; $("g-setup").hidden=false;
-    } else {
-      $("g-title").textContent="Ingresá tu clave"; $("g-lead").textContent="Auditores: clave de auditor. Jefes: clave de jefes.";
-      $("g-login").hidden=false; setTimeout(()=>$("g-pw").focus(),50);
-    }
-  }catch(e){ $("g-title").textContent="Sin conexión"; $("g-lead").textContent=msgErr(e)+" Recargá la página para reintentar."; }
+/* ----- Ventanas modales (PIN de confirmación, foto ampliada, confirmaciones) ----- */
+function modal(contenido, {cerrable=true}={}){
+  const back = el("div",{class:"modal",role:"dialog","aria-modal":"true"});
+  const box = el("div",{class:"modal-box"}, contenido);
+  const cerrar = () => { back.remove(); document.removeEventListener("keydown", esc); };
+  const esc = e => { if (e.key==="Escape" && cerrable) cerrar(); };
+  if (cerrable) back.addEventListener("click", e=>{ if (e.target===back) cerrar(); });
+  document.addEventListener("keydown", esc);
+  back.append(box); document.body.append(back);
+  return { cerrar, box };
 }
-$("g-login").addEventListener("submit", async e=>{
-  e.preventDefault(); const err=$("g-err"), b=$("g-btn"); err.hidden=true; b.disabled=true; b.innerHTML='<span class="spin"></span> Verificando…';
-  try{
-    const r = await api("login", $("g-pw").value, "app");
-    S.token=r.token; S.rol=r.rol; S.params={...DEF,...r.params}; ssSet("hb_t",r.token); ssSet("hb_r",r.rol);
-    $("g-pw").value=""; abrirApp();
-  }catch(x){ err.textContent=msgErr(x); err.hidden=false; }
-  finally{ b.disabled=false; b.textContent="🔓 Entrar"; }
-});
-$("g-setup").addEventListener("submit", async e=>{
-  e.preventDefault(); const err=$("s-err"), b=$("s-btn"); err.hidden=true;
-  const j=$("s-j1").value, a=$("s-a1").value, code=$("s-code").value.trim();
-  if (!code){ err.textContent="Ingresá el código de instalación."; err.hidden=false; return; }
-  if (j.length<6||a.length<6){ err.textContent="Cada clave tiene que tener al menos 6 caracteres."; err.hidden=false; return; }
-  if (j!==$("s-j2").value||a!==$("s-a2").value){ err.textContent="Las claves repetidas no coinciden."; err.hidden=false; return; }
-  b.disabled=true; b.innerHTML='<span class="spin"></span> Creando…';
-  try{ await api("configurar", code, j, a); ["s-code","s-j1","s-j2","s-a1","s-a2"].forEach(i=>$(i).value=""); $("g-setup").hidden=true;
-    $("g-title").textContent="¡Listo! Claves creadas"; $("g-lead").textContent="Ahora ingresá con la clave de jefes o de auditor."; $("g-login").hidden=false; }
-  catch(x){ err.textContent=msgErr(x); err.hidden=false; }
-  finally{ b.disabled=false; b.textContent="🔐 Crear claves"; }
-});
-function abrirApp(){ $("gate").hidden=true; $("who").textContent = S.rol==="jefe"?"👔 Jefes":"📝 Auditor"; onChange(); renderMine(); }
-function salir(){ api("logout",S.token).catch(()=>{}); if (S.jt) api("logout",S.jt).catch(()=>{}); S.token=S.jt=S.rol=null; ssSet("hb_t",null); ssSet("hb_r",null);
-  clearLock(); show("auditar"); $("gate").hidden=false; $("g-setup").hidden=true; $("g-login").hidden=false; $("g-title").textContent="Ingresá tu clave"; $("g-lead").textContent="Auditores: clave de auditor. Jefes: clave de jefes."; }
-$("btn-salir").addEventListener("click",salir);
-function sesionVencida(){ toast("La sesión venció. Volvé a ingresar la clave."); salir(); }
+function verFoto(src, titulo){
+  const m = modal(el("div",{class:"lightbox"}, el("img",{src,alt:titulo||"Foto"}), el("div",{class:"row"}, el("span",{class:"lead",style:"margin:0",text:titulo||""}), el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Cerrar",onclick:()=>m.cerrar()}))));
+}
+function pedirPin(){
+  return new Promise((resolve, reject)=>{
+    const inp = el("input",{type:"password",inputmode:"numeric",autocomplete:"current-password",maxlength:"6",placeholder:"Tu PIN","aria-label":"Tu PIN"});
+    const err = el("div",{class:"notice bad",hidden:true});
+    const ok = el("button",{class:"btn primary",type:"submit",text:"Confirmar"});
+    const f = el("form",{class:"grid",onsubmit:async e=>{ e.preventDefault(); err.hidden=true; spinBtn(ok,"Verificando…");
+        try{ await api("reauth", S.token, inp.value); m.cerrar(); resolve(true); }
+        catch(x){ unspin(ok); err.textContent=msgErr(x); err.hidden=false; if (esAuth(x)) { m.cerrar(); sesionVencida(); reject(x); } } }},
+      el("div",{class:"lockicon",text:"🔐"}), el("h2",{text:"Confirmá con tu PIN"}),
+      el("p",{class:"lead",text:"Es una operación sensible: por seguridad volvé a ingresar tu PIN. Vale por 5 minutos."}), inp, err,
+      el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>{ m.cerrar(); reject(new Error("Operación cancelada.")); }})));
+    const m = modal(f,{cerrable:false}); setTimeout(()=>inp.focus(),50);
+  });
+}
+function confirmar(texto, boton="Confirmar", peligro=false){
+  return new Promise(res=>{
+    const m = modal(el("div",{class:"grid"}, el("p",{style:"margin:0;font-size:16px",text:texto}),
+      el("div",{class:"row"}, el("button",{class:"btn "+(peligro?"danger":"primary"),type:"button",text:boton,onclick:()=>{m.cerrar();res(true);}}),
+        el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>{m.cerrar();res(false);}}))));
+  });
+}
 
-/* ---------- Formulario ---------- */
+/* ----- Fotos: compresión en el teléfono antes de enviar ----- */
+async function aDataURL(file, max=1280){
+  let img=null;
+  if (window.createImageBitmap) img = await createImageBitmap(file).catch(()=>null);
+  if (!img) img = await new Promise(res=>{ const u=URL.createObjectURL(file), i=new Image(); i.onload=()=>res(i); i.onerror=()=>res(null); i.src=u; });
+  if (!img || !img.width) throw new Error("formato");
+  const k=Math.min(1,max/Math.max(img.width,img.height));
+  const c=document.createElement("canvas"); c.width=Math.round(img.width*k); c.height=Math.round(img.height*k);
+  c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+  return c.toDataURL("image/jpeg",0.8);
+}
+function elegirFoto(camaraFrontal){
+  return new Promise((res)=>{
+    const i = el("input",{type:"file",accept:"image/*",style:"position:fixed;left:-9999px"});
+    if (camaraFrontal) i.setAttribute("capture","user"); else i.setAttribute("capture","environment");
+    i.addEventListener("change", async ()=>{ const f=i.files[0]; i.remove(); if(!f) return res(null);
+      try{ res(await aDataURL(f)); }catch(x){ toast("No se pudo leer la foto. Probá de nuevo."); res(null); } });
+    document.body.append(i); i.click();
+    setTimeout(()=>{ if (document.body.contains(i) && !i.files.length) {/* el usuario puede cancelar */} }, 60000);
+  });
+}
+function ubicacion(){
+  return new Promise(res=>{
+    if (!navigator.geolocation) return res({error:"no_disponible"});
+    let listo=false; const fin=v=>{ if(!listo){ listo=true; res(v); } };
+    setTimeout(()=>fin({error:"tiempo_agotado"}), 9000);
+    navigator.geolocation.getCurrentPosition(p=>fin({lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy}),
+      e=>fin({error: e.code===1?"sin_permiso":e.code===3?"tiempo_agotado":"no_disponible"}), {enableHighAccuracy:true,timeout:8000,maximumAge:60000});
+  });
+}
+/* Miniatura de una foto privada: se pide al servidor con la sesión y se muestra; si falla, se informa. */
+function miniFoto(fn, id, titulo){
+  const slot = el("button",{class:"foto",type:"button","aria-label":"Ver foto: "+(titulo||""),style:"display:grid;place-items:center;padding:0;cursor:zoom-in"}, el("span",{class:"spin"}));
+  const poner = src => { slot.textContent=""; slot.append(el("img",{src,alt:titulo||"Evidencia"})); slot.onclick=()=>verFoto(src,titulo); };
+  const k = fn+":"+id;
+  if (S.fotoCache[k]) poner(S.fotoCache[k]);
+  else apiS(fn, id).then(src=>{ if(!okImg(src)) throw 0; S.fotoCache[k]=src; poner(src); })
+    .catch(()=>{ slot.textContent=""; slot.classList.add("foto-err"); slot.append(el("span",{text:"⚠️ No se pudo cargar"})); slot.disabled=true; });
+  return slot;
+}
+/* ===================== Panel inicial y navegación ===================== */
+const MODULOS = [
+  {id:"empleados", ico:"👥", t:"Empleados", d:"Fichá tu entrada y salida. Jefes: altas, bajas y PIN.", c:"#2563EB", perm:null},
+  {id:"ingresos",  ico:"🕘", t:"Registro de ingresos", d:"Entradas, salidas, evidencias y correcciones.", c:"#0D9488", perm:"ingresos"},
+  {id:"auditoria", ico:"📋", t:"Auditoría", d:"Auditar el local, registro con fotos y acciones.", c:"#16A34A", perm:"auditar|auditoria"},
+  {id:"kpi",       ico:"📈", t:"KPIs comerciales", d:"Ventas reales, alertas y qué decisiones tomar.", c:"#7C3AED", perm:"kpi"},
+  {id:"historial", ico:"🧾", t:"Historial", d:"Actividad de la app, protegida contra cambios.", c:"#475569", perm:"historial"},
+  {id:"cierre",    ico:"💵", t:"Cierre diario", d:"Cierres de caja de Palermo leídos de la planilla.", c:"#EA580C", perm:"cierre"},
+  {id:"rrhh",      ico:"🧑‍💼", t:"Novedades RR. HH.", d:"Llegadas tarde, ausencias y su seguimiento.", c:"#DB2777", perm:"rrhh"},
+  {id:"otros",     ico:"🧩", t:"Otros", d:"Instalar la app, cambiar tu PIN y ayuda.", c:"#CA8A04", perm:null},
+  {id:"config",    ico:"⚙️", t:"Configuración", d:"Usuarios, permisos, ubicación, objetivos y retención.", c:"#111113", perm:"config"}
+];
+const modDe = id => MODULOS.find(m=>m.id===id);
+const puedeVer = m => !m.perm || m.perm.split("|").some(tiene);
+
+function renderHome(){
+  const main=$("main"); main.textContent="";
+  document.body.classList.add("is-home");
+  const saludo = S.user ? `Hola, ${S.user.nombre.split(" ")[0]}` : "Bienvenida/o";
+  main.append(el("section",{class:"hero"}, el("h1",{text:saludo}),
+    el("p",{class:"lead",text: S.user ? "Elegí un módulo. Solo ves habilitados los que corresponden a tu usuario." : "Para fichar tocá Empleados. Los demás módulos piden tu usuario y PIN."})));
+  const g = el("div",{class:"modgrid"});
+  MODULOS.forEach(m=>{
+    const lock = m.perm && (!S.user || !puedeVer(m));
+    g.append(el("button",{class:"mod",type:"button",style:`--mc:${m.c}`,onclick:()=>ir(m.id),"aria-label":m.t+(lock?" (protegido)":"")},
+      el("span",{class:"mod-ico","aria-hidden":"true",text:m.ico}),
+      el("span",{class:"mod-t",text:m.t}), el("span",{class:"mod-d",text:m.d}),
+      lock ? el("span",{class:"mod-lk",text: S.user ? "Sin permiso" : "🔒 Con usuario"}) : null));
+  });
+  main.append(g);
+}
+function ir(id){ if (location.hash !== "#/"+id) location.hash = "#/"+id; else route(); }
+function route(){
+  const id = (location.hash.match(/^#\/([a-z]+)/)||[])[1] || "home";
+  S.view = id; window.scrollTo(0,0);
+  $("nav-home").hidden = id==="home";
+  if (id==="home") return renderHome();
+  document.body.classList.remove("is-home");
+  const m = modDe(id); if (!m) return ir("home");
+  const main=$("main"); main.textContent="";
+  main.append(el("div",{class:"modhead",style:`--mc:${m.c}`}, el("span",{class:"mod-ico",text:m.ico}), el("div",{}, el("h1",{text:m.t}), el("p",{class:"lead",text:m.d}))));
+  if (id==="empleados") return vEmpleados(main);
+  if (id==="otros") return vOtros(main);
+  if (!S.user) return loginCard(main, "Ingresá con tu usuario y PIN para abrir este módulo.");
+  if (!puedeVer(m)) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
+  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig}[id];
+  V(main);
+}
+addEventListener("hashchange", route);
+
+/* ----- Sesión de staff ----- */
+function setUser(r){
+  S.token=r.token; S.user=r.user; S.perms=r.user.permisos||[]; S.params={...DEF,...(r.params||{})};
+  ssSet(SESSION_KEY, r.token);
+  $("who").textContent = `${r.user.nombre} · ${r.user.rol==="admin"?"Administración":r.user.rol==="responsable"?"Jefe/Responsable":"Empleado"}`;
+  $("btn-salir").hidden=false; bumpIdle();
+}
+function salir(msg){
+  if (S.token) api("logout",S.token).catch(()=>{});
+  S.token=null; S.user=null; S.perms=[]; S.lista=[]; S.fotoCache={}; S.acciones=[];
+  ssSet(SESSION_KEY,null); $("who").textContent=""; $("btn-salir").hidden=true;
+  if (msg) toast(msg); ir("home"); route();
+}
+function sesionVencida(){ salir("La sesión venció. Volvé a ingresar."); }
+let idleT=null;
+function bumpIdle(){ if (!S.token) return; clearTimeout(idleT); idleT=setTimeout(()=>salir("🔒 Sesión cerrada por inactividad"), 20*60*1000); }
+["pointerdown","keydown"].forEach(ev=>addEventListener(ev,bumpIdle,{passive:true}));
+
+function loginCard(main, texto, alEntrar){
+  const u = el("input",{type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",placeholder:"Usuario",maxlength:"20","aria-label":"Usuario"});
+  const p = el("input",{type:"password",inputmode:"numeric",autocomplete:"current-password",maxlength:"6",placeholder:"PIN","aria-label":"PIN"});
+  const err = el("div",{class:"notice bad",hidden:true});
+  const b = el("button",{class:"btn primary",type:"submit",text:"Ingresar"});
+  main.append(el("form",{class:"card lockcard",onsubmit:async e=>{ e.preventDefault(); err.hidden=true; spinBtn(b,"Verificando…");
+      try{ const r = await api("login", u.value.trim(), p.value); p.value=""; setUser(r); if (alEntrar) alEntrar(); else route(); }
+      catch(x){ unspin(b); err.textContent=msgErr(x); err.hidden=false; p.value=""; p.focus(); } }},
+    el("div",{class:"lockicon",text:"🔐"}), el("h2",{text:"Ingresá"}), el("p",{class:"lead",text:texto}),
+    el("div",{class:"grid"}, u, p, err, b)));
+  setTimeout(()=>u.focus(),60);
+}
+
+/* ----- Arranque ----- */
+async function iniciar(){
+  $("btn-salir").addEventListener("click",()=>salir("Sesión cerrada"));
+  $("nav-home").addEventListener("click",()=>ir("home"));
+  if (!BACKEND_OK){ $("main").append(el("div",{class:"card notice bad",text:"Falta conectar el servidor (config.js)."})); return; }
+  let est;
+  try{ est = await api("estado"); }
+  catch(e){ $("main").append(el("div",{class:"card"}, el("h2",{text:"Sin conexión con el servidor"}), el("p",{class:"lead",text:msgErr(e)}), el("button",{class:"btn",text:"Reintentar",onclick:()=>location.reload()}))); return; }
+  if (!est.usuarios) return vBootstrap(est);
+  const t = ssGet(SESSION_KEY);
+  if (t){ try{ const r = await api("yo", t); setUser({token:t, user:r.user, params:r.params}); }catch(e){ ssSet(SESSION_KEY,null); } }
+  route();
+}
+function vBootstrap(est){
+  const main=$("main"); main.textContent="";
+  const cred = el("input",{type:"password",autocomplete:"off",placeholder: est.legado ? "Clave de jefes actual" : "Código de instalación","aria-label":"Credencial"});
+  const n = el("input",{type:"text",placeholder:"Tu nombre y apellido",maxlength:"60"}), u = el("input",{type:"text",placeholder:"Usuario (ej.: maria)",maxlength:"20",autocapitalize:"none"});
+  const p = el("input",{type:"password",inputmode:"numeric",maxlength:"6",placeholder:"PIN de 6 números"}), p2 = el("input",{type:"password",inputmode:"numeric",maxlength:"6",placeholder:"Repetí el PIN"});
+  const err = el("div",{class:"notice bad",hidden:true}), b = el("button",{class:"btn primary",type:"submit",text:"Crear administrador"});
+  main.append(el("form",{class:"card lockcard",onsubmit:async e=>{ e.preventDefault(); err.hidden=true;
+      if (p.value!==p2.value){ err.textContent="Los PIN no coinciden."; err.hidden=false; return; }
+      spinBtn(b,"Creando…");
+      try{ await api("bootstrapAdmin", cred.value, {nombre:n.value, legajo:u.value, pin:p.value}); const r=await api("login",u.value,p.value); setUser(r); toast("✅ Administrador creado. Las claves compartidas anteriores quedaron retiradas."); location.hash="#/empleados/personal"; }
+      catch(x){ unspin(b); err.textContent=msgErr(x); err.hidden=false; } }},
+    el("div",{class:"lockicon",text:"🛠️"}), el("h2",{text:"Actualización a usuarios individuales"}),
+    el("p",{class:"lead",text: est.legado ? "Desde ahora cada persona entra con su usuario y PIN. Confirmá con la clave de jefes actual y creá tu usuario de administración. Las auditorías existentes se conservan." : "Ingresá el código de instalación y creá el primer usuario de administración."}),
+    el("div",{class:"grid"}, cred, n, u, p, p2, err, b)));
+}
+/* ===================== Empleados: fichada y administración de personal ===================== */
+function tabs(main, items, activo, onSel){
+  const bar = el("div",{class:"subtabs",role:"tablist"});
+  const body = el("div",{class:"subbody"});
+  const sel = id => { [...bar.children].forEach(b=>b.setAttribute("aria-selected", b.dataset.id===id?"true":"false")); body.textContent="";
+    try{ history.replaceState(null,"","#/"+S.view+"/"+id); }catch(e){} onSel(id, body); };
+  items.forEach(([id,t])=>bar.append(el("button",{class:"subtab",type:"button",role:"tab","data-id":id,text:t,onclick:()=>sel(id)})));
+  const sub = (location.hash.split("/")[2]||"");
+  main.append(bar, body); sel(items.some(x=>x[0]===sub) ? sub : (activo || items[0][0]));
+}
+function vEmpleados(main){
+  const items = [["fichar","📸 Fichar entrada / salida"]];
+  if (S.user && tiene("personal")) items.push(["personal","🗂️ Personal (altas y bajas)"]);
+  else items.push(["personal","🗂️ Personal (jefes)"]);
+  tabs(main, items, "fichar", (id, body)=> id==="fichar" ? vFichar(body) : (S.user && tiene("personal") ? vPersonal(body) :
+    S.user ? body.append(el("div",{class:"card empty",text:"🔒 Solo jefes y administración pueden gestionar el personal."})) : loginCard(body,"Solo jefes: ingresá con tu usuario y PIN de 6 números.",()=>route())));
+}
+
+/* ----- Fichada (sesión propia del empleado; no toca la sesión de un jefe abierta en el mismo equipo) ----- */
+const F = { token:null, t:null };
+function finFichada(){ if (F.token) api("logout",F.token).catch(()=>{}); F.token=null; clearTimeout(F.t); }
+function vFichar(body){
+  finFichada();
+  const u = el("input",{type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",placeholder:"Tu usuario",maxlength:"20","aria-label":"Usuario"});
+  const p = el("input",{type:"password",inputmode:"numeric",autocomplete:"current-password",maxlength:"6",placeholder:"Tu PIN (4 números)","aria-label":"PIN"});
+  const err = el("div",{class:"notice bad",hidden:true}), b = el("button",{class:"btn primary big-btn",type:"submit",text:"Continuar"});
+  body.append(el("form",{class:"card lockcard",onsubmit:async e=>{ e.preventDefault(); err.hidden=true; spinBtn(b,"Verificando…");
+      try{ const r = await api("login", u.value.trim(), p.value); p.value=""; F.token=r.token; F.nombre=r.user.nombre; body.textContent=""; jornada(body); }
+      catch(x){ unspin(b); err.textContent=msgErr(x); err.hidden=false; p.value=""; } }},
+    el("div",{class:"lockicon",text:"👋"}), el("h2",{text:"Identificate para fichar"}),
+    el("p",{class:"lead",text:"Usá el usuario y el PIN que te dio tu jefe. Nadie más puede ver tus registros."}), el("div",{class:"grid"}, u, p, err, b)));
+  setTimeout(()=>u.focus(),60);
+}
+async function jornada(body){
+  clearTimeout(F.t); F.t = setTimeout(()=>{ finFichada(); body.textContent=""; vFichar(body); toast("Sesión de fichada cerrada"); }, 3*60*1000);
+  body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
+  let j; try{ j = await api("miJornada", F.token); }catch(e){ body.textContent=""; vFichar(body); return toast(msgErr(e)); }
+  body.textContent="";
+  const card = el("div",{class:"card fichar"});
+  card.append(el("h2",{text:`Hola, ${j.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:"Hoy, "+fmtF(j.fecha)}));
+  const est = el("div",{class:"jornada"},
+    el("div",{class:"jbox "+(j.entrada?"ok":"")}, el("span",{class:"k",text:"Entrada"}), el("b",{class:"mono",text:j.entrada?j.entrada.hora.slice(0,5):"—"}), j.entrada && j.entrada.estado==="revisar" ? el("span",{class:"pill warn",text:"Para revisar"}) : null),
+    el("div",{class:"jbox "+(j.salida?"ok":"")}, el("span",{class:"k",text:"Salida"}), el("b",{class:"mono",text:j.salida?j.salida.hora.slice(0,5):"—"}), j.salida && j.salida.minutos!=null ? el("span",{class:"s",text:horas(j.salida.minutos)}) : null));
+  card.append(est);
+  if (!j.habilitado) card.append(el("div",{class:"notice warn",text:"Tu usuario no está habilitado para fichar. Consultá con tu jefe."}));
+  else if (j.siguiente){
+    const tipo = j.siguiente, btn = el("button",{class:"btn fichar-btn "+tipo,type:"button"}, el("span",{text:tipo==="entrada"?"📸":"🏁"}), el("span",{text:tipo==="entrada"?"Fichar ENTRADA":"Fichar SALIDA"}));
+    btn.onclick = ()=>capturar(body, tipo);
+    card.append(btn, el("p",{class:"aviso",text:"📷 "+(j.aviso||"")}));
+  } else card.append(el("div",{class:"notice ok",text:"✅ Ya registraste la entrada y la salida de hoy."}));
+  card.append(el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"Mis registros y correcciones",onclick:()=>misRegistros(body)}),
+    el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Terminar",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
+  body.append(card);
+}
+async function capturar(body, tipo){
+  const geoP = ubicacion();               // se pide en paralelo; si no hay permiso, el registro queda "para revisar"
+  const foto = await elegirFoto(true);
+  if (!foto) return toast("Necesitás sacarte la foto para fichar.");
+  body.textContent="";
+  const b = el("button",{class:"btn fichar-btn "+tipo,type:"button",text:"Confirmar "+tipo});
+  const card = el("div",{class:"card fichar"}, el("h2",{text:"Confirmá tu "+tipo}),
+    el("img",{src:foto,alt:"Tu foto",class:"selfie"}), b,
+    el("button",{class:"btn",type:"button",text:"Sacar otra foto",onclick:()=>capturar(body,tipo)}),
+    el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)}));
+  body.append(card);
+  b.onclick = async ()=>{
+    spinBtn(b,"Registrando…");
+    const geo = await geoP; geo.ua = navigator.userAgent.slice(0,120);
+    try{
+      const r = await api("registrarFichada", F.token, tipo, foto, geo);
+      body.textContent="";
+      const geoTxt = {dentro:"en el showroom",fuera:"fuera del radio del showroom (queda para revisar)",sin_permiso:"sin permiso de ubicación (queda para revisar)",no_disponible:"ubicación no disponible (queda para revisar)",tiempo_agotado:"ubicación no disponible (queda para revisar)",no_configurado:"ubicación no requerida",sin_referencia:"ubicación registrada"}[r.geoResultado]||r.geoResultado;
+      body.append(el("div",{class:"card fichar done "+tipo},
+        el("div",{class:"bigok",text:"✅"}), el("h2",{text:(tipo==="entrada"?"Entrada":"Salida")+" registrada"}),
+        el("div",{class:"big mono",text:r.hora}), el("p",{class:"lead",text:fmtF(r.fecha)+" · hora del servidor"}),
+        el("p",{class:"lead",text:"📍 "+geoTxt + (r.fotoGuardada?" · 📷 foto guardada":"")}),
+        r.minutos!=null ? el("p",{class:"lead",text:"⏱️ Jornada: "+horas(r.minutos)}) : null,
+        el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
+      setTimeout(()=>{ if (F.token){ finFichada(); body.textContent=""; vFichar(body); } }, 20000);
+    }catch(e){
+      unspin(b);
+      const m = /^DUP:(\w+):(.+)$/.exec(e.message);
+      if (m) { body.textContent=""; body.append(el("div",{class:"card notice warn"}, `Ya registraste la ${m[1]} de hoy a las ${m[2].slice(0,5)}. Si hay un error, pedí una corrección.`)); setTimeout(()=>jornada(body),2500); }
+      else if (esAuth(e)) { toast("La sesión venció. Volvé a identificarte."); body.textContent=""; vFichar(body); }
+      else toast("No se registró: "+msgErr(e));
+    }
+  };
+}
+async function misRegistros(body){
+  body.textContent=""; let L=[];
+  try{ L = await api("misIngresos", F.token); }catch(e){ return toast(msgErr(e)); }
+  const tb = el("tbody");
+  L.forEach(x=>tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(x.fecha)}), el("td",{text:x.tipo==="salida"?"Salida":"Entrada"}),
+    el("td",{class:"mono",text:(x.horaCorregida? x.horaCorregida+" (corr.)" : (x.hora||"").slice(0,5))}),
+    el("td",{},el("span",{class:"pill "+(x.estado==="valido"?"ok":x.estado==="revisar"?"warn":""),text:x.estado})), el("td",{text:x.correccion||""}))));
+  const f = el("input",{type:"date",value:hoy(),max:hoy()}), t = el("select",{}, el("option",{value:"entrada",text:"Entrada"}), el("option",{value:"salida",text:"Salida"}));
+  const h = el("input",{type:"time",value:"09:00"}), m = el("input",{type:"text",maxlength:"300",placeholder:"Motivo (ej.: me olvidé de fichar)"});
+  const b = el("button",{class:"btn primary",type:"submit",text:"Enviar solicitud"});
+  body.append(el("div",{class:"card"}, el("h2",{text:"Mis últimos registros"}),
+      el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Tipo","Hora","Estado","Corrección"].map(x=>el("th",{text:x})))), tb))),
+    el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b,"Enviando…");
+        try{ await api("solicitarCorreccion", F.token, {fecha:f.value, tipo:t.value, horaPropuesta:h.value, motivo:m.value}); toast("✅ Solicitud enviada. La revisa un jefe."); misRegistros(body); }
+        catch(x){ unspin(b); toast(msgErr(x)); } }},
+      el("h2",{text:"Pedir una corrección"}), el("p",{class:"lead",text:"Tu registro original no se modifica: un jefe aprueba o rechaza el cambio y queda constancia."}),
+      el("div",{class:"grid2"}, el("label",{class:"f"},"Fecha",f), el("label",{class:"f"},"Tipo",t), el("label",{class:"f"},"Hora correcta",h)), el("label",{class:"f"},"Motivo",m),
+      el("div",{class:"row"}, b, el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)}))));
+}
+
+/* ----- Personal (jefes) ----- */
+async function vPersonal(body){
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando personal…"));
+  let L; try{ L = await apiS("listarPersonal"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const esAdmin = S.user.rol==="admin";
+  // Alta
+  const n = el("input",{type:"text",maxlength:"60",placeholder:"Nombre y apellido",required:true});
+  const u = el("input",{type:"text",maxlength:"20",placeholder:"Usuario para entrar (ej.: lucia)",autocapitalize:"none",required:true});
+  const s = el("input",{type:"text",maxlength:"40",placeholder:"Sector o puesto (ej.: Showroom)"});
+  const fi = el("input",{type:"date",value:hoy()});
+  const rol = el("select",{}, el("option",{value:"empleado",text:"Empleado (solo ficha)"}), esAdmin?el("option",{value:"responsable",text:"Jefe / Responsable"}):null, esAdmin?el("option",{value:"admin",text:"Administración"}):null);
+  const pin = el("input",{type:"password",inputmode:"numeric",maxlength:"4",placeholder:"PIN de 4 números",autocomplete:"new-password"});
+  const ayudaPin = el("span",{class:"hint",text:"Empleados: 4 números. Evitá 1234, 0000 o fechas obvias."});
+  rol.onchange = ()=>{ const L6 = rol.value!=="empleado"; pin.maxLength = L6?6:4; pin.placeholder = L6?"PIN de 6 números":"PIN de 4 números"; ayudaPin.textContent = L6?"Jefes y administración: 6 números.":"Empleados: 4 números. Evitá 1234, 0000 o fechas obvias."; };
+  const b = el("button",{class:"btn primary",type:"submit",text:"➕ Dar de alta"});
+  body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b,"Guardando…");
+      try{ const r = await apiS("altaEmpleado", {nombre:n.value, legajo:u.value, sector:s.value, fechaIngreso:fi.value, rol:rol.value, pin:pin.value});
+        pin.value=""; toast(`✅ ${r.user.nombre} dado/a de alta. Usuario: ${r.user.legajo.toLowerCase()}`);
+        if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN generado"}), el("p",{class:"lead",text:"Comunicáselo en persona. No se vuelve a mostrar."}), el("div",{class:"big mono",text:r.pinInicial})));
+        body.textContent=""; vPersonal(body); }
+      catch(x){ unspin(b); toast(msgErr(x)); } }},
+    el("h2",{text:"Alta de personal"}), el("p",{class:"lead",text:"Asigná el nombre, el usuario y el PIN con el que va a fichar. Solo se piden los datos necesarios."}),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Nombre y apellido",n), el("label",{class:"f"},"Usuario",u), el("label",{class:"f"},"Sector o puesto",s),
+      el("label",{class:"f"},"Fecha de ingreso",fi), el("label",{class:"f"},"Tipo de acceso",rol), el("label",{class:"f"},"PIN",pin,ayudaPin)), b));
+  // Listado
+  const q = el("input",{type:"search",placeholder:"Buscar por nombre o usuario"}), fe = el("select",{}, el("option",{value:"activo",text:"Activos"}), el("option",{value:"inactivo",text:"Dados de baja"}), el("option",{value:"",text:"Todos"}));
+  const lista = el("div",{class:"plist"});
+  const pintar = ()=>{ lista.textContent=""; const t=q.value.trim().toLowerCase();
+    L.filter(x=>(!fe.value||x.estado===fe.value)&&(!t||(x.nombre+" "+x.legajo).toLowerCase().includes(t))).sort((a,b)=>a.nombre.localeCompare(b.nombre)).forEach(x=>lista.append(fichaPersona(x, body)));
+    if (!lista.children.length) lista.append(el("div",{class:"empty",text:"Sin resultados."})); };
+  q.oninput=pintar; fe.onchange=pintar;
+  body.append(el("div",{class:"card"}, el("h2",{text:"Personal"}), el("div",{class:"row"}, q, fe), lista)); pintar();
+}
+function fichaPersona(x, body){
+  const esAdmin = S.user.rol==="admin", yo = x.id===S.user.id, rolTxt = {empleado:"Empleado",responsable:"Jefe / Responsable",admin:"Administración"}[x.rol];
+  const acc = el("div",{class:"row"});
+  const recargar = ()=>{ body.textContent=""; vPersonal(body); };
+  const puede = x.rol==="empleado" || esAdmin;
+  if (x.estado==="activo" && puede){
+    acc.append(el("button",{class:"btn sm",type:"button",text:"🔑 PIN nuevo",onclick:async()=>{
+      const largo = x.largoPin||4, inp = el("input",{type:"password",inputmode:"numeric",maxlength:String(largo),placeholder:`PIN de ${largo} números (vacío = generar)`});
+      const ok = el("button",{class:"btn primary",type:"button",text:"Asignar"});
+      const m = modal(el("div",{class:"grid"}, el("h2",{text:"PIN nuevo para "+x.nombre}), el("p",{class:"lead",text:"Se cierran sus sesiones abiertas y se desbloquea si estaba bloqueado."}), inp, el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+      ok.onclick = async ()=>{ spinBtn(ok,"Guardando…"); try{ const r = await apiS("resetPin", x.id, inp.value||null); m.cerrar();
+          if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN generado"}), el("p",{class:"lead",text:"Comunicáselo en persona."}), el("div",{class:"big mono",text:r.pinInicial})));
+          else toast("✅ PIN actualizado"); recargar(); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+    }}));
+    acc.append(el("button",{class:"btn sm",type:"button",text:x.registraIngreso?"⏸ No ficha":"▶ Ficha",title:"Habilitar o no la fichada",onclick:async()=>{ try{ await apiS("editarEmpleado",x.id,{registraIngreso:!x.registraIngreso}); recargar(); }catch(e){ toast(msgErr(e)); } }}));
+    if (!yo) acc.append(el("button",{class:"btn sm danger",type:"button",text:"⛔ Dar de baja",onclick:async()=>{
+      const f = el("input",{type:"date",value:hoy()}), mo = el("input",{type:"text",maxlength:"200",placeholder:"Motivo (opcional)"}), ok = el("button",{class:"btn danger",type:"button",text:"Confirmar baja"});
+      const m = modal(el("div",{class:"grid"}, el("h2",{text:"Baja de "+x.nombre}), el("p",{class:"lead",text:"Se desactiva el acceso, se cierran sus sesiones y no puede volver a fichar. Su historial y sus fotos se conservan según la política de retención."}),
+        el("label",{class:"f"},"Fecha efectiva",f), el("label",{class:"f"},"Motivo",mo), el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+      ok.onclick = async ()=>{ spinBtn(ok,"Procesando…"); try{ await apiS("bajaEmpleado", x.id, f.value, mo.value); m.cerrar(); toast("Baja registrada"); recargar(); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+    }}));
+  }
+  if (x.estado!=="activo" && puede) acc.append(el("button",{class:"btn sm",type:"button",text:"♻️ Reactivar",onclick:async()=>{
+    const largo = x.largoPin||4, inp = el("input",{type:"password",inputmode:"numeric",maxlength:String(largo),placeholder:`PIN nuevo de ${largo} números (vacío = generar)`}), ok = el("button",{class:"btn primary",type:"button",text:"Reactivar"});
+    const m = modal(el("div",{class:"grid"}, el("h2",{text:"Reactivar a "+x.nombre}), el("p",{class:"lead",text:"Se reutiliza su usuario (sin duplicar) y queda registrado quién lo reactivó."}), inp, el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+    ok.onclick = async ()=>{ spinBtn(ok,"Procesando…"); try{ const r = await apiS("reactivarEmpleado", x.id, inp.value||null); m.cerrar();
+        if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN generado"}), el("div",{class:"big mono",text:r.pinInicial}))); else toast("✅ Reactivado"); recargar(); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+  }}));
+  if (esAdmin && !yo && x.estado==="activo") acc.append(el("button",{class:"btn sm",type:"button",text:"🛡️ Rol y permisos",onclick:()=>editarPermisos(x, recargar)}));
+  return el("div",{class:"persona"+(x.estado!=="activo"?" off":"")},
+    el("div",{class:"pinfo"}, el("b",{text:x.nombre}), el("span",{class:"mono",text:"usuario: "+x.legajo.toLowerCase()}),
+      el("span",{text:[rolTxt, x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):""].filter(Boolean).join(" · ")}),
+      x.estado!=="activo" ? el("span",{class:"pill bad",text:`Baja ${fmtF(x.fechaBaja)}${x.bajaPor?" · por "+x.bajaPor:""}${x.motivoBaja?" · "+x.motivoBaja:""}`}) :
+        el("span",{class:"row",style:"gap:6px"}, el("span",{class:"pill ok",text:"Activo"}), x.registraIngreso?el("span",{class:"pill",text:"Ficha"}):null, x.bloqueado?el("span",{class:"pill bad",text:"Bloqueado: asignar PIN"}):null)),
+    acc);
+}
+function editarPermisos(x, recargar){
+  const NOM = {ingresos:"Registro de ingresos",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
+  const rol = el("select",{}, ...["empleado","responsable","admin"].map(r=>el("option",{value:r,text:{empleado:"Empleado",responsable:"Jefe / Responsable",admin:"Administración"}[r],selected:x.rol===r})));
+  const checks = Object.keys(NOM).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:x.permisos.includes(k)}); return el("label",{class:"chk"},c," "+NOM[k]); });
+  const pers = el("input",{type:"checkbox",checked:x.permisosPersonalizados});
+  const ok = el("button",{class:"btn primary",type:"button",text:"Guardar"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:"Rol y permisos · "+x.nombre}), el("label",{class:"f"},"Rol",rol),
+    el("label",{class:"chk"},pers," Usar permisos personalizados (si no, los del rol)"), el("div",{class:"chkgrid"},checks),
+    el("p",{class:"hint",text:"Principio de mínimo privilegio: habilitá solo lo necesario. Si cambia entre empleado y jefe, se genera un PIN nuevo con el largo correspondiente."}),
+    el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ spinBtn(ok,"Guardando…");
+    const permisos = pers.checked ? checks.map(l=>l.querySelector("input")).filter(c=>c.checked).map(c=>c.value) : null;
+    try{ const r = await apiS("cambiarRol", x.id, rol.value, permisos); m.cerrar(); if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN nuevo por cambio de nivel"}), el("div",{class:"big mono",text:r.pinInicial}))); else toast("✅ Permisos actualizados"); recargar(); }
+    catch(e){ unspin(ok); toast(msgErr(e)); } };
+}
+/* ===================== Registro de ingresos (vista administrativa) ===================== */
+const GEO_TXT = {dentro:"En el showroom",fuera:"Fuera del radio",sin_permiso:"Sin permiso de ubicación",no_disponible:"Ubicación no disponible",tiempo_agotado:"Ubicación no disponible",no_configurado:"No requerida",sin_referencia:"Registrada (sin referencia)",no_aplica:"No aplica (corrección)"};
+const EST_CLS = {valido:"ok",revisar:"warn",corregido:"",anulado:"bad"};
+function vIngresos(main){
+  const lunes = (()=>{ const d=new Date(); d.setDate(d.getDate()-((d.getDay()+6)%7)); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,10); })();
+  const de = el("input",{type:"date",value:lunes}), ha = el("input",{type:"date",value:hoy()});
+  const emp = el("select",{}, el("option",{value:"",text:"Todo el personal"})), est = el("select",{}, el("option",{value:"",text:"Todos los estados"}), ...["valido","revisar","corregido","anulado"].map(x=>el("option",{value:x,text:x})));
+  const q = el("input",{type:"search",placeholder:"Búsqueda rápida"});
+  const body = el("div",{class:"stack"});
+  let D = null;
+  const cargar = async ()=>{ body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
+    try{ D = await apiS("listarIngresos", de.value, ha.value); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    const nombres = [...new Map(D.lista.map(x=>[x.uid,x.nombre])).entries()].sort((a,b)=>a[1].localeCompare(b[1]));
+    const cur = emp.value; emp.textContent=""; emp.append(el("option",{value:"",text:"Todo el personal"}), ...nombres.map(([id,n])=>el("option",{value:id,text:n,selected:id===cur})));
+    pintar(); };
+  const pintar = ()=>{ body.textContent=""; if (!D) return;
+    const t=q.value.trim().toLowerCase();
+    const L = D.lista.filter(x=>(!emp.value||x.uid===emp.value)&&(!est.value||x.estado===est.value)&&(!t||(x.nombre+" "+x.legajo+" "+(x.observacion||"")).toLowerCase().includes(t)));
+    // Alertas para revisión (no son conclusiones)
+    const al = el("div",{class:"alerts"});
+    const pend = D.correcciones.filter(c=>c.estado==="pendiente");
+    if (pend.length) al.append(el("div",{class:"notice warn",text:`✋ ${pend.length} solicitud(es) de corrección pendientes de aprobación.`}));
+    if (D.pendientes.length) al.append(el("div",{class:"notice",text:`🔎 ${D.pendientes.length} día(s)-persona de apertura sin entrada registrada. Es una alerta para revisar, no una falta.`}));
+    if (D.sinSalida.length) al.append(el("div",{class:"notice",text:`🔎 ${D.sinSalida.length} jornada(s) con entrada y sin salida.`}));
+    const dup = L.filter(x=>x.duplicado).length; if (dup) al.append(el("div",{class:"notice bad",text:`⚠️ ${dup} registro(s) duplicados para revisar.`}));
+    if (al.children.length) body.append(al);
+    // Jornadas
+    const J = D.jornadas.filter(j=>(!emp.value||j.uid===emp.value)&&(!t||(j.nombre+" "+j.legajo).toLowerCase().includes(t)));
+    const tj = el("tbody"); J.forEach(j=>tj.append(el("tr",{}, el("td",{class:"mono",text:fmtF(j.fecha)}), el("td",{text:j.nombre}), el("td",{class:"mono",text:(j.entrada||"—").slice(0,5)}),
+      el("td",{class:"mono",text:(j.salida||"—").slice(0,5)}), el("td",{class:"n",text:horas(j.minutos)}), el("td",{}, j.sinSalida?el("span",{class:"pill warn",text:"Sin salida"}):null))));
+    if (!J.length) tj.append(el("tr",{},el("td",{colspan:"6",class:"empty",text:"Sin jornadas en el período."})));
+    body.append(el("div",{class:"card"}, el("h2",{text:"Jornadas"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Entrada","Salida","Horas","Revisión"].map((x,i)=>el("th",{class:i===4?"n":null,text:x})))), tj))));
+    // Detalle de fichadas
+    const tb = el("tbody");
+    L.forEach(x=>{ const abierto = S.openRow===x.id, tog=()=>{ S.openRow=abierto?null:x.id; pintar(); };
+      tb.append(el("tr",{class:"clk"+(abierto?" sel":""),tabindex:"0",onclick:tog,onkeydown:e=>{if(e.key==="Enter")tog();}},
+        el("td",{class:"mono",text:fmtF(x.fecha)}), el("td",{text:x.nombre+(x.usuarioInactivo?" (baja)":"")}), el("td",{text:x.tipo==="salida"?"Salida":"Entrada"}),
+        el("td",{class:"mono",text:x.horaCorregida? x.horaCorregida+" ✎" : (x.hora||"").slice(0,8)}),
+        el("td",{},el("span",{class:"pill "+(EST_CLS[x.estado]||""),text:x.estado})), el("td",{text:x.tieneFoto?"📷":x.fotoPurgada?"(vencida)":"—"}),
+        el("td",{text:GEO_TXT[x.geoResultado]||x.geoResultado||""}), el("td",{text:x.observacion||""})));
+
+    });
+    if (!L.length) tb.append(el("tr",{},el("td",{colspan:"8",class:"empty",text:"Sin fichadas con estos filtros."})));
+    const selI = L.find(x=>x.id===S.openRow);
+    const detI = selI ? el("div",{class:"card detcard"}, el("div",{class:"row"}, el("h3",{style:"margin:0",text:`Detalle · ${selI.nombre} · ${selI.tipo} ${fmtF(selI.fecha)}`}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Cerrar detalle",onclick:()=>{S.openRow=null;pintar();}})), detalleIngreso(selI, cargar)) : null;
+    body.append(el("div",{class:"card"}, el("h2",{text:"Fichadas"}), el("p",{class:"lead",text:"Tocá una fila para ver la evidencia y revisarla. La hora es la del servidor; las correcciones conservan el registro original."}),
+      el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Hora","Estado","Evidencia","Validación","Observaciones"].map(x=>el("th",{text:x})))), tb))));
+    if (detI){ body.append(detI); setTimeout(()=>detI.scrollIntoView({behavior:"smooth",block:"start"}),30); }
+    // Correcciones
+    const tc = el("tbody");
+    D.correcciones.slice().sort((a,b)=>(a.estado==="pendiente"?0:1)-(b.estado==="pendiente"?0:1)||b.creado.localeCompare(a.creado)).forEach(c=>{
+      const acc = c.estado==="pendiente" ? el("span",{class:"row"},
+        el("button",{class:"btn sm",type:"button",text:"✔ Aprobar",onclick:async()=>{ try{ await apiS("resolverCorreccion",c.id,true,""); toast("Corrección aprobada"); cargar(); }catch(e){ toast(msgErr(e)); } }}),
+        el("button",{class:"btn sm danger",type:"button",text:"✖ Rechazar",onclick:async()=>{ try{ await apiS("resolverCorreccion",c.id,false,""); toast("Corrección rechazada"); cargar(); }catch(e){ toast(msgErr(e)); } }})) : el("span",{text:(c.resueltoPor||"")});
+      tc.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:c.nombre}), el("td",{text:c.tipo||"entrada"}), el("td",{class:"mono",text:(c.horaOriginal||"sin registro").slice(0,5)+" → "+c.horaPropuesta}),
+        el("td",{text:c.motivo}), el("td",{},el("span",{class:"pill "+(c.estado==="aprobada"?"ok":c.estado==="rechazada"?"bad":"warn"),text:c.estado})), el("td",{},acc)));
+    });
+    if (!D.correcciones.length) tc.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin solicitudes de corrección."})));
+    body.append(el("div",{class:"card"}, el("h2",{text:"Solicitudes de corrección"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Cambio","Motivo","Estado",""].map(x=>el("th",{text:x})))), tc))));
+    if (D.pendientes.length){ const tp=el("tbody"); D.pendientes.forEach(p=>tp.append(el("tr",{}, el("td",{class:"mono",text:fmtF(p.fecha)}), el("td",{text:p.nombre}),
+        el("td",{}, el("button",{class:"btn sm",type:"button",text:"Derivar a RR. HH.",onclick:()=>derivar({uid:p.uid,fecha:p.fecha}, p.nombre)})))));
+      body.append(el("div",{class:"card"}, el("h2",{text:"Días de apertura sin entrada (para revisar)"}), el("p",{class:"lead",text:"Puede haber motivos válidos (franco, licencia, olvido). Si corresponde, derivalo a RR. HH."}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado",""].map(x=>el("th",{text:x})))), tp)))); }
+  };
+  [emp,est].forEach(x=>x.onchange=pintar); q.oninput=pintar; [de,ha].forEach(x=>x.onchange=cargar);
+  const bx = el("button",{class:"btn xl",type:"button",text:"⬇️ Excel"});
+  bx.onclick = async ()=>{ spinBtn(bx,"Preparando…"); try{ const r = await apiS("exportarIngresos", de.value, ha.value); await loadLibs("xlsx"); guardar(`HeyBlackk_Ingresos_${de.value}_a_${ha.value}.xlsx`, new Blob([await xlsxIngresos(r)],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})); }catch(e){ toast(msgErr(e)); } finally{ unspin(bx); } };
+  main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Empleado",emp), el("label",{class:"f"},"Estado",est)),
+    el("div",{class:"row"}, q, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}), bx)), body);
+  cargar();
+}
+function detalleIngreso(x, recargar){
+  const obs = el("input",{type:"text",maxlength:"300",value:x.observacion||"",placeholder:"Observación"});
+  const est = el("select",{}, ...["valido","revisar","anulado"].map(v=>el("option",{value:v,text:v,selected:x.estado===v})));
+  const box = el("div",{class:"dl"});
+  box.append(el("div",{class:"row"}, x.tieneFoto ? miniFoto("fotoIngreso", x.id, `${x.nombre} · ${x.tipo} ${fmtF(x.fecha)} ${x.hora}`) : el("span",{class:"lead",text: x.fotoPurgada?"La foto se eliminó por la política de retención.":"Sin foto."}),
+    el("div",{class:"grid",style:"flex:1;min-width:220px"},
+      el("span",{text:`Ubicación: ${GEO_TXT[x.geoResultado]||x.geoResultado}${x.distancia!=null?" · a "+x.distancia+" m":""}`}),
+      x.horaCorregida ? el("span",{text:`Hora original: ${x.hora||"sin registro"} · corregida: ${x.horaCorregida}`}) : null,
+      x.revisadoPor ? el("span",{class:"hint",text:"Revisado por "+x.revisadoPor}) : null,
+      el("p",{class:"hint",text:"La foto, la hora y la ubicación son datos de apoyo: por sí solos no prueban identidad ni presencia."}))));
+  box.append(el("div",{class:"grid2"}, el("label",{class:"f"},"Observación",obs), el("label",{class:"f"},"Estado",est)),
+    el("div",{class:"row"}, el("button",{class:"btn sm primary",type:"button",text:"Guardar revisión",onclick:async e=>{ e.stopPropagation(); try{ await apiS("observarIngreso", x.id, obs.value, est.value); toast("Revisión guardada"); recargar(); }catch(err){ toast(msgErr(err)); } }}),
+      el("button",{class:"btn sm",type:"button",text:"Derivar a RR. HH.",onclick:e=>{ e.stopPropagation(); derivar({ingresoId:x.id}, x.nombre); }})));
+  return box;
+}
+function derivar(ref, nombre){
+  const tipo = el("select",{}, ...[["llegada_tarde","Llegada tarde"],["inasistencia","Inasistencia"],["salida_anticipada","Salida anticipada"],["otra","Otra"]].map(([v,t])=>el("option",{value:v,text:t})));
+  const det = el("textarea",{maxlength:"400",placeholder:"Detalle para RR. HH."}), ok = el("button",{class:"btn primary",type:"button",text:"Derivar"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:"Derivar a RR. HH. · "+nombre}), el("p",{class:"lead",text:"La novedad la gestiona RR. HH. por su circuito. No se genera ninguna falta automática."}), el("label",{class:"f"},"Tipo",tipo), el("label",{class:"f"},"Detalle",det),
+    el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ spinBtn(ok); try{ await apiS("derivarRRHH", ref, tipo.value, det.value); m.cerrar(); toast("✅ Derivado a RR. HH."); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+}
+async function xlsxIngresos(r){
+  const wb = new ExcelJS.Workbook(); wb.creator="Hey Blackk";
+  const hoja = (nombre, cab, filas) => { const ws = wb.addWorksheet(nombre, {views:[{state:"frozen",ySplit:1}]}); ws.addRow(cab); ws.getRow(1).font={bold:true,color:{argb:"FFFFFFFF"}}; ws.getRow(1).fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF111113"}};
+    filas.forEach(f=>ws.addRow(f.map(v=>typeof v==="string" && /^[=+\-@]/.test(v) ? "'"+v : v))); ws.columns.forEach(c=>c.width=18); };
+  hoja("Jornadas", ["Fecha","Empleado","Usuario","Entrada","Salida","Horas","Sin salida"], r.jornadas.map(j=>[fmtF(j.fecha),j.nombre,j.legajo,j.entrada,j.salida,j.minutos==null?"":horas(j.minutos),j.sinSalida?"Sí":""]));
+  hoja("Fichadas", ["Fecha","Empleado","Usuario","Tipo","Hora","Hora corregida","Estado","Ubicación","Distancia (m)","Foto","Observación","Revisado por"], r.lista.map(x=>[fmtF(x.fecha),x.nombre,x.legajo,x.tipo,x.hora,x.horaCorregida,x.estado,GEO_TXT[x.geoResultado]||x.geoResultado,x.distancia??"",x.tieneFoto?"Sí":"No",x.observacion,x.revisadoPor]));
+  hoja("Correcciones", ["Fecha","Empleado","Tipo","Hora original","Hora propuesta","Motivo","Estado","Resuelto por"], r.correcciones.map(c=>[fmtF(c.fecha),c.nombre,c.tipo||"entrada",c.horaOriginal,c.horaPropuesta,c.motivo,c.estado,c.resueltoPor||""]));
+  hoja("Sin entrada (revisar)", ["Fecha","Empleado","Usuario"], r.pendientes.map(p=>[fmtF(p.fecha),p.nombre,p.legajo]));
+  return wb.xlsx.writeBuffer();
+}
+/* ===================== Auditoría (se conserva el flujo existente; fotos por punto y acciones correctivas) ===================== */
+const MAX_FOTOS = 12;
+function vAuditoria(main){
+  const items = [];
+  if (tiene("auditar")) items.push(["auditar","📝 Auditar"]);
+  if (tiene("auditoria")) items.push(["registro","🗂️ Registro"], ["indicadores","📊 Indicadores"]);
+  if (tiene("acciones")) items.push(["acciones","🛠️ Acciones correctivas"]);
+  tabs(main, items, null, (id, body)=>({auditar:vAuditar, registro:vRegistroAud, indicadores:vKpiAud, acciones:vAcciones})[id](body));
+}
+async function asegurarRegistro(force){
+  if (S.lista.length && !force) return;
+  const r = await apiS("getRegistro");
+  S.lista = (r.lista||[]).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")||(b.creado||"").localeCompare(a.creado||""));
+  S.params = {...DEF,...r.params};
+  if (tiene("acciones")) { try{ S.acciones = await apiS("listarAcciones"); }catch(e){ S.acciones=[]; } }
+}
+
+/* ----- Auditar ----- */
 function blankForm(){ const f={puntajes:{},coment:{},inf:{}}; PUNTOS.forEach(p=>{f.inf[p.k]=0;}); return f; }
+function calc(f=S.form){
+  const vals = PUNTOS.map(p=>f.puntajes[p.k]).filter(v=>v);
+  const prom = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+  const tot = PUNTOS.reduce((a,p)=>a+(f.inf[p.k]||0),0);
+  return {n:vals.length, prom, tot, completo: vals.length===PUNTOS.length};
+}
+function saveDraft(){ lsSet("hb_draft3",{form:S.form, fecha:$("f-fecha")&&$("f-fecha").value, dias:$("f-dias")&&$("f-dias").value, gen:$("f-general")&&$("f-general").value}); }
+function vAuditar(body){
+  const d = lsGet("hb_draft3");
+  S.form = d && d.form ? d.form : blankForm(); S.fotos = S.fotos || [];
+  const fecha = el("input",{type:"date",id:"f-fecha",value:(d&&d.fecha)||hoy(),max:hoy()});
+  const dias = el("input",{type:"number",id:"f-dias",min:"0",max:"999",inputmode:"numeric",placeholder:"Ej.: 3",value:(d&&d.dias)||""});
+  const gen = el("textarea",{id:"f-general",maxlength:"600",placeholder:"Observaciones generales, recomendaciones y mensaje para el equipo"}); gen.value=(d&&d.gen)||"";
+  [fecha,dias,gen].forEach(x=>x.addEventListener("input",saveDraft));
+  const puntos = el("div",{class:"puntos",id:"puntos"});
+  const generales = el("div",{class:"fotos",id:"fotos-general"});
+  const bar = el("div",{class:"resultbar",id:"resultbar"},
+    el("div",{}, el("div",{class:"big",id:"r-prom"},"–",el("small",{text:" / 5"})), el("div",{class:"rlabel",id:"r-label",text:"⏳ Falta completar"})),
+    el("span",{class:"pill",id:"r-inf",hidden:true}), el("div",{class:"meter"},el("i",{id:"r-meter"})), el("span",{class:"mono",id:"r-count",style:"font-size:12px"}),
+    el("button",{class:"btn primary",type:"button",id:"btn-enviar",text:"✔ Validar y enviar",onclick:enviar}));
+  body.append(
+    el("div",{class:"card"}, el("h2",{text:"Nueva auditoría · Palermo"}), el("p",{class:"lead",text:`Auditor: ${S.user.nombre} (queda registrado con tu usuario).`}),
+      el("div",{class:"grid2"}, el("label",{class:"f"},"📅 Fecha",fecha), el("label",{class:"f"},"📦 Días del pedido más viejo sin retirar",dias))),
+    puntos,
+    el("div",{class:"card"}, el("h3",{text:"💬 Comentario general"}), gen, el("h3",{style:"margin-top:14px",text:"📷 Fotos generales"}), generales),
+    el("div",{id:"sent",hidden:true}), bar);
+  buildPuntos(); renderFotos(); onChange();
+}
 function buildPuntos(){
   const box=$("puntos"); box.textContent="";
   PUNTOS.forEach((p,i)=>{
@@ -116,22 +619,24 @@ function buildPuntos(){
     for (let v=1; v<=5; v++) sc.append(el("button",{type:"button","data-v":v,"aria-pressed":S.form.puntajes[p.k]===v?"true":"false",
       onclick:()=>{ S.form.puntajes[p.k]=v; card.setAttribute("data-s",v); [...sc.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.v==v?"true":"false")); onChange(); }},
       el("span",{class:"n",text:EMO[v]+" "+v}), el("span",{class:"t",text:ETIQ[v]})));
-    const com = el("input",{type:"text",maxlength:"200",placeholder:"💬 Comentario (opcional)",value:S.form.coment[p.k]||"","aria-label":"Comentario "+p.l, oninput:e=>{S.form.coment[p.k]=e.target.value; saveDraft();}});
+    const com = el("input",{type:"text",maxlength:"200",placeholder:"💬 Observación (opcional)",value:S.form.coment[p.k]||"","aria-label":"Observación "+p.l, oninput:e=>{S.form.coment[p.k]=e.target.value; saveDraft();}});
     const num = el("input",{type:"number",min:"0",max:"999",inputmode:"numeric",value:S.form.inf[p.k]||0,"aria-label":"Infracciones "+p.inf, oninput:e=>{S.form.inf[p.k]=Math.max(0,parseInt(e.target.value)||0); onChange();}});
     const step = d => { num.value = Math.max(0,(parseInt(num.value)||0)+d); num.dispatchEvent(new Event("input")); };
     card.append(
       el("div",{class:"punto-head"}, el("b",{}, el("span",{class:"em",text:p.e}), p.l), el("span",{class:"idx",text:(i+1)+"/7"})), sc,
-      el("div",{class:"punto-extra"}, com, el("div",{class:"inf"}, el("div",{class:"stepper"}, el("button",{type:"button","aria-label":"Restar",onclick:()=>step(-1),text:"−"}), num, el("button",{type:"button","aria-label":"Sumar",onclick:()=>step(1),text:"+"})), el("span",{text:"Infracciones"}))));
+      el("div",{class:"punto-extra"}, com, el("div",{class:"inf"}, el("div",{class:"stepper"}, el("button",{type:"button","aria-label":"Restar",onclick:()=>step(-1),text:"−"}), num, el("button",{type:"button","aria-label":"Sumar",onclick:()=>step(1),text:"+"})), el("span",{text:"Infracciones"}))),
+      el("div",{class:"fotos","data-punto":p.k}));
     box.append(card);
   });
 }
-function calc(f=S.form){
-  const vals = PUNTOS.map(p=>f.puntajes[p.k]).filter(v=>v);
-  const prom = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
-  const tot = PUNTOS.reduce((a,p)=>a+(f.inf[p.k]||0),0);
-  return {n:vals.length, prom, tot, completo: vals.length===PUNTOS.length};
+function renderFotos(){
+  document.querySelectorAll(".fotos[data-punto], #fotos-general").forEach(b=>b.textContent="");
+  const cont = k => k==="general" ? $("fotos-general") : document.querySelector(`.fotos[data-punto="${k}"]`);
+  S.fotos.forEach((f,i)=>{ const c=cont(f.punto); if (c) c.append(el("div",{class:"foto"}, el("img",{src:f.data,alt:"Evidencia"}), el("button",{type:"button","aria-label":"Quitar foto",text:"×",onclick:()=>{S.fotos.splice(i,1);renderFotos();}}))); });
+  ["general",...PUNTOS.map(p=>p.k)].forEach(k=>{ const c=cont(k); if (c && S.fotos.length<MAX_FOTOS) c.append(el("button",{class:"addfoto",type:"button",text:"📷 Foto",onclick:async()=>{ const d=await elegirFoto(false); if(d){ S.fotos.push({punto:k,data:d}); renderFotos(); } }})); });
 }
 function onChange(){
+  if (!$("r-prom")) return;
   const c = calc();
   $("r-prom").firstChild.textContent = c.prom==null?"–":fmt1(c.prom);
   const r = c.completo ? resAud(c.prom) : null;
@@ -140,171 +645,162 @@ function onChange(){
   const ip=$("r-inf"); ip.hidden = c.tot===0 && !c.completo; const rc=resChk(c.tot); ip.className="pill "+cls(rc); ip.textContent="Checklist: "+c.tot+" infracc. · "+rc;
   $("r-meter").style.width = (c.n/PUNTOS.length*100)+"%";
   $("r-count").textContent = c.n+" de "+PUNTOS.length;
-  const okName = $("f-auditor").value.trim();
-  $("btn-enviar").disabled = !(c.completo && S.token && okName);
-  $("btn-enviar").title = !okName ? "Completá el nombre del auditor" : !c.completo ? "Faltan puntos por evaluar" : "";
+  $("btn-enviar").disabled = !c.completo;
   saveDraft();
 }
-function saveDraft(){ lsSet("hb_draft",{form:S.form,auditor:$("f-auditor").value,fecha:$("f-fecha").value,dias:$("f-dias").value,gen:$("f-general").value}); }
-function resetForm(){ S.form=blankForm(); S.fotos=[]; $("f-dias").value=""; $("f-general").value=""; $("f-fecha").value=hoy(); buildPuntos(); renderFotos(); onChange(); }
 function mensaje(rec){
   const p=S.params;
   let m = `Equipo Palermo: auditoría del ${fmtF(rec.fecha)} realizada por ${rec.auditor}. Puntaje promedio: ${fmt1(rec.promedio)} de 5. `;
   m += (rec.resultado==="Excelente"?p.mExc:rec.resultado==="Advertencia"?p.mAdv:p.mRec)||"";
   const flojos = PUNTOS.filter(x=>rec.puntajes[x.k]<=2).map(x=>`${x.l} (${rec.puntajes[x.k]})`);
   if (flojos.length) m += `\nPuntos a corregir: ${flojos.join(", ")}.`;
-  const infs = PUNTOS.filter(x=>rec.infracciones[x.k]>0).map(x=>`${x.inf.toLowerCase()}: ${rec.infracciones[x.k]}`);
+  const infs = PUNTOS.filter(x=>rec.infracciones && rec.infracciones[x.k]>0).map(x=>`${x.inf.toLowerCase()}: ${rec.infracciones[x.k]}`);
   if (infs.length) m += `\nSe detectaron ${rec.totalInfracciones} infracciones (${infs.join(", ")}).`;
   if (rec.diasPedido!=null && rec.diasPedido>p.diasMax) m += `\nHay un pedido con ${rec.diasPedido} días sin retirar (límite ${p.diasMax}): avisar y gestionar hoy.`;
   if (rec.comentarioGeneral) m += `\nComentario: ${rec.comentarioGeneral}`;
   return m;
 }
 async function enviar(){
-  const c=calc(); if (!c.completo || !S.token) return;
-  const btn=$("btn-enviar"); btn.disabled=true; btn.innerHTML='<span class="spin"></span> Enviando…';
-  const data = { fecha:$("f-fecha").value||hoy(), auditor:$("f-auditor").value.trim(), puntajes:{...S.form.puntajes}, infracciones:{...S.form.inf},
-    comentarios:{...S.form.coment}, diasPedido:$("f-dias").value, comentarioGeneral:$("f-general").value };
+  const c=calc(); if (!c.completo) return;
+  const btn=$("btn-enviar"); spinBtn(btn,"Enviando…");
+  const data = { fecha:$("f-fecha").value||hoy(), puntajes:{...S.form.puntajes}, infracciones:{...S.form.inf}, comentarios:{...S.form.coment}, diasPedido:$("f-dias").value, comentarioGeneral:$("f-general").value };
+  const enviadas = S.fotos.length;
   try {
-    const rec = await api("guardarAuditoria", S.token, data, S.fotos.map(f=>f.data));
-    const msg = mensaje(rec);
-    $("sent-em").textContent = REMO[rec.resultado];
-    $("sent-lead").textContent = `${fmtF(rec.fecha)} · ${rec.auditor} · ${fmt1(rec.promedio)} / 5 · ${rec.resultado}`;
-    $("sent-msg").textContent = msg; $("sent").hidden=false;
-    const mine = lsGet("hb_mine")||[]; mine.unshift({fecha:rec.fecha,auditor:rec.auditor,promedio:rec.promedio,resultado:rec.resultado}); lsSet("hb_mine",mine.slice(0,8));
-    try{ localStorage.removeItem("hb_draft"); }catch(e){}
-    resetForm(); renderMine(); $("sent").scrollIntoView({behavior:"smooth",block:"start"});
-    toast("✅ Auditoría registrada");
-  } catch(e){ if (esAuth(e)) return sesionVencida(); toast("No se pudo enviar: "+msgErr(e)+" El borrador quedó guardado."); }
-  finally { btn.textContent="✔ Validar y enviar"; onChange(); }
-}
-function renderMine(){
-  const mine=lsGet("hb_mine")||[], box=$("mine"); box.textContent=""; $("mine-card").hidden=!mine.length;
-  mine.forEach(r=>box.append(el("div",{class:"row",style:"padding:8px 0;border-top:1px solid var(--line)"},
-    el("span",{class:"mono",style:"font-size:13px",text:fmtF(r.fecha)}), el("span",{text:r.auditor}), el("span",{class:"spacer"}),
-    el("b",{class:"mono",text:fmt1(r.promedio)}), el("span",{class:"pill "+cls(r.resultado),text:REMO[r.resultado]+" "+r.resultado}))));
+    const rec = await apiS("guardarAuditoria", data, S.fotos.map(f=>({punto:f.punto,data:f.data})));
+    const guardadas = (rec.fotos||[]).length;
+    const sent=$("sent"); sent.textContent="";
+    sent.append(el("div",{class:"card"}, el("div",{class:"sent-head"}, el("span",{class:"em",text:REMO[rec.resultado]}), el("div",{}, el("h2",{text:"Auditoría registrada"}), el("p",{class:"lead",style:"margin:0",text:`${fmtF(rec.fecha)} · ${rec.auditor} · ${fmt1(rec.promedio)} / 5 · ${rec.resultado}`}))),
+      el("div",{class:"notice "+(guardadas===enviadas?"ok":"warn"),text: guardadas===enviadas ? `📷 ${guardadas} foto(s) guardada(s) y asociadas a su punto.` : `⚠️ Se guardaron ${guardadas} de ${enviadas} fotos. Las que no eran imágenes válidas se descartaron.`}),
+      el("div",{class:"msgbox",text:mensaje(rec)}), el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"📋 Copiar mensaje para el equipo",onclick:()=>copiar(mensaje(rec),"Mensaje copiado")}))));
+    sent.hidden=false;
+    try{ localStorage.removeItem("hb_draft3"); }catch(e){}
+    S.form=blankForm(); S.fotos=[]; $("f-dias").value=""; $("f-general").value=""; $("f-fecha").value=hoy(); buildPuntos(); renderFotos();
+    S.lista.unshift(rec); sent.scrollIntoView({behavior:"smooth",block:"start"}); toast("✅ Auditoría registrada");
+  } catch(e){ toast("No se pudo enviar: "+msgErr(e)+" El borrador quedó guardado (las fotos no)."); }
+  finally { unspin(btn); onChange(); }
 }
 
-/* ---------- Fotos ---------- */
-function renderFotos(){
-  const box=$("fotos"); box.textContent="";
-  S.fotos.forEach((f,i)=>box.append(el("div",{class:"foto"}, el("img",{src:f.data,alt:"Evidencia "+(i+1)}),
-    el("button",{type:"button","aria-label":"Quitar foto",text:"×",onclick:()=>{S.fotos.splice(i,1);renderFotos();}}))));
-  if (S.fotos.length<4) box.append(el("label",{class:"addfoto",for:"f-foto",tabindex:"0",text:"📷 Agregar"}));
-}
-async function aDataURL(file){
-  let img=null;
-  if (window.createImageBitmap) img = await createImageBitmap(file).catch(()=>null);
-  if (!img) img = await new Promise(res=>{ const u=URL.createObjectURL(file), i=new Image(); i.onload=()=>res(i); i.onerror=()=>res(null); i.src=u; });
-  if (!img || !img.width) throw new Error("formato");
-  const max=1280, k=Math.min(1,max/Math.max(img.width,img.height));
-  const c=document.createElement("canvas"); c.width=Math.round(img.width*k); c.height=Math.round(img.height*k);
-  c.getContext("2d").drawImage(img,0,0,c.width,c.height);
-  return c.toDataURL("image/jpeg",0.8);
-}
-$("f-foto").addEventListener("change", async e=>{ const f=e.target.files[0]; e.target.value=""; if(!f) return;
-  try{ S.fotos.push({data: await aDataURL(f)}); renderFotos(); }catch(x){ toast("No se pudo leer la foto. Probá con otra."); } });
-
-/* ---------- Secciones protegidas ---------- */
-let idleT=null, hidT=null;
-function bumpIdle(){ if (!S.jt) return; clearTimeout(idleT); idleT=setTimeout(()=>lock("🔒 Sección bloqueada por inactividad"), IDLE_MS); }
-["pointerdown","keydown","scroll"].forEach(ev=>addEventListener(ev,bumpIdle,{passive:true}));
-document.addEventListener("visibilitychange",()=>{ clearTimeout(hidT); if (document.hidden && S.jt) hidT=setTimeout(()=>lock("🔒 Sección bloqueada"), HIDDEN_MS); });
-function clearLock(){
-  if (S.jt) api("logout",S.jt).catch(()=>{});
-  S.jt=null; S.jtView=null; S.lista=[]; S.fotoCache={}; clearTimeout(idleT);
-  $("reg-body").textContent=""; $("kpi-body").textContent=""; vacReset();
-  ["pw-cur","pw-new","pw-new2","lk-p1"].forEach(i=>$(i).value="");
-}
-function lock(motivo){ clearLock(); if (S.view!=="auditar") show(S.view); if (motivo) toast(motivo); }
-$("lk-form").addEventListener("submit", async e=>{
-  e.preventDefault(); const err=$("lk-err"), b=$("lk-btn"); err.hidden=true; b.disabled=true; b.innerHTML='<span class="spin"></span> Verificando…';
-  try{
-    const r = await api("login", $("lk-p1").value, "seccion");
-    S.jt=r.token; S.jtView=S.view; S.params={...DEF,...r.params}; $("lk-p1").value=""; bumpIdle();
-    if (S.view!=="ajustes") await cargarRegistro();
-    show(S.view);
-  }catch(x){ err.textContent=msgErr(x); err.hidden=false; }
-  finally{ b.disabled=false; b.textContent="🔓 Desbloquear"; }
-});
-async function cargarRegistro(){
-  const r = await api("getRegistro", S.jt);
-  S.lista = (r.lista||[]).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")||(b.creado||"").localeCompare(a.creado||""));
-  S.params={...DEF,...r.params};
-}
-$("reg-refresh").addEventListener("click", async ()=>{ try{ await cargarRegistro(); renderRegistro(); toast("Registro actualizado"); }catch(e){ esAuth(e)?lock("La sesión venció."):toast(msgErr(e)); } });
-
-async function show(v){
-  if (S.jt && v!==S.jtView) clearLock();
-  S.view=v;
-  document.querySelectorAll(".tab[data-view]").forEach(t=>t.setAttribute("aria-selected", t.dataset.view===v?"true":"false"));
-  ["auditar","registro","kpi","ajustes","locked"].forEach(x=>$("v-"+x).hidden=true);
-  if (v==="auditar"){ $("v-auditar").hidden=false; return; }
-  if (S.jt){ $("v-"+v).hidden=false; if(v==="registro")renderRegistro(); if(v==="kpi")renderKPI(); if(v==="ajustes")fillAjustes(); return; }
-  $("v-locked").hidden=false; $("lk-err").hidden=true;
-  $("lk-title").textContent = v==="registro"?"🗂️ Registro protegido":v==="kpi"?"📊 KPI protegidos":"⚙️ Ajustes protegidos";
-  setTimeout(()=>$("lk-p1").focus(),50);
-}
-
-/* ---------- Registro ---------- */
+/* ----- Registro de auditorías ----- */
 function filtReg(){
-  const d=$("rf-desde").value, h=$("rf-hasta").value, r=$("rf-res").value, q=$("rf-q").value.trim().toLowerCase();
+  const d=$("rf-desde")?.value, h=$("rf-hasta")?.value, r=$("rf-res")?.value, q=($("rf-q")?.value||"").trim().toLowerCase();
   return S.lista.filter(a=>(!d||a.fecha>=d)&&(!h||a.fecha<=h)&&(!r||a.resultado===r)&&
-    (!q || (a.auditor||"").toLowerCase().includes(q) || (a.comentarioGeneral||"").toLowerCase().includes(q) || Object.values(a.comentarios||{}).some(c=>c.toLowerCase().includes(q))));
+    (!q || (a.auditor||"").toLowerCase().includes(q) || (a.comentarioGeneral||"").toLowerCase().includes(q) || Object.values(a.comentarios||{}).some(c=>String(c).toLowerCase().includes(q))));
 }
-function renderRegistro(){
-  const rows = filtReg(), tb=$("reg-body"); tb.textContent="";
-  $("reg-lead").textContent = `${rows.length} auditoría${rows.length===1?"":"s"}`;
-  if (!rows.length){ tb.append(el("tr",{},el("td",{colspan:"7",class:"empty",text: S.lista.length? "Ninguna auditoría coincide con los filtros." : "Todavía no hay auditorías. Las que se validen en Auditar aparecen acá (tocá ↻ Actualizar)."}))); return; }
+async function vRegistroAud(body){
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando registro…"));
+  try{ await asegurarRegistro(true); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const res = el("select",{id:"rf-res"}, el("option",{value:"",text:"Todos"}), ...["Excelente","Advertencia","Reclamo"].map(r=>el("option",{value:r,text:REMO[r]+" "+r})));
+  const tb = el("tbody",{id:"reg-body"}), lead = el("p",{class:"lead",id:"reg-lead"});
+  const filtros = el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",el("input",{type:"date",id:"rf-desde"})), el("label",{class:"f"},"Hasta",el("input",{type:"date",id:"rf-hasta"})),
+    el("label",{class:"f"},"Resultado",res), el("label",{class:"f"},"Buscar",el("input",{type:"search",id:"rf-q",placeholder:"Auditor o comentario"})));
+  filtros.addEventListener("input",()=>pintarReg()); filtros.addEventListener("change",()=>pintarReg());
+  body.append(el("div",{class:"card"}, el("h2",{text:"Registro de auditorías"}), lead, filtros,
+      el("div",{class:"row",style:"margin-top:10px"}, el("button",{class:"btn xl",type:"button",text:"⬇️ Excel",onclick:exportXLSX}), el("button",{class:"btn pdf",type:"button",text:"⬇️ PDF",onclick:exportPDF}),
+        el("button",{class:"btn",type:"button",text:"📄 Abrir planilla",onclick:async()=>{ try{ const u=await apiS("hojaUrl"); if (/^https:\/\/docs\.google\.com\//.test(u)) window.open(u,"_blank","noopener"); }catch(e){ toast(msgErr(e)); } }}),
+        el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:async()=>{ await asegurarRegistro(true); pintarReg(); toast("Registro actualizado"); }}),
+        el("span",{class:"mono",id:"exp-status",style:"font-size:12px;color:var(--muted)"})),
+      el("div",{class:"tablewrap",style:"margin-top:12px"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Auditor","Prom.","Resultado","Infr.","Checklist","Días ped.","📷"].map((x,i)=>el("th",{class:[2,4,6].includes(i)?"n":null,text:x})))), tb))),
+    el("div",{class:"card detcard",id:"reg-det",hidden:true}),
+    vaciarCard());
+  pintarReg();
+}
+function pintarReg(){
+  const rows = filtReg(), tb=$("reg-body"); if (!tb) return; tb.textContent="";
+  $("reg-lead").textContent = `${rows.length} auditoría${rows.length===1?"":"s"} · tocá una fila para ver puntos, observaciones, fotos y acciones`;
+  if (!rows.length){ tb.append(el("tr",{},el("td",{colspan:"8",class:"empty",text: S.lista.length? "Ninguna auditoría coincide con los filtros." : "Todavía no hay auditorías."}))); return; }
   rows.forEach(a=>{
-    const open=S.openRow===a.id, tog=()=>{S.openRow=open?null:a.id;renderRegistro();};
-    tb.append(el("tr",{class:"clk",tabindex:"0","aria-expanded":open?"true":"false",onclick:tog,onkeydown:e=>{if(e.key==="Enter")tog();}},
+    const open=S.openRow===a.id, tog=()=>{S.openRow=open?null:a.id;pintarReg();};
+    tb.append(el("tr",{class:"clk"+(open?" sel":""),tabindex:"0","aria-expanded":open?"true":"false",onclick:()=>{ tog(); if(!open) setTimeout(()=>$("reg-det").scrollIntoView({behavior:"smooth",block:"start"}),30); },onkeydown:e=>{if(e.key==="Enter")tog();}},
       el("td",{class:"mono",text:fmtF(a.fecha)}), el("td",{text:a.auditor}), el("td",{class:"n"},el("b",{text:fmt1(a.promedio)})),
-      el("td",{},el("span",{class:"pill "+cls(a.resultado),text:REMO[a.resultado]+" "+a.resultado})), el("td",{class:"n",text:a.totalInfracciones??0}),
-      el("td",{},el("span",{class:"pill "+cls(a.resultadoChecklist),text:a.resultadoChecklist})),
-      el("td",{class:"n",style:a.pedidoFueraDePlazo?"color:var(--bad);font-weight:700":null,text:a.diasPedido??"–"})));
-    if (open) tb.append(el("tr",{class:"detail"},el("td",{colspan:"7"},detalle(a))));
+      el("td",{},el("span",{class:"pill "+cls(a.resultado),text:(REMO[a.resultado]||"")+" "+a.resultado})), el("td",{class:"n",text:a.totalInfracciones??0}),
+      el("td",{},a.resultadoChecklist?el("span",{class:"pill "+cls(a.resultadoChecklist),text:a.resultadoChecklist}):null),
+      el("td",{class:"n",style:a.pedidoFueraDePlazo?"color:var(--bad);font-weight:700":null,text:a.diasPedido??"–"}), el("td",{text:(a.fotos||[]).length||""})));
   });
+  const det=$("reg-det"); det.textContent="";
+  const sel = rows.find(a=>a.id===S.openRow);
+  if (sel){ det.append(el("div",{class:"row"}, el("h3",{style:"margin:0",text:`Detalle · ${fmtF(sel.fecha)} · ${sel.auditor}`}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Cerrar detalle",onclick:()=>{S.openRow=null;pintarReg();}})), detalleAud(sel)); det.hidden=false; }
+  else det.hidden=true;
 }
-function detalle(a){
-  const g = el("div",{class:"dgrid"});
-  PUNTOS.forEach(p=>{ const v=a.puntajes?.[p.k];
-    g.append(el("div",{}, scChip(v), el("div",{}, el("b",{text:p.e+" "+p.l}),
-      (a.infracciones?.[p.k]>0)? el("div",{style:"color:var(--bad);font-size:12.5px",text:a.infracciones[p.k]+" infracciones"}):null,
-      a.comentarios?.[p.k]? el("div",{style:"color:var(--muted);font-size:12.5px",text:a.comentarios[p.k]}):null))); });
-  const box = el("div",{class:"dl"}, g);
+function detalleAud(a){
+  const fotosDe = k => (a.fotos||[]).map((id,i)=>({id, punto:(a.fotoPuntos||[])[i]||"general"})).filter(f=>f.punto===k);
+  const acc = (S.acciones||[]).filter(x=>x.auditId===a.id);
+  const g = el("div",{class:"dpuntos"});
+  PUNTOS.forEach(p=>{ const v=a.puntajes?.[p.k], fs=fotosDe(p.k), ac=acc.filter(x=>x.punto===p.k);
+    g.append(el("div",{class:"dpunto"}, el("div",{class:"row",style:"gap:8px"}, scChip(v), el("b",{text:p.e+" "+p.l})),
+      (a.infracciones?.[p.k]>0)? el("div",{style:"color:var(--bad);font-size:13px",text:a.infracciones[p.k]+" infracciones"}):null,
+      a.comentarios?.[p.k]? el("div",{class:"obs",text:"💬 "+a.comentarios[p.k]}):null,
+      fs.length ? el("div",{class:"fotos"}, fs.map((f,i)=>miniFoto("getFoto", f.id, `${p.l} · ${fmtF(a.fecha)} · foto ${i+1}`))) : null,
+      ac.map(x=>el("div",{class:"accmini"}, el("span",{class:"pill "+(x.estado==="resuelta"?"ok":x.vence&&x.vence<hoy()?"bad":"warn"),text:x.estado}), " ", x.descripcion, x.vence?` · vence ${fmtF(x.vence)}`:"", x.responsable?` · ${x.responsable}`:""))));
+  });
+  const box = el("div",{class:"dl"}, el("div",{class:"row"}, el("span",{text:`📅 ${fmtF(a.fecha)} · 👤 ${a.auditor}`}), el("span",{class:"spacer"}), el("span",{class:"mono hint",text:a.creado?"Cargada "+new Date(a.creado).toLocaleString("es-AR"):""})), g);
+  const gen = fotosDe("general");
   if (a.comentarioGeneral) box.append(el("div",{},el("b",{text:"💬 Comentario general: "}),a.comentarioGeneral));
-  if (a.fotos?.length){ const f=el("div",{class:"fotos"}); a.fotos.forEach(id=>{ const slot=el("div",{class:"foto",style:"display:grid;place-items:center"},el("span",{class:"spin"})); f.append(slot);
-      const put=src=>{ slot.textContent=""; slot.append(el("img",{src,alt:"Evidencia"})); };
-      if (S.fotoCache[id]) put(S.fotoCache[id]); else api("getFoto",S.jt,id).then(src=>{ if(!/^data:image\/(jpeg|png|webp|gif);base64,/.test(src)) throw 0; S.fotoCache[id]=src; put(src);}).catch(()=>{ slot.textContent="Sin foto"; }); });
-    box.append(f); }
+  if (gen.length) box.append(el("div",{}, el("b",{text:"📷 Fotos generales"}), el("div",{class:"fotos"}, gen.map((f,i)=>miniFoto("getFoto", f.id, `General · ${fmtF(a.fecha)} · foto ${i+1}`)))));
+  const sueltas = acc.filter(x=>!PUNTOS.some(p=>p.k===x.punto));
+  if (sueltas.length) box.append(el("div",{}, el("b",{text:"🛠️ Acciones correctivas"}), sueltas.map(x=>el("div",{class:"accmini",text:`${x.estado} · ${x.descripcion}`}))));
   const msg = mensaje(a);
-  const conf = el("span",{hidden:true}, el("span",{text:"¿Borrar esta auditoría? "}),
-    el("button",{class:"btn sm danger",type:"button",onclick:async e=>{e.stopPropagation(); try{ await api("eliminarAuditoria",S.jt,a.id); S.lista=S.lista.filter(x=>x.id!==a.id); S.openRow=null; renderRegistro(); toast("Auditoría eliminada"); }catch(err){ esAuth(err)?lock("La sesión venció."):toast(msgErr(err)); }},text:"Sí, borrar"}),
-    el("button",{class:"btn sm",type:"button",onclick:e=>{e.stopPropagation(); conf.hidden=true; del.hidden=false;},text:"Cancelar"}));
-  const del = el("button",{class:"btn sm danger",type:"button",onclick:e=>{e.stopPropagation(); del.hidden=true; conf.hidden=false;},text:"🗑 Eliminar"});
   box.append(el("div",{class:"row"},
-    el("button",{class:"btn sm",type:"button",onclick:e=>{e.stopPropagation(); copiar(msg,"Mensaje copiado");},text:"📋 Copiar mensaje"}),
-    el("span",{class:"spacer"}), el("span",{class:"mono",style:"font-size:11px;color:var(--muted)",text:"Cargada "+new Date(a.creado).toLocaleString("es-AR")}), del, conf));
+    el("button",{class:"btn sm",type:"button",text:"📋 Copiar mensaje",onclick:e=>{e.stopPropagation(); copiar(msg,"Mensaje copiado");}}),
+    tiene("acciones") ? el("button",{class:"btn sm",type:"button",text:"➕ Acción correctiva",onclick:e=>{e.stopPropagation(); nuevaAccion(a);}}) : null,
+    el("span",{class:"spacer"}),
+    el("button",{class:"btn sm danger",type:"button",text:"🗑 Eliminar",onclick:async e=>{ e.stopPropagation();
+      if (!await confirmar("¿Eliminar esta auditoría? Sus fotos van a la papelera de Drive y queda registrado en el historial.","Eliminar",true)) return;
+      try{ await apiS("eliminarAuditoria",a.id); S.lista=S.lista.filter(x=>x.id!==a.id); S.openRow=null; pintarReg(); toast("Auditoría eliminada"); }catch(err){ toast(msgErr(err)); } }})));
+  return box;
+}
+function nuevaAccion(a){
+  const punto = el("select",{}, el("option",{value:"general",text:"General"}), ...PUNTOS.map(p=>el("option",{value:p.k,text:p.e+" "+p.l,selected:a.puntajes&&a.puntajes[p.k]<=2})));
+  const d = el("textarea",{maxlength:"300",placeholder:"Qué hay que corregir"}), r = el("input",{type:"text",maxlength:"60",placeholder:"Responsable"}), v = el("input",{type:"date",min:hoy()});
+  const ok = el("button",{class:"btn primary",type:"button",text:"Crear acción"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:"Acción correctiva · auditoría "+fmtF(a.fecha)}), el("label",{class:"f"},"Punto",punto), el("label",{class:"f"},"Acción",d),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Responsable",r), el("label",{class:"f"},"Fecha límite",v)), el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ spinBtn(ok); try{ const x = await apiS("crearAccion",{auditId:a.id,punto:punto.value,descripcion:d.value,responsable:r.value,vence:v.value}); S.acciones.push(x); m.cerrar(); pintarReg(); toast("✅ Acción creada"); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+}
+function vaciarCard(){
+  const box = el("div",{class:"card"}, el("h3",{text:"🧹 Vaciar registro de auditorías"}),
+    el("p",{class:"lead",text:"Antes de vaciar se crea una copia de respaldo en Drive. Las fotos se conservan y la acción queda en el historial. Requiere confirmar tu PIN."}));
+  box.append(el("button",{class:"btn danger",type:"button",text:"Vaciar con respaldo",onclick:async()=>{
+    if (!await confirmar(`¿Vaciar ${S.lista.length} auditorías? Se guarda un respaldo antes.`,"Vaciar",true)) return;
+    try{ const r = await apiS("vaciarRegistro"); S.lista=[]; pintarReg(); const ok=el("div",{class:"notice ok"},`Se vaciaron ${r.borradas} auditorías. `);
+      if (r.respaldo && /^https:\/\/docs\.google\.com\//.test(r.respaldo)) ok.append(el("a",{href:r.respaldo,target:"_blank",rel:"noopener",text:"Abrir el respaldo"})); box.append(ok); }
+    catch(e){ toast(msgErr(e)); } }}));
   return box;
 }
 
-/* ---------- Vaciar ---------- */
-function vacReset(){ $("vac-form").hidden=true; $("vac-pw").value=""; $("vac-err").hidden=true; }
-$("vac-open").addEventListener("click",()=>{ $("vac-n").textContent=S.lista.length; $("vac-ok").hidden=true; $("vac-form").hidden=false; });
-$("vac-cancel").addEventListener("click",vacReset);
-$("vac-form").addEventListener("submit",async e=>{
-  e.preventDefault(); const err=$("vac-err"), b=$("vac-go"); err.hidden=true; b.disabled=true; b.innerHTML='<span class="spin"></span> Guardando respaldo…';
-  try{
-    const r = await api("vaciarRegistro", S.jt, $("vac-pw").value);
-    vacReset(); S.lista=[]; renderRegistro();
-    const ok=$("vac-ok"); ok.textContent=""; ok.append(`🧹 Se vaciaron ${r.borradas} auditorías. `);
-    if (r.respaldo && /^https:\/\/docs\.google\.com\//.test(r.respaldo)) ok.append(el("a",{href:r.respaldo,target:"_blank",rel:"noopener",text:"Abrir el respaldo en Drive"}));
-    ok.hidden=false;
-  }catch(x){ if (esAuth(x)) return lock("La sesión venció."); err.textContent=msgErr(x); err.hidden=false; }
-  finally{ b.disabled=false; b.textContent="Vaciar con respaldo"; }
-});
+/* ----- Indicadores de auditoría (los existentes) ----- */
+async function vKpiAud(body){
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
+  try{ await asegurarRegistro(); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const per = el("select",{id:"kf-per"}, el("option",{value:"30",text:"Últimos 30 días"}), el("option",{value:"90",text:"Últimos 90 días"}), el("option",{value:"365",text:"Último año"}), el("option",{value:"",text:"Todo",selected:true}));
+  per.onchange = renderKPI;
+  body.append(el("div",{class:"card row"}, el("label",{class:"f"},"Período",per), el("p",{class:"lead",id:"kpi-lead",style:"margin:0"})), el("div",{class:"stack",id:"kpi-body"}));
+  renderKPI();
+}
 
-/* ---------- Descargas ---------- */
+/* ----- Acciones correctivas ----- */
+async function vAcciones(body){
+  let L; try{ L = await apiS("listarAcciones"); S.acciones=L; }catch(e){ return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  const tb = el("tbody");
+  const pintar = ()=>{ tb.textContent="";
+    L.slice().sort((a,b)=>(a.estado==="resuelta"||a.estado==="descartada"?1:0)-(b.estado==="resuelta"||b.estado==="descartada"?1:0)||(a.vence||"9").localeCompare(b.vence||"9")).forEach(x=>{
+      const venc = x.vence && x.vence<hoy() && (x.estado==="abierta"||x.estado==="en_curso");
+      const sel = el("select",{"aria-label":"Estado"}, ...["abierta","en_curso","resuelta","descartada"].map(v=>el("option",{value:v,text:v,selected:x.estado===v})));
+      sel.onchange = async ()=>{ let foto=null; if (sel.value==="resuelta" && await confirmar("¿Agregar una foto como evidencia de la resolución?","Sacar foto")) foto = await elegirFoto(false);
+        try{ const n = await apiS("actualizarAccion", x.id, sel.value, "", foto); Object.assign(x,n); pintar(); toast("Acción actualizada"); }catch(e){ toast(msgErr(e)); sel.value=x.estado; } };
+      const p = PUNTOS.find(q=>q.k===x.punto);
+      tb.append(el("tr",{}, el("td",{text:p?p.e+" "+p.l:"General"}), el("td",{text:x.descripcion}), el("td",{text:x.responsable||""}),
+        el("td",{class:"mono",style:venc?"color:var(--bad);font-weight:700":null,text:x.vence?fmtF(x.vence)+(venc?" ⚠️":""):"—"}), el("td",{},sel),
+        el("td",{}, (x.evidencia||[]).length ? el("div",{class:"fotos"}, x.evidencia.map((id,i)=>miniFoto("getFoto", id, "Evidencia de resolución "+(i+1)))) : null)));
+    });
+    if (!L.length) tb.append(el("tr",{},el("td",{colspan:"6",class:"empty",text:"Sin acciones. Se crean desde el detalle de cada auditoría en Registro."})));
+  };
+  body.append(el("div",{class:"card"}, el("h2",{text:"Acciones correctivas"}), el("p",{class:"lead",text:"Seguimiento con responsable, fecha límite, estado y evidencia de resolución."}),
+    el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Punto","Acción","Responsable","Vence","Estado","Evidencia"].map(x=>el("th",{text:x})))), tb))));
+  pintar();
+}
+/* ---------- Descargas y KPI de auditorías (conservados de la versión anterior) ---------- */
 const loaded = {};
 function loadScript([src,sri]){ return loaded[src] || (loaded[src] = new Promise((res,rej)=>{ const s=document.createElement("script"); s.src=src; s.integrity=sri; s.crossOrigin="anonymous"; s.referrerPolicy="no-referrer"; s.onload=res; s.onerror=()=>{delete loaded[src]; rej(new Error("load"));}; document.head.append(s); })); }
 async function loadLibs(k){ for (const u of LIBS[k]) await loadScript(u); }
@@ -417,9 +913,6 @@ async function exportPDF(){
   try{ await loadLibs("pdf"); const blob=buildPDF(list); st.textContent=""; guardar(`HeyBlackk_Auditorias_Palermo_${hoy()}.pdf`, blob); }
   catch(e){ st.textContent=""; toast("No se pudo generar el PDF. Revisá la conexión y probá de nuevo."); }
 }
-$("exp-xlsx").addEventListener("click",exportXLSX);
-$("exp-pdf").addEventListener("click",exportPDF);
-$("exp-sheet").addEventListener("click",async()=>{ try{ const u=await api("hojaUrl",S.jt); if (/^https:\/\/docs\.google\.com\//.test(u)) window.open(u,"_blank","noopener"); }catch(e){ esAuth(e)?lock("La sesión venció."):toast(msgErr(e)); } });
 async function copiar(t, ok="Copiado"){ try{ await navigator.clipboard.writeText(t); toast("📋 "+ok); }catch(e){
   const ta=el("textarea",{style:"position:fixed;opacity:0"}); ta.value=t; document.body.append(ta); ta.select(); try{ document.execCommand("copy"); toast("📋 "+ok); }catch(x){ toast("No se pudo copiar: seleccioná el texto a mano."); } ta.remove(); } }
 
@@ -512,41 +1005,298 @@ function chart(asc){
 
 
 
-/* ---------- Ajustes ---------- */
-function fillAjustes(){ const p=S.params; $("p-promExc").value=p.promExc; $("p-promAdv").value=p.promAdv; $("p-maxInf").value=p.maxInf; $("p-dias").value=p.diasMax; $("p-mExc").value=p.mExc; $("p-mAdv").value=p.mAdv; $("p-mRec").value=p.mRec; }
-$("p-save").addEventListener("click", async ()=>{
-  const p={ promExc:$("p-promExc").value, promAdv:$("p-promAdv").value, maxInf:$("p-maxInf").value, diasMax:$("p-dias").value, mExc:$("p-mExc").value, mAdv:$("p-mAdv").value, mRec:$("p-mRec").value };
-  try{ S.params={...DEF,...await api("setParams",S.jt,p)}; fillAjustes(); onChange(); $("p-ok").hidden=false; setTimeout(()=>$("p-ok").hidden=true,2000); }
-  catch(e){ esAuth(e)?lock("La sesión venció."):toast(msgErr(e)); }
-});
-$("pw-form").addEventListener("submit", async e=>{
-  e.preventDefault(); const m=$("pw-msg"); m.hidden=false; m.className="notice"; m.textContent="Guardando…";
-  try{
-    const n=$("pw-new").value; if (n.length<6) throw new Error("La nueva clave debe tener al menos 6 caracteres."); if (n!==$("pw-new2").value) throw new Error("Las nuevas no coinciden.");
-    await api("cambiarClave", S.jt, $("pw-cual").value, $("pw-cur").value, n);
-    m.className="notice ok"; m.textContent="Clave actualizada."; ["pw-cur","pw-new","pw-new2"].forEach(i=>$(i).value="");
-  }catch(x){ if (esAuth(x)) return lock("La sesión venció."); m.className="notice bad"; m.textContent=msgErr(x); }
-});
+/* ===================== KPIs comerciales e inteligencia de negocio ===================== */
+const NS = "http://www.w3.org/2000/svg";
+function svgEl(t,a,txt){ const e=document.createElementNS(NS,t); for (const k in a) e.setAttribute(k,a[k]); if (txt!=null) e.textContent=txt; return e; }
+/** Barras verticales simples. datos: [{label, v, color?, title}] */
+function barras(datos, {alto=200, fmt=moneyK, linea=null}={}){
+  const W=Math.max(560, datos.length*56), H=alto, pl=8, pr=8, pt=18, pb=28, max=Math.max(1,...datos.map(d=>d.v||0), linea||0);
+  const s=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"}); const bw=(W-pl-pr)/datos.length;
+  datos.forEach((d,i)=>{ const h=(d.v||0)/max*(H-pt-pb), x=pl+i*bw+bw*0.15, y=H-pb-h;
+    const r=svgEl("rect",{x,y,width:bw*0.7,height:Math.max(0,h),rx:4,fill:d.color||"var(--kc)"}); r.append(svgEl("title",{},d.title||`${d.label}: ${fmt(d.v)}`)); s.append(r);
+    if (d.v) s.append(svgEl("text",{x:x+bw*0.35,y:y-4,"text-anchor":"middle",class:"cv"},fmt(d.v)));
+    s.append(svgEl("text",{x:x+bw*0.35,y:H-10,"text-anchor":"middle"},d.label)); });
+  if (linea){ const y=H-pb-linea/max*(H-pt-pb); s.append(svgEl("line",{x1:pl,x2:W-pr,y1:y,y2:y,stroke:"var(--bad)","stroke-dasharray":"5 4","stroke-width":1.5})); }
+  return el("div",{class:"chart hscroll"},s);
+}
+function info(def, act){
+  if (!def) return null;
+  const d = el("details",{class:"kinfo"}, el("summary",{"aria-label":"Cómo se calcula",text:"ℹ️"}),
+    el("div",{}, el("b",{text:def.nombre}), el("p",{text:def.definicion}), el("p",{class:"mono",text:"Fórmula: "+def.formula}), el("p",{text:"Fuente: "+def.fuente}), act?el("p",{text:"Actualizado: "+new Date(act).toLocaleString("es-AR")}):null));
+  return d;
+}
+function kpiC(k,v,s,c,def,act,onclick){ return el("div",{class:"kpi "+(c||""),onclick:onclick||null,style:onclick?"cursor:pointer":null}, el("span",{class:"k"},k, info(def,act)), el("span",{class:"v",style:c?`color:var(--${c})`:null,text:v}), s?el("span",{class:"s",text:s}):null); }
 
-/* ---------- Eventos ---------- */
-document.querySelectorAll(".tab[data-view]").forEach(t=>t.addEventListener("click",()=>show(t.dataset.view)));
-$("btn-enviar").addEventListener("click",enviar);
-$("btn-copy").addEventListener("click",()=>copiar($("sent-msg").textContent,"Mensaje copiado"));
-$("btn-nueva").addEventListener("click",()=>{ $("sent").hidden=true; scrollTo({top:0,behavior:"smooth"}); });
-["f-auditor","f-fecha","f-dias","f-general"].forEach(i=>$(i).addEventListener("input",onChange));
-["rf-desde","rf-hasta","rf-res","rf-q"].forEach(i=>$(i).addEventListener("input",()=>S.jt&&renderRegistro()));
-$("kf-per").addEventListener("input",()=>S.jt&&renderKPI());
+async function vKPI(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Leyendo cierres y calculando…"));
+  let K; try{ K = await apiS("getKPIs"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const C = K.comercial, def = id => (C.definiciones||[]).find(d=>d.id===id), act = C.actualizado;
+  body.append(el("div",{class:"card row"}, el("span",{text:"Fuente: "+C.fuente}), el("span",{class:"spacer"}),
+    el("span",{class:"hint",text: act ? "Última lectura de la planilla: "+new Date(act).toLocaleString("es-AR") : "Todavía no se leyó la planilla."}),
+    tiene("cierre") ? el("button",{class:"btn sm",type:"button",text:"↻ Sincronizar",onclick:async e=>{ spinBtn(e.target,"Leyendo…"); try{ await apiS("sincronizarCierre"); main.textContent=""; route(); }catch(x){ unspin(e.target); toast(msgErr(x)); } }}) : null));
+  if (C.sinDatos){ body.append(el("div",{class:"card empty",text:"No hay cierres cargados todavía. Cuando la planilla tenga ventas, los indicadores se calculan solos."})); return; }
 
-(function init(){
-  const d=lsGet("hb_draft");
-  S.form = d?.form && d.form.inf ? d.form : blankForm();
-  $("f-fecha").value = d?.fecha || hoy(); $("f-auditor").value=d?.auditor||""; $("f-dias").value=d?.dias||""; $("f-general").value=d?.gen||"";
-  document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
-  buildPuntos(); renderFotos(); onChange();
-  iniciarGate();
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
-  let deferred=null;
-  addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); deferred=e; $("btn-instalar").hidden=false; });
-  $("btn-instalar").addEventListener("click", async ()=>{ if(!deferred) return; deferred.prompt(); try{ await deferred.userChoice; }catch(x){} deferred=null; $("btn-instalar").hidden=true; });
-})();
+  // ----- Panel ejecutivo
+  const ej = el("div",{class:"card exec"}, el("h2",{text:"🧭 Qué está pasando y qué decisiones tomar"}));
+  (C.resumen||[]).forEach(r=>ej.append(el("div",{class:"qa"}, el("b",{text:r.pregunta}), el("span",{text:r.respuesta}))));
+  body.append(ej);
+  if ((C.recomendaciones||[]).length){
+    const rc = el("div",{class:"recs"});
+    C.recomendaciones.forEach((r,i)=>rc.append(el("details",{class:"rec p"+r.prioridad,open:i<2},
+      el("summary",{}, el("span",{class:"pill "+(r.prioridad===1?"bad":r.prioridad===2?"warn":""),text:"Prioridad "+r.prioridad}), " ", el("b",{text:r.titulo})),
+      el("dl",{}, el("dt",{text:"1. Qué está pasando"}), el("dd",{text:r.diagnostico}), el("dt",{text:"2. Datos que lo respaldan"}), el("dd",{text:r.datos}),
+        el("dt",{text:"3. Causa posible (hechos vs. hipótesis)"}), el("dd",{text:r.causa}), el("dt",{text:"4. Acción recomendada"}), el("dd",{text:r.accion}),
+        el("dt",{text:"5. Cómo medir si funcionó"}), el("dd",{text:r.medicion})))));
+    body.append(el("div",{class:"card"}, el("h3",{text:"Recomendaciones"}), rc));
+  }
+
+  // ----- Tarjetas principales
+  const meses = C.meses||[], conDatos = meses.filter(m=>m.dias>0), ref = conDatos[conDatos.length-1], prev = ref && ref.vsAnterior;
+  const actual = meses.find(m=>m.enCurso);
+  const P = C.proyeccion;
+  const anio = (C.anios||[]).slice(-1)[0];
+  const ultSem = (C.semanas||[]).slice(-1)[0];
+  const ultDia = (C.ultimos||[]).slice(-1)[0];
+  const vCls = n => n==null ? null : n>=0 ? "ok" : n<=-15 ? "bad" : "warn";
+  body.append(el("div",{class:"kpis"},
+    ultDia ? kpiC("💵 Último cierre", moneyK(ultDia.total), fmtF(ultDia.fecha), null, def("venta_dia"), act) : null,
+    ultSem ? kpiC("📅 Última semana con ventas", moneyK(ultSem.total), `Semana del ${fmtF(ultSem.semana)} · ${ultSem.dias} días${ultSem.deltaPct!=null?" · "+sign(ultSem.deltaPct)+" vs. anterior":""}`, vCls(ultSem.deltaPct), def("venta_semana"), act) : null,
+    ref ? kpiC("🗓️ "+cap(ref.nombre), moneyK(ref.total), `${ref.dias} días con cierre${prev?" · total "+sign(prev.deltaTotalPct)+" vs. "+mesNom(prev.mes)+" (ver promedio por día)":""}`, null, def("venta_mes"), act, ()=>detalleMes(ref, C)) : null,
+    ref ? kpiC("📊 Promedio por día", moneyK(ref.promDia), prev?`${sign(prev.deltaPromPct)} vs. ${moneyK(prev.promDia)} en ${mesNom(prev.mes)}`:"Sin mes anterior para comparar", vCls(prev&&prev.deltaPromPct), def("prom_dia"), act) : null,
+    anio ? kpiC("📆 Año "+anio.anio, moneyK(anio.total), `${anio.dias} días con cierre · desde ${fmtF(anio.desde)}`, null, def("venta_anio"), act) : null,
+    P && !P.bloqueada ? kpiC("🔮 Proyección "+(actual?actual.nombre:""), moneyK(P.medio), `Estimación: ${moneyK(P.minimo)} a ${moneyK(P.maximo)} · incertidumbre ${P.incertidumbre}`, "warn", def("proyeccion"), act) :
+      P ? kpiC("🔮 Proyección del mes", "No disponible", "Faltan cierres de días ya pasados. Ver «¿Cómo cerraría el mes?».", null, def("proyeccion"), act) : null,
+    P && P.objetivo ? kpiC("🎯 Objetivo del mes", P.avancePct!=null?P.avancePct+"%":"–", `Objetivo ${moneyK(P.objetivo)}${P.necesarioPorDia?" · faltan "+moneyK(P.necesarioPorDia)+" por día":""}`, P.avancePct>=100?"ok":"warn", def("objetivo"), act) :
+      tiene("config") ? kpiC("🎯 Objetivo del mes", "Sin cargar", "Cargalo en Configuración → Objetivos", null, def("objetivo"), act, ()=>ir("config")) : null));
+  if (P && !P.bloqueada) body.append(el("div",{class:"card"}, el("h3",{text:"🔮 Supuestos de la proyección (no es venta real)"}), el("ul",{class:"action"}, P.supuestos.map(s=>el("li",{text:s})))));
+
+  // ----- Evolución mensual
+  const promTodos = conDatos.length ? conDatos.reduce((a,m)=>a+m.total,0)/conDatos.length : null;
+  body.append(el("div",{class:"split"},
+    el("div",{class:"card",style:"--kc:#7C3AED"}, el("h3",{},"Facturación mensual ", info(def("venta_mes"),act)),
+      barras(conDatos.map(m=>({label:mesNom(m.mes).slice(0,3), v:m.total, title:`${m.nombre}: ${money(m.total)} · ${m.dias} días con cierre`})), {linea: actual&&actual.objetivo||null}),
+      el("p",{class:"hint",text:"Tocá la tarjeta del mes para ver los cierres de cada día."+(actual&&actual.objetivo?" Línea roja: objetivo del mes en curso.":"")})),
+    el("div",{class:"card",style:"--kc:#0D9488"}, el("h3",{},"Promedio por día con cierre ", info(def("prom_dia"),act)),
+      barras(conDatos.map(m=>({label:mesNom(m.mes).slice(0,3), v:m.promDia, title:`${m.nombre}: ${money(m.promDia)} por día`}))),
+      el("p",{class:"hint",text:"Compara meses con distinta cantidad de días cargados."}))));
+
+  // ----- Día de la semana y mix
+  const ds = C.diaSemana||[];
+  const mix = ref && ref.mix;
+  body.append(el("div",{class:"split"},
+    el("div",{class:"card",style:"--kc:#EA580C"}, el("h3",{},"Rendimiento por día de la semana ", info(def("dia_semana"),act)),
+      barras(ds.map(d=>({label:d.nombre.slice(0,3), v:d.promedio, title:`${d.nombre}: ${money(d.promedio)} de promedio · ${d.participacion}% de la facturación · ${d.n} días`}))),
+      el("div",{class:"row"}, ds.map(d=>el("span",{class:"pill",text:`${d.nombre}: ${d.participacion}%`})))),
+    el("div",{class:"card"}, el("h3",{},"Mix de medios de pago · "+(ref?ref.nombre:""), info(def("mix"),act)),
+      mix ? mixBar(mix, prev && conDatos[conDatos.length-2] && conDatos[conDatos.length-2].mix) : el("p",{class:"lead",text:"Sin datos."}))));
+
+  // ----- Semanas
+  const sem = C.semanas||[];
+  if (sem.length) body.append(el("div",{class:"card",style:"--kc:#2563EB"}, el("h3",{},"Facturación semanal (lunes a domingo) ", info(def("venta_semana"),act)),
+    barras(sem.map(s=>({label:fmtF(s.semana).slice(0,5), v:s.total, color: s.dias<3?"var(--pend)":null, title:`Semana del ${fmtF(s.semana)}: ${money(s.total)} · ${s.dias} días con cierre`}))),
+    el("p",{class:"hint",text:"Gris: semanas con menos de 3 días cargados (no comparables)."})));
+
+  // ----- Alertas
+  const al = C.alertas||[];
+  body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas comerciales y de datos"}),
+    al.length ? el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Alerta","Valor observado","Comparado con","Por qué requiere atención"].map(x=>el("th",{text:x})))),
+      el("tbody",{}, al.map(a=>el("tr",{}, el("td",{}, el("span",{class:"pill "+(a.nivel==="alta"?"bad":"warn"),text:a.nivel}), " ", a.titulo), el("td",{text:a.observado}), el("td",{text:a.comparado}), el("td",{text:a.motivo})))))) :
+      el("p",{class:"lead",text:"Sin alertas con los umbrales configurados."}),
+    el("p",{class:"hint",text:"Las alertas se calculan solo con datos suficientes (mínimo de días configurable) para evitar avisos por fluctuaciones normales. Umbrales en Configuración."})));
+
+  // ----- Operación
+  const I=K.ingresos, A=K.acciones;
+  body.append(el("div",{class:"card"}, el("h3",{text:"⚙️ Indicadores operativos"}), el("div",{class:"kpis"},
+    kpiC("🕘 Entradas registradas", I.total, `${I.validos} válidas · ${I.revisar} para revisar · ${I.corregidos} corregidas`),
+    kpiC("🏁 Salidas", I.salidas, `${I.sinSalida} jornadas sin salida${I.minutosPromedio!=null?" · promedio "+horas(I.minutosPromedio):""}`, I.sinSalida?"warn":null),
+    kpiC("📍 Fuera del radio / sin ubicación", I.fuera+" / "+I.sinUbicacion, "Datos de apoyo para revisión"),
+    kpiC("🔁 Duplicados evitados", I.duplicadosBloqueados, "Intentos de fichar dos veces"),
+    kpiC("🛠️ Acciones abiertas", A.abiertas, `${A.vencidas} vencidas · ${A.resueltas} resueltas`, A.vencidas?"bad":null),
+    kpiC("📋 Auditorías", (K.auditorias||[]).length, "en el período"))));
+
+  // ----- Sin datos
+  body.append(el("div",{class:"card"}, el("h3",{text:"🧩 Indicadores que la planilla todavía no permite"}),
+    el("p",{class:"lead",text:"No se calculan para no inventar datos. Para habilitarlos haría falta el detalle por operación del sistema de caja o de facturación."}),
+    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, el("th",{text:"Indicador"}), el("th",{text:"Dato que falta"}))),
+      el("tbody",{}, (C.noDisponible||[]).map(n=>el("tr",{}, el("td",{text:n.kpi}), el("td",{text:n.falta}))))))));
+  // ----- Definiciones
+  body.append(el("details",{class:"card"}, el("summary",{text:"📖 Definiciones, fórmulas y fuente de cada KPI"}),
+    el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["KPI","Definición","Fórmula"].map(x=>el("th",{text:x})))),
+      el("tbody",{}, (C.definiciones||[]).map(d=>el("tr",{}, el("td",{text:d.nombre}), el("td",{text:d.definicion}), el("td",{class:"mono",text:d.formula}))))))));
+}
+const MESN = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const mesNom = m => MESN[Number(String(m).slice(5,7))-1]+" "+String(m).slice(0,4);
+const cap = s => s ? s[0].toUpperCase()+s.slice(1) : s;
+function mixBar(m, ant){
+  const C = [["tarjetas","Tarjetas","#2563EB"],["transferencia","Transferencia","#0D9488"],["efectivo","Efectivo","#CA8A04"]];
+  return el("div",{class:"grid"},
+    el("div",{class:"mixbar"}, C.map(([k,t,c])=>m[k]?el("i",{style:`width:${m[k]}%;background:${c}`,title:`${t}: ${m[k]}%`}):null)),
+    el("div",{class:"row"}, C.map(([k,t,c])=>el("span",{class:"pill",style:`background:${c}22;color:${c}`,text:`${t} ${String(m[k]).replace(".",",")}%${ant?" ("+(m[k]-ant[k]>=0?"+":"")+(Math.round((m[k]-ant[k])*10)/10).toString().replace(".",",")+" pp)":""}`}))));
+}
+async function detalleMes(m){
+  let r; try{ r = await apiS("getCierre", m.mes+"-01", m.mes+"-31"); }catch(e){ return toast(msgErr(e)); }
+  const tb = el("tbody"); r.cierres.forEach(c=>tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{class:"n",text:money(c.tarjetas)}), el("td",{class:"n",text:money(c.transferencia)}), el("td",{class:"n",text:money(c.efectivo)}), el("td",{class:"n"},el("b",{text:money(c.total)})))));
+  const mm = modal(el("div",{class:"grid"}, el("h2",{text:"Cierres de "+m.nombre}), el("p",{class:"lead",text:`${m.dias} días con cierre · ${m.diasSinCierre.length} días de apertura sin cierre${m.diasSinCierre.length?": "+m.diasSinCierre.map(fmtF).join(", "):""}`}),
+    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Tarjetas","Transferencia","Efectivo","Total"].map((x,i)=>el("th",{class:i?"n":null,text:x})))), tb)),
+    el("button",{class:"btn",type:"button",text:"Cerrar",onclick:()=>mm.cerrar()})));
+}
+/* ===================== Cierre diario ===================== */
+const ALERTA_TXT = {cierre_pendiente:"Cierre pendiente", falta_ingreso:"Ventas sin ingreso registrado", ingresos_sin_cierre:"Ingresos sin cierre", ingreso_duplicado:"Ingreso duplicado", empleado_inactivo:"Ingreso posterior a una baja"};
+function vCierre(main){
+  const ini = hoy().slice(0,8)+"01";
+  const de = el("input",{type:"date",value:ini}), ha = el("input",{type:"date",value:hoy()}), body = el("div",{class:"stack"});
+  const cargar = async ()=>{ body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
+    let r; try{ r = await apiS("getCierre", de.value, ha.value); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    body.textContent="";
+    const s = r.sync;
+    body.append(el("div",{class:"card"}, el("h3",{text:"🔄 Sincronización con la planilla (solo lectura)"}),
+      !s ? el("p",{class:"lead",text:"Todavía no se leyó la planilla."}) : el("div",{class:"grid"},
+        el("div",{class:"notice "+(s.ok?(s.errores&&s.errores.length?"warn":"ok"):"bad"),text: s.ok ? `Última lectura: ${new Date(s.ts).toLocaleString("es-AR")} · ${s.dias} días con cierre · ${s.nuevos} nuevos · ${s.cambiados} con cambios` : "Error: "+s.error}),
+        s.archivo ? el("span",{class:"hint",text:`Archivo: ${s.archivo} · modificado ${new Date(s.modificado).toLocaleString("es-AR")}`}) : null,
+        s.errores && s.errores.length ? el("details",{}, el("summary",{text:`⚠️ ${s.errores.length} observación(es) en la planilla`}), el("ul",{}, s.errores.map(x=>el("li",{text:x})))) : null),
+      el("p",{class:"hint",text:"La app no modifica tu planilla: la lee, calcula el total del día (tarjetas + transferencia + efectivo) y guarda una copia de los importes en su propia base."}),
+      el("button",{class:"btn primary",type:"button",text:"↻ Sincronizar ahora",onclick:async e=>{ spinBtn(e.target,"Leyendo planilla…"); try{ await apiS("sincronizarCierre"); cargar(); toast("Planilla leída"); }catch(x){ unspin(e.target); toast(msgErr(x)); } }})));
+    const tb = el("tbody"); let tot={t:0,tr:0,e:0,x:0};
+    r.cierres.forEach(c=>{ tot.t+=c.tarjetas; tot.tr+=c.transferencia; tot.e+=c.efectivo; tot.x+=c.total;
+      tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:["dom","lun","mar","mié","jue","vie","sáb"][new Date(c.fecha+"T12:00:00").getDay()]}),
+        el("td",{class:"n",text:money(c.tarjetas)}), el("td",{class:"n",text:money(c.transferencia)}), el("td",{class:"n",text:money(c.efectivo)}), el("td",{class:"n"},el("b",{text:money(c.total)})),
+        el("td",{class:"hint",text:c.anterior?`Cambió (antes ${money(c.anterior.total)})`:""}))); });
+    if (!r.cierres.length) tb.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin cierres en el período."})));
+    else tb.append(el("tr",{class:"tot"}, el("td",{text:"Total"}), el("td",{}), el("td",{class:"n",text:money(tot.t)}), el("td",{class:"n",text:money(tot.tr)}), el("td",{class:"n",text:money(tot.e)}), el("td",{class:"n"},el("b",{text:money(tot.x)})), el("td",{})));
+    body.append(el("div",{class:"card"}, el("h2",{text:"Cierres por fecha"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Día","Tarjetas","Transferencia","Efectivo","Total","Notas"].map((x,i)=>el("th",{class:i>=2&&i<=5?"n":null,text:x})))), tb))));
+    const al = r.alertas||[];
+    body.append(el("div",{class:"card"}, el("h3",{text:"🔎 Alertas para revisión"}),
+      el("p",{class:"hint",text:"Un cierre de ventas no demuestra quién estuvo presente. Estas diferencias son para revisar, no conclusiones de incumplimiento."}),
+      al.length ? el("ul",{class:"action"}, al.map(a=>el("li",{}, el("span",{class:"mono",text:fmtF(a.fecha)}), el("span",{}, el("b",{text:(ALERTA_TXT[a.tipo]||a.tipo)+": "}), a.detalle)))) : el("p",{class:"lead",text:"Sin alertas en el período."})));
+  };
+  [de,ha].forEach(x=>x.onchange=cargar);
+  main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha))), body);
+  cargar();
+}
+
+/* ===================== Historial ===================== */
+function vHistorial(main){
+  const de = el("input",{type:"date",value:hoy().slice(0,8)+"01"}), ha = el("input",{type:"date",value:hoy()}), q = el("input",{type:"search",placeholder:"Buscar usuario, acción o detalle"});
+  const body = el("div",{class:"stack"}), ver = el("div");
+  const cargar = async ()=>{ body.textContent=""; let L; try{ L = await apiS("listarHistorial", de.value, ha.value, q.value); }catch(e){ return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    const tb = el("tbody"); L.forEach(h=>tb.append(el("tr",{}, el("td",{class:"mono",text:new Date(h.ts).toLocaleString("es-AR")}), el("td",{text:h.usuario}), el("td",{text:h.accion.replace(/_/g," ")}),
+      el("td",{},el("span",{class:"pill "+(/error/.test(h.resultado)?"bad":/alerta/.test(h.resultado)?"warn":h.resultado==="ok"?"ok":""),text:h.resultado})), el("td",{class:"mono hint",text:h.ref}), el("td",{text:h.detalle}))));
+    if (!L.length) tb.append(el("tr",{},el("td",{colspan:"6",class:"empty",text:"Sin eventos en el período."})));
+    body.append(el("div",{class:"card"}, el("p",{class:"lead",text:`${L.length} evento(s) · hora del servidor`}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha y hora","Usuario","Acción","Resultado","Registro","Detalle"].map(x=>el("th",{text:x})))), tb)))); };
+  [de,ha].forEach(x=>x.onchange=cargar); q.addEventListener("change",cargar);
+  main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Buscar",q)),
+    el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"🔐 Verificar integridad",onclick:async e=>{ spinBtn(e.target,"Verificando…");
+      try{ const r = await apiS("verificarHistorial"); ver.textContent=""; ver.append(el("div",{class:"notice "+(r.ok?"ok":"bad"),text: r.ok ? `✅ Historial íntegro: ${r.eventos} eventos encadenados sin alteraciones.` : `⚠️ Se detectó una alteración en el evento n.º ${r.rotoEn} (${r.ts?new Date(r.ts).toLocaleString("es-AR"):""}). Revisá quién tiene acceso a la planilla.`})); }
+      catch(x){ toast(msgErr(x)); } finally{ unspin(e.target); } }}), el("span",{class:"hint",text:"Cada evento queda encadenado con el anterior: si alguien edita o borra uno, la verificación lo detecta."})), ver), body);
+  cargar();
+}
+
+/* ===================== Novedades de RR. HH. ===================== */
+const TIPO_RH = {llegada_tarde:"Llegada tarde",inasistencia:"Inasistencia",salida_anticipada:"Salida anticipada",otra:"Otra"};
+async function vRRHH(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  let L, P=[]; try{ L = await apiS("listarNovedades"); if (tiene("personal")) P = await apiS("listarPersonal"); }catch(e){ return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  if (P.length){
+    const u = el("select",{}, ...P.filter(x=>x.estado==="activo").sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(x=>el("option",{value:x.id,text:x.nombre})));
+    const t = el("select",{}, ...Object.entries(TIPO_RH).map(([v,x])=>el("option",{value:v,text:x}))), f = el("input",{type:"date",value:hoy(),max:hoy()}), d = el("textarea",{maxlength:"400",placeholder:"Detalle"});
+    const b = el("button",{class:"btn primary",type:"submit",text:"Registrar novedad"});
+    body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b); try{ await apiS("crearNovedad",{uid:u.value,tipo:t.value,fecha:f.value,detalle:d.value}); main.textContent=""; route(); toast("Novedad registrada"); }catch(x){ unspin(b); toast(msgErr(x)); } }},
+      el("h2",{text:"Nueva novedad"}), el("div",{class:"grid2"}, el("label",{class:"f"},"Empleado",u), el("label",{class:"f"},"Tipo",t), el("label",{class:"f"},"Fecha",f)), el("label",{class:"f"},"Detalle",d), b));
+  }
+  const tb = el("tbody");
+  L.forEach(n=>{ const sel = el("select",{"aria-label":"Estado"}, ...["abierta","justificada","no_justificada","cerrada"].map(v=>el("option",{value:v,text:v.replace("_"," "),selected:n.estado===v})));
+    sel.onchange = async ()=>{ try{ await apiS("actualizarNovedad", n.id, sel.value, ""); toast("Estado actualizado"); }catch(e){ toast(msgErr(e)); sel.value=n.estado; } };
+    tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(n.fecha)}), el("td",{text:n.nombre}), el("td",{text:TIPO_RH[n.tipo]||n.tipo}), el("td",{text:n.detalle||""}),
+      el("td",{text:n.origen==="derivada_de_ingresos"?"Derivada de ingresos":"Manual"}), el("td",{text:n.creadoPor||""}), el("td",{},sel))); });
+  if (!L.length) tb.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin novedades."})));
+  body.append(el("div",{class:"card"}, el("h2",{text:"Novedades"}), el("p",{class:"lead",text:"Circuito separado de la fichada: las alertas de ingreso no se convierten solas en novedades."}),
+    el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Detalle","Origen","Cargó","Estado"].map(x=>el("th",{text:x})))), tb))));
+}
+
+/* ===================== Otros ===================== */
+let promptInstalar = null;
+addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); promptInstalar=e; });
+function vOtros(main){
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  main.append(el("div",{class:"card"}, el("h2",{text:"📲 Instalar la app en el teléfono"}),
+    el("p",{class:"lead",text: ios ? "En iPhone: abrí este link en Safari → botón Compartir → «Agregar a inicio»." : "En Android: tocá Instalar (o menú ⋮ → «Instalar app» / «Agregar a pantalla principal»)."}),
+    el("div",{class:"row"}, el("button",{class:"btn primary",type:"button",text:"Instalar",onclick:async()=>{ if (promptInstalar){ promptInstalar.prompt(); promptInstalar=null; } else toast(ios?"Usá Compartir → Agregar a inicio":"Usá el menú del navegador → Instalar app"); }}),
+      el("button",{class:"btn",type:"button",text:"📋 Copiar link de la app",onclick:()=>copiar(location.origin+location.pathname,"Link copiado")}))));
+  if (S.user){
+    const largo = S.user.largoPin||6;
+    const a = el("input",{type:"password",inputmode:"numeric",maxlength:"6",placeholder:"PIN actual"}), n = el("input",{type:"password",inputmode:"numeric",maxlength:String(largo),placeholder:`PIN nuevo (${largo} números)`}), n2 = el("input",{type:"password",inputmode:"numeric",maxlength:String(largo),placeholder:"Repetí el PIN nuevo"});
+    const b = el("button",{class:"btn primary",type:"submit",text:"Cambiar PIN"});
+    main.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); if (n.value!==n2.value) return toast("Los PIN nuevos no coinciden.");
+        spinBtn(b); try{ await api("cambiarMiPin", S.token, a.value, n.value); toast("✅ PIN cambiado. Volvé a ingresar."); salir(); }catch(x){ unspin(b); toast(msgErr(x)); } }},
+      el("h2",{text:"🔑 Cambiar mi PIN"}), el("p",{class:"lead",text:"Al cambiarlo se cierran tus sesiones abiertas en otros equipos."}), el("div",{class:"grid2"}, a, n, n2), b));
+  }
+  main.append(el("div",{class:"card"}, el("h2",{text:"🔒 Privacidad y uso de fotos"}),
+    el("ul",{class:"action"}, el("li",{text:"La foto de la fichada se usa solo para validar el registro de asistencia. La ven únicamente responsables autorizados y se borra automáticamente pasado el plazo de conservación (90 días)."}),
+      el("li",{text:"La ubicación se toma solo al fichar y únicamente si das permiso en el teléfono. Si no das permiso, el registro queda «para revisar»; no se rechaza."}),
+      el("li",{text:"La app no usa reconocimiento facial. Una foto, por sí sola, no prueba identidad, hora ni ubicación: es un dato de apoyo."}),
+      el("li",{text:"Cada persona solo puede ver sus propios registros. Toda acción queda en un historial protegido."}))));
+}
+
+/* ===================== Configuración ===================== */
+async function vConfig(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  let c; try{ c = await apiS("getConfig"); }catch(e){ return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  const guardar = async (datos, b)=>{ spinBtn(b,"Guardando…"); try{ c = Object.assign(c, await apiS("setConfig", datos)); toast("✅ Configuración guardada"); }catch(e){ toast(msgErr(e)); } finally{ unspin(b); } };
+  // Ubicación del showroom
+  const lat = el("input",{type:"number",step:"any",value:c.local?c.local.lat:"",placeholder:"Latitud"}), lng = el("input",{type:"number",step:"any",value:c.local?c.local.lng:"",placeholder:"Longitud"}), rad = el("input",{type:"number",min:"30",max:"2000",value:c.local?c.local.radio:c.radioDef});
+  const bU = el("button",{class:"btn primary",type:"button",text:"Guardar ubicación"});
+  bU.onclick = ()=> lat.value&&lng.value ? guardar({local:{lat:Number(lat.value),lng:Number(lng.value),radio:Number(rad.value)}}, bU) : guardar({local:null}, bU);
+  body.append(el("div",{class:"card"}, el("h2",{text:"📍 Ubicación del showroom"}),
+    el("p",{class:"lead",text:"Parate en el showroom y tocá «Usar mi ubicación actual». Las fichadas a más distancia que el radio quedan «para revisar» (no se rechazan)."}),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Latitud",lat), el("label",{class:"f"},"Longitud",lng), el("label",{class:"f"},"Radio (metros)",rad)),
+    el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"📡 Usar mi ubicación actual",onclick:async e=>{ spinBtn(e.target,"Ubicando…"); const g = await ubicacion(); unspin(e.target);
+      if (g.error) return toast("No se pudo obtener la ubicación: "+g.error.replace("_"," ")); lat.value=g.lat.toFixed(6); lng.value=g.lng.toFixed(6); toast(`Ubicación tomada (precisión ±${Math.round(g.acc)} m). Tocá Guardar.`); }}), bU,
+      el("button",{class:"btn",type:"button",text:"Quitar ubicación",onclick:e=>{ lat.value=""; lng.value=""; guardar({local:null}, e.target); }}))));
+  // Fichada y retención
+  const dias = [1,2,3,4,5,6,0].map(d=>{ const x=el("input",{type:"checkbox",value:d,checked:c.diasOperativos.includes(d)}); return el("label",{class:"chk"},x," "+["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"][d]); });
+  const fo = el("input",{type:"checkbox",checked:c.fotoIngresoObligatoria}), ri = el("input",{type:"number",min:"7",max:"3650",value:c.retencionIngresosDias}), ra = el("input",{type:"number",min:"1",max:"120",value:c.retencionAuditoriasMeses});
+  const av = el("textarea",{maxlength:"600"}); av.value=c.avisoFotos;
+  const bF = el("button",{class:"btn primary",type:"button",text:"Guardar"});
+  bF.onclick = ()=>guardar({diasOperativos:dias.map(l=>l.querySelector("input")).filter(x=>x.checked).map(x=>Number(x.value)), fotoIngresoObligatoria:fo.checked, retencionIngresosDias:Number(ri.value), retencionAuditoriasMeses:Number(ra.value), avisoFotos:av.value}, bF);
+  body.append(el("div",{class:"card"}, el("h2",{text:"🕘 Fichada, fotos y conservación"}), el("h3",{text:"Días de apertura"}), el("div",{class:"chkgrid"},dias),
+    el("label",{class:"chk"},fo," Foto obligatoria al fichar"),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Conservar fotos de fichada (días)",ri), el("label",{class:"f"},"Conservar fotos de auditoría (meses)",ra)),
+    el("label",{class:"f"},"Aviso al personal sobre el uso de fotos",av),
+    el("p",{class:"hint",text:`Al vencer el plazo las fotos van a la papelera de Drive. Los registros (fecha, hora, estado) se conservan. Última limpieza automática: ${c.ultimaPurga?fmtF(c.ultimaPurga):"todavía no"}.`}), bF));
+  // Objetivos y alertas
+  const meses = (()=>{ const out=[], d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-2); for(let i=0;i<8;i++){ out.push(d.toISOString().slice(0,7)); d.setMonth(d.getMonth()+1); } return out; })();
+  const obj = meses.map(m=>{ const x=el("input",{type:"number",min:"0",step:"1000",value:(c.objetivos||{})[m]||"",placeholder:"Sin objetivo","data-m":m}); return el("label",{class:"f"},cap(mesNom(m)),x); });
+  const ac = c.alertasCom||{};
+  const a1=el("input",{type:"number",min:"1",max:"90",value:ac.caidaPct}), a2=el("input",{type:"number",min:"1",max:"60",value:ac.mixPp}), a3=el("input",{type:"number",min:"2",max:"15",value:ac.minDias}), a4=el("input",{type:"number",min:"26",max:"90",value:ac.concentracionPct});
+  const bO = el("button",{class:"btn primary",type:"button",text:"Guardar objetivos y alertas"});
+  bO.onclick = ()=>{ const o = Object.assign({}, c.objetivos||{}); obj.forEach(l=>{ const x=l.querySelector("input"); if (x.value) o[x.dataset.m]=Number(x.value); else delete o[x.dataset.m]; });
+    guardar({objetivos:o, alertasCom:{caidaPct:a1.value,mixPp:a2.value,minDias:a3.value,concentracionPct:a4.value}}, bO); };
+  body.append(el("div",{class:"card"}, el("h2",{text:"🎯 Objetivos de venta y alertas comerciales"}), el("h3",{text:"Objetivo mensual de facturación ($)"}), el("div",{class:"grid2"},obj),
+    el("h3",{style:"margin-top:12px",text:"Umbrales de alertas"}), el("div",{class:"grid2"}, el("label",{class:"f"},"Caída de venta que alerta (%)",a1), el("label",{class:"f"},"Cambio de mix que alerta (puntos)",a2),
+      el("label",{class:"f"},"Mínimo de días con cierre para comparar",a3), el("label",{class:"f"},"Concentración en un día que alerta (%)",a4)), bO));
+  // Integración Drive
+  const fid = el("input",{type:"text",value:c.cierreFileId,maxlength:"100"}), bD = el("button",{class:"btn primary",type:"button",text:"Guardar"});
+  bD.onclick = ()=>guardar({cierreFileId:fid.value.trim()}, bD);
+  const s = c.cierreSync;
+  body.append(el("div",{class:"card"}, el("h2",{text:"🔗 Integración con Google Drive"}),
+    el("p",{class:"lead",text:"Planilla de cierre de Palermo (solo lectura). Se identifica por su ID de archivo en Drive."}), el("label",{class:"f"},"ID del archivo",fid),
+    el("p",{class:"hint",text: s ? `Última lectura: ${new Date(s.ts).toLocaleString("es-AR")} · ${s.ok?"correcta":"con error: "+s.error}` : "Sin lecturas todavía."}), bD));
+  // Parámetros de auditoría (los existentes)
+  const p = S.params, inp = (v,a)=>el("input",Object.assign({type:"number",value:v},a||{}));
+  const pe=inp(p.promExc,{step:"0.1",min:"1",max:"5"}), pa=inp(p.promAdv,{step:"0.1",min:"1",max:"5"}), pm=inp(p.maxInf,{min:"0"}), pd=inp(p.diasMax,{min:"0"});
+  const t1=el("textarea",{maxlength:"500"}), t2=el("textarea",{maxlength:"500"}), t3=el("textarea",{maxlength:"500"}); t1.value=p.mExc; t2.value=p.mAdv; t3.value=p.mRec;
+  const bP = el("button",{class:"btn primary",type:"button",text:"Guardar parámetros"});
+  bP.onclick = async ()=>{ spinBtn(bP); try{ S.params={...DEF,...await apiS("setParams",{promExc:pe.value,promAdv:pa.value,maxInf:pm.value,diasMax:pd.value,mExc:t1.value,mAdv:t2.value,mRec:t3.value})}; toast("✅ Parámetros guardados"); }catch(e){ toast(msgErr(e)); } finally{ unspin(bP); } };
+  body.append(el("div",{class:"card"}, el("h2",{text:"📋 Parámetros de auditoría"}),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Promedio mínimo «Excelente»",pe), el("label",{class:"f"},"Promedio mínimo «Advertencia»",pa), el("label",{class:"f"},"Infracciones máx. para «Advertencia»",pm), el("label",{class:"f"},"Días máx. de pedido sin retirar",pd)),
+    el("label",{class:"f"},"✅ Mensaje Excelente",t1), el("label",{class:"f"},"⚠️ Mensaje Advertencia",t2), el("label",{class:"f"},"❌ Mensaje Reclamo",t3), bP));
+  body.append(el("div",{class:"card"}, el("h2",{text:"👥 Usuarios, roles y permisos"}), el("p",{class:"lead",text:"Se administran en Empleados → Personal: alta, baja, PIN, rol y permisos por módulo."}),
+    el("button",{class:"btn",type:"button",text:"Ir a Personal",onclick:()=>ir("empleados")})));
+}
+/* ---------- Arranque ---------- */
+document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+iniciar();
 })();

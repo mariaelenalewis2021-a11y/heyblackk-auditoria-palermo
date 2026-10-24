@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Hey Blackk Auditorías</title>
+<title>Hey Blackk Palermo</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <meta name="theme-color" content="#111113">
-<meta name="description" content="Auditoría de la sucursal Palermo de Hey Blackk">
+<meta name="description" content="Gestión de Hey Blackk Palermo: fichada, auditoría, cierre y KPIs">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="apple-mobile-web-app-title" content="HB Auditoría">
+<meta name="apple-mobile-web-app-title" content="HB Palermo">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
 <style>
@@ -192,189 +192,92 @@ body{margin:0}
 .gate .card{margin:24px 16px;max-width:420px;width:calc(100% - 32px)}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
+
+/* ===== v3: panel con módulos de color y marca de agua HB ===== */
+main{position:relative;z-index:1}
+body.is-home::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='170' viewBox='0 0 260 170'%3E%3Cg fill='%23111113' fill-opacity='0.055' font-family='Arial Black,Arial,Helvetica,sans-serif' font-weight='900'%3E%3Ctext x='18' y='62' font-size='52' transform='rotate%28-14 60 50%29'%3EHB%3C/text%3E%3Ctext x='150' y='145' font-size='40' transform='rotate%28-14 190 130%29'%3EHB%3C/text%3E%3C/g%3E%3C/svg%3E");background-size:260px 170px;background-repeat:repeat}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) body.is-home::after{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='170' viewBox='0 0 260 170'%3E%3Cg fill='%23FFFFFF' fill-opacity='0.06' font-family='Arial Black,Arial,Helvetica,sans-serif' font-weight='900'%3E%3Ctext x='18' y='62' font-size='52' transform='rotate%28-14 60 50%29'%3EHB%3C/text%3E%3Ctext x='150' y='145' font-size='40' transform='rotate%28-14 190 130%29'%3EHB%3C/text%3E%3C/g%3E%3C/svg%3E")} }
+@media (min-width:900px){ body.is-home::after{background-size:340px 222px} }
+.hero h1{font-size:clamp(24px,6vw,34px);margin:4px 0 2px;letter-spacing:-.02em}
+.modgrid{display:grid;gap:10px;grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:420px){ .mod{min-height:132px;padding:12px;gap:4px} .mod-t{font-size:15px} .mod-d{font-size:12px} .mod-ico{width:40px;height:40px;font-size:21px} .mod-lk{top:8px;right:8px;font-size:10px} }
+@media (min-width:760px){ .modgrid{grid-template-columns:repeat(3,minmax(0,1fr))} }
+.mod{-webkit-appearance:none;appearance:none;text-align:left;cursor:pointer;display:grid;gap:6px;align-content:start;min-height:150px;padding:16px;border-radius:16px;
+  background:var(--surface);border:1px solid var(--line);border-top:5px solid var(--mc);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.04);transition:transform .12s,box-shadow .12s;position:relative}
+.mod:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.10)}
+.mod-ico{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;font-size:24px;background:var(--mc);box-shadow:inset 0 0 0 2px rgba(255,255,255,.18)}
+.mod-t{font-weight:700;font-size:16.5px;line-height:1.2}
+.mod-d{font-size:13px;color:var(--muted);line-height:1.35}
+.mod-lk{position:absolute;top:12px;right:12px;font-size:11px;font-weight:700;color:var(--muted);background:var(--chip);border-radius:999px;padding:2px 8px}
+.modhead{display:flex;gap:14px;align-items:center;padding:4px 0 2px;border-left:5px solid var(--mc);padding-left:12px}
+.modhead h1{margin:0;font-size:22px} .modhead .lead{margin:0}
+.navbtn{-webkit-appearance:none;appearance:none;border:1px solid rgba(255,255,255,.25);background:transparent;color:var(--band-ink);border-radius:10px;min-height:38px;padding:6px 12px;font-weight:600;cursor:pointer}
+.stack,.subbody{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)} .stack>*,.subbody>*{min-width:0}
+.grid{display:grid;gap:10px}
+.subtabs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.subtab{-webkit-appearance:none;appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:8px 14px;font-weight:600;font-size:14px;white-space:nowrap;cursor:pointer;min-height:40px}
+.subtab[aria-selected="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.hint{font-size:12.5px;color:var(--muted)}
+input[type=search],input[type=time]{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--ink);font-size:16px;min-height:44px;-webkit-appearance:none;appearance:none}
+.filters .row input[type=search]{flex:1;min-width:180px}
+.chk{display:flex;gap:8px;align-items:center;font-size:14px;min-height:36px} .chk input{width:20px;height:20px}
+.chkgrid{display:grid;gap:4px 14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,200px),1fr))}
+table.compact{min-width:0}
+tr.tot td{background:var(--chip);font-weight:700}
+/* Modales */
+.modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);display:grid;place-items:center;padding:16px;overflow:auto}
+.modal-box{background:var(--surface);color:var(--ink);border-radius:16px;padding:18px;width:min(520px,100%);max-height:calc(100dvh - 32px);overflow:auto;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.lightbox img{max-width:100%;max-height:70dvh;display:block;margin:0 auto 10px;border-radius:10px}
+.modal-box:has(.lightbox){width:min(900px,100%)}
+/* Fichada */
+.fichar{display:grid;gap:12px;justify-items:stretch;text-align:center;max-width:520px;margin:0 auto;width:100%}
+.jornada{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.jbox{border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:2px;background:var(--bg)}
+.jbox.ok{border-color:var(--ok);background:var(--ok-bg)} .jbox .k{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em} .jbox b{font-size:28px}
+.fichar-btn{min-height:78px;font-size:21px;border-radius:16px;font-weight:800;color:#fff;border:0}
+.fichar-btn.entrada{background:#2563EB} .fichar-btn.salida{background:#0D9488}
+.big-btn{min-height:54px;font-size:17px}
+.aviso{font-size:12.5px;color:var(--muted);margin:0;text-align:left}
+.selfie{width:min(260px,70vw);aspect-ratio:3/4;object-fit:cover;border-radius:14px;margin:0 auto;border:3px solid var(--line)}
+.bigok{font-size:56px;line-height:1} .fichar.done .big{font-size:44px}
+/* Personal */
+.plist{display:grid;gap:8px;margin-top:10px}
+.persona{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.persona.off{opacity:.75} .pinfo{display:grid;gap:2px;min-width:200px} .pinfo .mono{font-size:12.5px;color:var(--muted)}
+/* Auditoría */
+.dpuntos{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}
+.dpunto{display:grid;gap:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);align-content:start}
+.obs{font-size:13px;color:var(--muted)} .accmini{font-size:12.5px;padding:6px 8px;border-radius:8px;background:var(--bg)}
+.punto .fotos:empty{display:none} .punto .addfoto,.card .addfoto{width:72px;height:72px;font-size:12px;background:transparent}
+.punto .foto{width:72px;height:72px}
+.foto-err{font-size:11px;color:var(--bad);text-align:center;padding:4px;cursor:default}
+/* KPIs */
+.kinfo{display:inline-block;margin-left:4px;position:relative} .kinfo summary{list-style:none;cursor:pointer;display:inline} .kinfo summary::-webkit-details-marker{display:none}
+.kinfo[open]>div{position:absolute;z-index:6;left:-40px;top:22px;width:min(300px,80vw);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 10px 28px rgba(0,0,0,.18);font-weight:400;color:var(--ink);font-size:12.5px}
+.kinfo p{margin:4px 0}
+.exec{border-left:5px solid #7C3AED} .qa{display:grid;gap:2px;padding:8px 0;border-top:1px solid var(--line)} .qa b{font-size:14px}
+.recs{display:grid;gap:8px} .rec{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--bg)} .rec summary{cursor:pointer}
+.rec.p1{border-left:5px solid var(--bad)} .rec.p2{border-left:5px solid var(--warn)} .rec.p3{border-left:5px solid var(--line)}
+.rec dl{margin:8px 0 0;display:grid;gap:2px} .rec dt{font-size:12px;font-weight:700;color:var(--muted);margin-top:6px} .rec dd{margin:0;font-size:14px}
+.hscroll{overflow-x:auto} .chart .cv{font-size:10px;fill:var(--ink)}
+.mixbar{display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--chip)} .mixbar i{display:block;height:100%}
+.alerts{display:grid;gap:8px}
+.kpis{align-items:start}
+tr.sel td{background:var(--chip);font-weight:600}
+.detcard{border:2px solid var(--ink);display:grid;gap:10px}
+.chart svg{max-height:300px}
+summary{cursor:pointer;font-weight:600}
 </style>
 </head>
 <body>
-<!-- Portón de entrada: clave -->
-<div class="gate" id="gate">
-  <header class="band"><div class="wrap"><div><img class="logo" alt="HEYBLACKK" src=""><div class="sub">Auditoría · Sucursal Palermo</div></div></div></header>
-  <div class="card">
-    <div class="lockicon">🔐</div>
-    <h2 id="g-title">Conectando…</h2>
-    <p class="lead" id="g-lead"><span class="spin"></span> Un momento.</p>
-    <form id="g-login" hidden autocomplete="off" style="display:grid;gap:10px">
-      <label class="f">Clave<input type="password" id="g-pw" autocomplete="current-password" maxlength="128"></label>
-      <div id="g-err" class="notice bad" hidden></div>
-      <button class="btn primary" type="submit" id="g-btn">🔓 Entrar</button>
-    </form>
-    <form id="g-setup" hidden autocomplete="off" style="display:grid;gap:10px">
-      <label class="f">🧾 Código de instalación<input type="text" id="s-code" autocomplete="off" autocapitalize="characters" maxlength="12" placeholder="Lo genera el servidor (8 caracteres)"></label>
-      <label class="f">🔑 Clave de jefes (ve Registro, KPI y Ajustes)<input type="password" id="s-j1" autocomplete="new-password"></label>
-      <label class="f">Repetí la clave de jefes<input type="password" id="s-j2" autocomplete="new-password"></label>
-      <label class="f">📝 Clave de auditor (solo carga auditorías)<input type="password" id="s-a1" autocomplete="new-password"></label>
-      <label class="f">Repetí la clave de auditor<input type="password" id="s-a2" autocomplete="new-password"></label>
-      <div id="s-err" class="notice bad" hidden></div>
-      <button class="btn primary" type="submit" id="s-btn">🔐 Crear claves</button>
-    </form>
-  </div>
-</div>
-
-<header class="band">
-  <div class="wrap">
-    <div>
-      <img class="logo" alt="HEYBLACKK" src="">
-      <div class="sub">Auditoría · Sucursal Palermo</div>
-    </div>
-    <div class="row" style="gap:8px"><span class="who" id="who"></span><button class="btn sm" id="btn-instalar" hidden style="background:transparent;color:var(--band-ink);border-color:rgba(255,255,255,.3)">📲 Instalar</button><button class="btn sm" id="btn-salir" style="background:transparent;color:var(--band-ink);border-color:rgba(255,255,255,.3)">Salir</button></div>
-  </div>
-</header>
-<nav class="tabs" aria-label="Secciones">
-  <div class="wrap" role="tablist">
-    <button class="tab" role="tab" aria-selected="true" data-view="auditar">📝 Auditar</button>
-    <button class="tab" role="tab" aria-selected="false" data-view="registro">🗂️ Registro <span class="lk">🔒</span></button>
-    <button class="tab" role="tab" aria-selected="false" data-view="kpi">📊 KPI <span class="lk">🔒</span></button>
-    <button class="tab" role="tab" aria-selected="false" data-view="ajustes">⚙️ Ajustes <span class="lk">🔒</span></button>
-  </div>
-</nav>
-
-<main>
-  <section class="wrap" id="v-auditar">
-    <div class="card">
-      <h2>📝 Nueva auditoría · Palermo</h2>
-      <p class="lead">Completá tu nombre y la fecha. Elegí un puntaje de 1 (muy mal) a 5 (excelente) en cada punto. Si ves fallas, sumá cuántas con el +.</p>
-      <div class="grid2">
-        <label class="f">👤 Auditor<input type="text" id="f-auditor" autocomplete="name" placeholder="Nombre y apellido" maxlength="60"></label>
-        <label class="f">📅 Fecha<input type="date" id="f-fecha"></label>
-      </div>
-    </div>
-    <div class="puntos" id="puntos"></div>
-    <div class="card">
-      <div class="grid2">
-        <label class="f">⏳ Días del pedido más viejo sin retirar<input type="number" id="f-dias" min="0" max="365" inputmode="numeric" placeholder="0"></label>
-        <label class="f" style="grid-column:1/-1">💬 Comentario general<textarea id="f-general" maxlength="600" placeholder="Ej.: hablar con el encargado esta semana"></textarea></label>
-      </div>
-      <div style="margin-top:14px">
-        <div style="font-weight:600;font-size:13.5px;margin-bottom:6px">📷 Fotos de evidencia <span style="font-weight:400;color:var(--muted)">(opcional, hasta 4)</span></div>
-        <div class="fotos" id="fotos"></div>
-        <input type="file" id="f-foto" accept="image/*" hidden>
-      </div>
-    </div>
-    <div class="resultbar" id="resultbar">
-      <div class="big" id="r-prom">–<small> / 5</small></div>
-      <span class="rlabel" id="r-label">⏳ Falta completar</span>
-      <span class="pill" id="r-inf" hidden></span>
-      <div class="meter" title="Puntos evaluados"><i id="r-meter" style="width:0%"></i></div>
-      <span class="mono" id="r-count" style="font-size:12px;color:var(--muted)">0 de 7</span>
-      <button class="btn primary" id="btn-enviar" disabled>✔ Validar y enviar</button>
-    </div>
-    <div class="card" id="sent" hidden>
-      <div class="sent-head"><span class="em" id="sent-em">✅</span><div><h2>Auditoría registrada</h2><p class="lead" style="margin:0" id="sent-lead"></p></div></div>
-      <h3 style="margin-top:14px">✉️ Mensaje para el equipo</h3>
-      <div class="msgbox" id="sent-msg"></div>
-      <div class="row" style="margin-top:12px">
-        <button class="btn primary" id="btn-copy">📋 Copiar mensaje</button>
-        <span class="spacer"></span>
-        <button class="btn" id="btn-nueva">+ Nueva auditoría</button>
-      </div>
-    </div>
-    <div class="card" id="mine-card" hidden>
-      <h3>🕘 Últimas auditorías cargadas en este teléfono</h3>
-      <div id="mine"></div>
-    </div>
-  </section>
-
-  <section class="wrap" id="v-locked" hidden>
-    <div class="card lockcard">
-      <div class="lockicon">🔒</div>
-      <h2 id="lk-title">Sección protegida</h2>
-      <p class="lead">Ingresá la clave de jefes. Se pide en cada sección y se vuelve a bloquear al salir.</p>
-      <form id="lk-form" autocomplete="off">
-        <div style="display:grid;gap:10px">
-          <label class="f">Clave de jefes<input type="password" id="lk-p1" autocomplete="current-password" maxlength="128"></label>
-          <div id="lk-err" class="notice bad" hidden></div>
-          <button class="btn primary" id="lk-btn" type="submit">🔓 Desbloquear</button>
-        </div>
-      </form>
-    </div>
-  </section>
-
-  <section class="wrap" id="v-registro" hidden>
-    <div class="card">
-      <div class="row"><h2 style="margin:0">🗂️ Registro de auditorías</h2><span class="spacer"></span><button class="btn sm" id="reg-refresh">↻ Actualizar</button></div>
-      <p class="lead" style="margin:4px 0 0" id="reg-lead"></p>
-      <div class="row" style="margin-top:12px">
-        <button class="btn xl" id="exp-xlsx">⬇️ Excel</button>
-        <button class="btn pdf" id="exp-pdf">⬇️ PDF</button>
-        <button class="btn sm" id="exp-sheet">📗 Abrir planilla</button>
-        <span class="mono" id="exp-status" style="font-size:12px;color:var(--muted)"></span>
-        <span class="spacer"></span>
-        <button class="btn danger sm" id="vac-open">🧹 Vaciar registro</button>
-      </div>
-      <form id="vac-form" hidden autocomplete="off" style="margin-top:14px;display:grid;gap:10px;padding:14px;border-radius:10px;background:var(--bad-bg);border:1px solid var(--bad)">
-        <b style="color:var(--bad)">🧹 Vaciar el registro</b>
-        <span style="font-size:14px">Se quitan <b id="vac-n">0</b> auditorías de la app. Antes, se guarda automáticamente una <b>copia completa de la planilla en tu Drive</b> como respaldo. Parámetros, claves y fotos se mantienen.</span>
-        <label class="f">Clave de jefes<input type="password" id="vac-pw" autocomplete="current-password"></label>
-        <div id="vac-err" class="notice bad" hidden></div>
-        <div class="row"><button type="submit" class="btn danger" id="vac-go" style="background:var(--bad);color:#fff">Vaciar con respaldo</button><button type="button" class="btn" id="vac-cancel">Cancelar</button></div>
-      </form>
-      <div id="vac-ok" class="notice ok" hidden style="margin-top:12px"></div>
-    </div>
-    <div class="card">
-      <div class="grid2" style="margin-bottom:12px">
-        <label class="f">📅 Desde<input type="date" id="rf-desde"></label>
-        <label class="f">📅 Hasta<input type="date" id="rf-hasta"></label>
-        <label class="f">🚦 Resultado<select id="rf-res"><option value="">Todos</option><option>Excelente</option><option>Advertencia</option><option>Reclamo</option></select></label>
-        <label class="f">🔎 Buscar<input type="text" id="rf-q" placeholder="Auditor o comentario"></label>
-      </div>
-      <div class="tablewrap"><table><thead><tr>
-        <th>Fecha</th><th>Auditor</th><th class="n">Puntaje</th><th>Resultado</th><th class="n">Infrac.</th><th>Checklist</th><th class="n">Días pedido</th></tr></thead><tbody id="reg-body"></tbody></table></div>
-      <p class="lead" style="margin:8px 0 0;font-size:13px">Tocá una fila para ver el detalle y las fotos. Las descargas respetan los filtros.</p>
-    </div>
-  </section>
-
-  <section class="wrap" id="v-kpi" hidden>
-    <div class="card">
-      <div class="row">
-        <div><h2>📊 Indicadores de control · Palermo</h2><p class="lead" style="margin:0" id="kpi-lead"></p></div>
-        <span class="spacer"></span>
-        <label class="f" style="min-width:170px">Período<select id="kf-per">
-          <option value="30">Últimos 30 días</option><option value="90">Últimos 90 días</option><option value="365">Último año</option><option value="0" selected>Todo</option></select></label>
-      </div>
-    </div>
-    <div id="kpi-body" style="display:grid;gap:14px"></div>
-  </section>
-
-  <section class="wrap" id="v-ajustes" hidden>
-    <div class="card">
-      <h2>⚙️ Parámetros de control</h2>
-      <p class="lead">Los mismos de la hoja Configuración. Aplican a las auditorías nuevas; las ya registradas conservan el resultado con que se cerraron.</p>
-      <div class="grid2">
-        <label class="f">⭐ Promedio mínimo para Excelente<input type="number" step="0.1" min="1" max="5" id="p-promExc"></label>
-        <label class="f">⚠️ Promedio mínimo para Advertencia<input type="number" step="0.1" min="1" max="5" id="p-promAdv"></label>
-        <label class="f">🔢 Máx. infracciones para Advertencia<input type="number" min="0" id="p-maxInf"></label>
-        <label class="f">⏳ Días máx. de un pedido sin retirar<input type="number" min="0" id="p-dias"></label>
-        <label class="f" style="grid-column:1/-1">✅ Mensaje · Felicitaciones<textarea id="p-mExc"></textarea></label>
-        <label class="f" style="grid-column:1/-1">⚠️ Mensaje · Advertencia<textarea id="p-mAdv"></textarea></label>
-        <label class="f" style="grid-column:1/-1">❌ Mensaje · Reclamo<textarea id="p-mRec"></textarea></label>
-      </div>
-      <div class="row" style="margin-top:12px"><button class="btn primary" id="p-save">💾 Guardar parámetros</button><span id="p-ok" class="pill ok" hidden>Guardado</span></div>
-    </div>
-    <div class="card">
-      <h2>🔐 Claves</h2>
-      <p class="lead">La de <b>jefes</b> abre Registro, KPI y Ajustes. La de <b>auditor</b> solo permite cargar auditorías. Se guardan cifradas en el servidor.</p>
-      <form id="pw-form" autocomplete="off" style="display:grid;gap:10px;max-width:420px">
-        <label class="f">¿Qué clave cambiás?<select id="pw-cual"><option value="auditor">Clave de auditor</option><option value="jefe">Clave de jefes</option></select></label>
-        <label class="f">Clave de jefes actual<input type="password" id="pw-cur" autocomplete="current-password"></label>
-        <label class="f">Nueva clave (mín. 6)<input type="password" id="pw-new" autocomplete="new-password"></label>
-        <label class="f">Repetí la nueva<input type="password" id="pw-new2" autocomplete="new-password"></label>
-        <div id="pw-msg" class="notice" hidden></div>
-        <button class="btn" type="submit">Cambiar clave</button>
-      </form>
-    </div>
-  </section>
-</main>
-<div class="toast" id="toast" hidden></div>
-
+<header class="band"><div class="wrap">
+  <div><img class="logo" id="logo" alt="HEYBLACKK" src=""><div class="sub">Gestión · Palermo</div></div>
+  <div class="row" style="gap:8px"><span class="who" id="who"></span>
+    <button class="navbtn" id="nav-home" type="button" hidden>⌂ Inicio</button>
+    <button class="navbtn" id="btn-salir" type="button" hidden>Salir</button></div>
+</div></header>
+<main><div class="wrap" id="main"></div></main>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <script src="config.js"></script>
 <script src="app.js"></script>
 </body>
