@@ -18,6 +18,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
+const REV = '3.1';                        // revisión del servidor (para verificar despliegues)
 
 const TTL = { empleado: 10 * 60, responsable: 2 * 60 * 60, admin: 2 * 60 * 60 };
 const ELEV_MS = 5 * 60 * 1000;            // reautenticación válida 5 min
@@ -87,15 +88,18 @@ function generarCodigoInstalacion() {
 }
 
 /* =================== API =================== */
-function doGet() { return json_({ ok: true, app: 'heyblackk-palermo', v: VERSION }); }
+function doGet() { return json_({ ok: true, app: 'heyblackk-palermo', v: VERSION, rev: REV }); }
+/* Llamadas sensibles a la latencia (fichada, arranque, fotos): la limpieza diaria de fotos no se cuelga de ellas. */
+const RAPIDAS_ = { estado: 1, inicio: 1, resumenHoy: 1, login: 1, logout: 1, yo: 1, reauth: 1, miJornada: 1, misIngresos: 1, registrarFichada: 1, registrarIngreso: 1, solicitarCorreccion: 1, getParams: 1, getAviso: 1, fotoIngreso: 1, getFoto: 1 };
 function doPost(e) {
+  SS_ = null; MEMO_ = {};   // cada pedido arranca sin datos memorizados
   let req;
   try { req = JSON.parse(e && e.postData && e.postData.contents || '{}'); } catch (x) { return json_({ ok: false, error: 'Pedido inválido.' }); }
   const fn = API[req && req.fn];
   if (!fn || typeof req.fn !== 'string' || !Object.prototype.hasOwnProperty.call(API, req.fn)) return json_({ ok: false, error: 'Acción desconocida.' });
   try {
     const out = fn.apply(null, Array.isArray(req.args) ? req.args.slice(0, 8) : []);
-    try { purgaDiaria_(); } catch (x) {}
+    if (!RAPIDAS_[req.fn]) { try { purgaDiaria_(); } catch (x) {} }
     return json_({ ok: true, data: out });
   } catch (err) {
     const m = String(err && err.message || err);
@@ -110,7 +114,7 @@ function doPost(e) {
 function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 
 const API = {
-  estado: estado, bootstrapAdmin: bootstrapAdmin, login: login, logout: logout, reauth: reauth, yo: yo, cambiarMiPin: cambiarMiPin,
+  estado: estado, inicio: inicio, resumenHoy: resumenHoy, bootstrapAdmin: bootstrapAdmin, login: login, logout: logout, reauth: reauth, yo: yo, cambiarMiPin: cambiarMiPin,
   getParams: () => params_(), getAviso: () => cfg_().avisoFotos,
   // Empleados / ingreso
   registrarIngreso: registrarIngreso, registrarFichada: registrarFichada, miJornada: miJornada, misIngresos: misIngresos, solicitarCorreccion: solicitarCorreccion,
@@ -131,9 +135,13 @@ const API = {
 };
 
 /* =================== Almacenamiento =================== */
+/* Memoria de un solo pedido: la planilla abierta y las tablas ya leídas. Se vacía al entrar a doPost y al tomar el bloqueo,
+   así cada sección crítica lee datos frescos. Evita abrir la planilla y releer la misma tabla varias veces por pedido. */
+let SS_ = null, MEMO_ = {};
 function ss_() {
+  if (SS_) return SS_;
   const id = PROPS.getProperty('SS_ID');
-  if (id) { try { return SpreadsheetApp.openById(id); } catch (e) {} }
+  if (id) { try { return (SS_ = SpreadsheetApp.openById(id)); } catch (e) {} }
   const ss = SpreadsheetApp.create('HeyBlackk · Auditorías Palermo');
   PROPS.setProperty('SS_ID', ss.getId());
   const sh = ss.getSheets()[0];
@@ -141,7 +149,7 @@ function ss_() {
   sh.getRange(1, 1, 1, HEAD.length).setValues([HEAD]).setFontWeight('bold').setFontColor('#ffffff')
     .setBackground('#111113').setWrap(true).setVerticalAlignment('middle').setHorizontalAlignment('center');
   sh.setFrozenRows(1); sh.setRowHeight(1, 48); sh.hideColumns(HEAD.length); sh.hideColumns(1);
-  return ss;
+  return (SS_ = ss);
 }
 function hoja_() { return ss_().getSheetByName('Registro'); }
 function tabla_(nombre) {
@@ -166,19 +174,23 @@ function filaDe_(nombre, o) {
     return typeof v === 'string' ? celda_(v) : v;
   }).concat([JSON.stringify(o)]);
 }
-function tAll_(nombre) {
+function jsonCol_(nombre) {
   const sh = tabla_(nombre), n = sh.getLastRow() - 1, nc = TABLAS[nombre].length + 1;
   if (n < 1) return [];
-  return sh.getRange(2, nc, n, 1).getValues().map(r => { try { return JSON.parse(r[0]); } catch (e) { return null; } }).filter(Boolean);
+  return sh.getRange(2, nc, n, 1).getValues().map(r => { try { return JSON.parse(r[0]); } catch (e) { return null; } });
 }
-function tAdd_(nombre, o) { tabla_(nombre).appendRow(filaDe_(nombre, o)); return o; }
+function tAll_(nombre) {
+  if (!MEMO_[nombre]) MEMO_[nombre] = jsonCol_(nombre).filter(Boolean);
+  return MEMO_[nombre].slice();
+}
+function tAdd_(nombre, o) { tabla_(nombre).appendRow(filaDe_(nombre, o)); delete MEMO_[nombre]; return o; }
+/* Busca la fila por la clave dentro del JSON (no por la celda visible: Sheets convierte textos como 2026-06-03 en fechas). */
 function tUpd_(nombre, key, val, o) {
-  const sh = tabla_(nombre), n = sh.getLastRow() - 1, ci = TABLAS[nombre].indexOf(key) + 1;
-  if (n < 1) return false;
-  const vals = sh.getRange(2, ci, n, 1).getValues();
-  for (let i = 0; i < vals.length; i++) if (String(vals[i][0]) === String(val)) {
+  delete MEMO_[nombre];
+  const filas = jsonCol_(nombre);
+  for (let i = 0; i < filas.length; i++) if (filas[i] && String(filas[i][key]) === String(val)) {
     const row = filaDe_(nombre, o);
-    sh.getRange(i + 2, 1, 1, row.length).setValues([row]);
+    tabla_(nombre).getRange(i + 2, 1, 1, row.length).setValues([row]);
     return true;
   }
   return false;
@@ -198,7 +210,7 @@ function cfg_() { try { return Object.assign({}, CFG_DEF, JSON.parse(PROPS.getPr
 let LOCK_DEPTH = 0;
 function lock_(fn) {
   if (LOCK_DEPTH > 0) { LOCK_DEPTH++; try { return fn(); } finally { LOCK_DEPTH--; } }
-  const l = LockService.getScriptLock(); l.waitLock(25000); LOCK_DEPTH = 1;
+  const l = LockService.getScriptLock(); l.waitLock(25000); LOCK_DEPTH = 1; MEMO_ = {};   // dentro del bloqueo se lee fresco
   try { return fn(); } finally { LOCK_DEPTH = 0; l.releaseLock(); }
 }
 
@@ -306,7 +318,49 @@ function sesion_(token, perm, necesitaElev) {
 }
 function estado() {
   const hayUsuarios = usuarios_().some(u => u.rol === 'admin' && u.estado === 'activo');
-  return { v: VERSION, usuarios: hayUsuarios, legado: !!PROPS.getProperty('KEY_JEFE'), aviso: cfg_().avisoFotos };
+  return { v: VERSION, rev: REV, usuarios: hayUsuarios, legado: !!PROPS.getProperty('KEY_JEFE'), aviso: cfg_().avisoFotos };
+}
+/** Datos del día para el panel inicial (solo de los módulos que el usuario puede ver). Una llamada liviana. */
+function resumenHoy(token) {
+  const s = sesion_(token), p = s.perms, hoy = hoy_(), cfg = cfg_(), out = { fecha: hoy, ts: new Date().toISOString() };
+  const ve = m => p.indexOf(m) >= 0;
+  if (ve('ingresos') || ve('personal')) {
+    const activos = usuarios_().filter(u => u.estado === 'activo'), fichan = activos.filter(u => u.registraIngreso);
+    const delDia = tAll_('Ingresos').filter(x => x.fecha === hoy && vivo_(x));
+    const ent = {}, sal = {}; delDia.forEach(x => { (tipoDe_(x) === 'salida' ? sal : ent)[x.uid] = 1; });
+    out.personal = { activos: activos.length, fichan: fichan.length };
+    out.fichadas = { entradas: Object.keys(ent).length, salidas: Object.keys(sal).length, esperadas: fichan.length,
+      abre: cfg.diasOperativos.indexOf(new Date(hoy + 'T12:00:00Z').getUTCDay()) >= 0 };
+    if (ve('ingresos')) out.correccionesPendientes = tAll_('Correcciones').filter(c => c.estado === 'pendiente').length;
+  }
+  if (ve('acciones')) {
+    const acc = tAll_('Acciones').filter(a => a.estado === 'abierta' || a.estado === 'en_curso');
+    out.acciones = { abiertas: acc.length, vencidas: acc.filter(a => a.vence && a.vence < hoy).length };
+  }
+  if (ve('auditoria') || ve('auditar')) {
+    const l = leerAud_().sort((a, b) => (b.fecha + (b.creado || '')).localeCompare(a.fecha + (a.creado || '')));
+    out.auditoria = l.length ? { fecha: l[0].fecha, resultado: l[0].resultado, promedio: l[0].promedio } : null;
+    out.auditoriasMes = l.filter(a => a.fecha.slice(0, 7) === hoy.slice(0, 7)).length;
+  }
+  if (ve('cierre') || ve('kpi')) {
+    const c = tAll_('Cierres').filter(x => x.total > 0).sort((a, b) => a.fecha.localeCompare(b.fecha)), u = c[c.length - 1];
+    out.cierre = u ? { fecha: u.fecha, total: u.total } : null;
+    const desde = new Date(hoy + 'T12:00:00Z'); desde.setUTCDate(desde.getUTCDate() - 14);
+    const con = {}; c.forEach(x => { con[x.fecha] = 1; });
+    out.diasSinCierre = diasOperativosEntre_(desde.toISOString().slice(0, 10), hoy, cfg.diasOperativos).filter(d => d < hoy && !con[d]).length;
+    out.mes = { total: c.filter(x => x.fecha.slice(0, 7) === hoy.slice(0, 7)).reduce((a, x) => a + x.total, 0), objetivo: (cfg.objetivos || {})[hoy.slice(0, 7)] || null };
+  }
+  if (ve('rrhh')) out.rrhh = { abiertas: tAll_('RRHH').filter(n => n.estado === 'abierta').length };
+  if (ve('historial')) out.historialHoy = histRango_(hoy, hoy).length;
+  return out;
+}
+/** Arranque en una sola llamada: estado de la instalación y, si hay token guardado, la sesión (null si venció). */
+function inicio(token) {
+  const e = estado();
+  let ses = null;
+  if (token) { try { ses = yo(token); } catch (x) { ses = null; } }
+  e.sesion = ses;
+  return e;
 }
 function checkLegacy_(name, pw) {
   const k = JSON.parse(PROPS.getProperty(name) || 'null');
@@ -339,14 +393,16 @@ function bootstrapAdmin(credencial, datos) {
 }
 function globalFallas_() { if (Number(CACHE.get('fallas_global') || 0) >= FALLAS_GLOBAL) throw new Error('Demasiados intentos fallidos en la app. Esperá unos minutos.'); }
 function sumarGlobal_() { CACHE.put('fallas_global', String(Number(CACHE.get('fallas_global') || 0) + 1), VENTANA_GLOBAL_SEG); }
-function login(legajo, pin) {
+function login(legajo, pin, opts) {
   globalFallas_();
   legajo = txt_(legajo, 20).toUpperCase();
   const u = usuarios_().find(x => x.legajo === legajo);
   const kb = 'b_' + legajo, kf = 'f_' + legajo, kn = 'nb_' + legajo;
   if (CACHE.get(kb)) throw new Error('Usuario bloqueado por intentos fallidos. Probá en 15 minutos.');
   if (u && u.bloqueadoPin) throw new Error('Usuario bloqueado por intentos fallidos. Pedile a un jefe que te asigne un PIN nuevo.');
-  const ok = u && u.estado === 'activo' && eq_(hashPin_(String(pin || ''), u.salt), u.pinHash);
+  // El hash se calcula siempre (también si el usuario no existe) para que el tiempo de respuesta no revele qué usuarios hay.
+  const calc = hashPin_(String(pin || ''), u ? u.salt : 'sin-usuario');
+  const ok = u && u.estado === 'activo' && eq_(calc, u.pinHash);
   if (!ok) {
     sumarGlobal_();
     const f = Number(CACHE.get(kf) || 0) + 1;
@@ -365,7 +421,9 @@ function login(legajo, pin) {
   CACHE.remove(kf);
   const token = Utilities.getUuid();
   CACHE.put('s_' + token, JSON.stringify({ uid: u.id, ver: Number(u.ver || 0), t: Date.now() }), TTL[u.rol] || 600);
-  return { token: token, user: publico_(u), params: params_(), ttl: TTL[u.rol] || 600 };
+  const out = { token: token, user: publico_(u), params: params_(), ttl: TTL[u.rol] || 600 };
+  if (opts && opts.jornada) out.jornada = jornadaDe_(u);   // fichada: identificarse y ver la jornada en una sola llamada
+  return out;
 }
 function logout(token) { if (token && /^[0-9a-f-]{36}$/.test(String(token))) CACHE.remove('s_' + token); return true; }
 function yo(token) { const s = sesion_(token); return { user: publico_(s.user), params: params_(), elev: !!(s.data.elev && Date.now() - s.data.elev < ELEV_MS) }; }
@@ -535,7 +593,7 @@ function registrarFichada(token, tipo, foto, geo) {
   return lock_(() => {
     const delDia = tAll_('Ingresos').filter(x => x.uid === u.id && x.fecha === fecha && vivo_(x));
     const previo = delDia.find(x => tipoDe_(x) === tipo);
-    if (previo) { log_(s, tipo + '_duplicada_bloqueada', 'alerta', previo.id, 'Intento a las ' + hora_(ahora)); throw new Error('DUP:' + tipo + ':' + (previo.horaCorregida || previo.hora)); }
+    if (previo) { contar_('dup_' + fecha.slice(0, 7)); log_(s, tipo + '_duplicada_bloqueada', 'alerta', previo.id, 'Intento a las ' + hora_(ahora)); throw new Error('DUP:' + tipo + ':' + (previo.horaCorregida || previo.hora)); }
     const entrada = delDia.find(x => tipoDe_(x) === 'entrada');
     if (tipo === 'salida' && !entrada) throw new Error('Primero tenés que fichar la entrada de hoy. Si te olvidaste, pedí una corrección.');
     let fotoId = null;
@@ -557,13 +615,22 @@ function minutosEntre_(h1, h2) {
   return d >= 0 ? d : null;
 }
 /** Estado de hoy del propio empleado: qué fichó y qué le toca. Solo sus datos. */
-function miJornada(token) {
-  const s = sesion_(token);
-  const delDia = tAll_('Ingresos').filter(x => x.uid === s.user.id && x.fecha === hoy_() && vivo_(x));
+function miJornada(token) { return jornadaDe_(sesion_(token).user); }
+function jornadaDe_(u) {
+  const delDia = tAll_('Ingresos').filter(x => x.uid === u.id && x.fecha === hoy_() && vivo_(x));
   const e = delDia.find(x => tipoDe_(x) === 'entrada'), o = delDia.find(x => tipoDe_(x) === 'salida');
-  return { fecha: hoy_(), nombre: s.user.nombre, habilitado: !!s.user.registraIngreso, aviso: cfg_().avisoFotos,
+  return { fecha: hoy_(), nombre: u.nombre, habilitado: !!u.registraIngreso, aviso: cfg_().avisoFotos,
     entrada: e ? { hora: e.horaCorregida || e.hora, estado: e.estado } : null, salida: o ? { hora: o.horaCorregida || o.hora, estado: o.estado, minutos: o.minutos } : null,
     siguiente: !e ? 'entrada' : !o ? 'salida' : null };
+}
+/* Contadores livianos por mes (p. ej. intentos de fichar dos veces) para no recorrer todo el historial al calcular KPIs. */
+function contar_(k) {
+  try { const c = JSON.parse(PROPS.getProperty('CONT') || '{}'); c[k] = (c[k] || 0) + 1; PROPS.setProperty('CONT', JSON.stringify(c)); } catch (e) {}
+}
+function contados_(pref, desde, hasta) {
+  let c = {}; try { c = JSON.parse(PROPS.getProperty('CONT') || '{}'); } catch (e) {}
+  const d = desde.slice(0, 7), h = hasta.slice(0, 7);
+  return Object.keys(c).filter(k => k.indexOf(pref + '_') === 0 && k.slice(pref.length + 1) >= d && k.slice(pref.length + 1) <= h).reduce((a, k) => a + Number(c[k] || 0), 0);
 }
 function misIngresos(token) {
   const s = sesion_(token);
@@ -755,12 +822,15 @@ function guardarAuditoria(token, data, fotos) {
         ...PUNTOS.map(x => rec.infracciones[x[0]]), rec.totalInfracciones, rec.resultadoChecklist, rec.diasPedido == null ? '' : rec.diasPedido,
         rec.pedidoFueraDePlazo ? 'Sí' : 'No', celda_(rec.comentarioGeneral), ...PUNTOS.map(x => celda_(rec.comentarios[x[0]] || '')),
         rec.fotos.length, Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm'), JSON.stringify(rec)]);
-      const r = sh.getLastRow(), N = PUNTOS.length;
+      const r = sh.getLastRow(), N = PUNTOS.length, C = HEAD.length;
       sh.getRange(r, 2).setNumberFormat('dd/mm/yyyy'); sh.getRange(r, 4 + N).setNumberFormat('0.0');
+      // Formato de toda la fila en 4 llamadas (una por propiedad) en lugar de una por celda.
       const col = { Excelente: ['#DCFCE7', '#15803D'], Advertencia: ['#FEF3C7', '#B45309'], Reclamo: ['#FEE2E2', '#C81E1E'] };
-      [[5 + N, rec.resultado], [7 + 2 * N, rec.resultadoChecklist]].forEach(([c, res]) => sh.getRange(r, c).setBackground(col[res][0]).setFontColor(col[res][1]).setFontWeight('bold'));
       const sc = { 1: ['#FEE4E2', '#D92D20'], 2: ['#FFE8D9', '#E8590C'], 3: ['#FEF3C7', '#A16207'], 4: ['#DCFCE7', '#16A34A'], 5: ['#C9F2D9', '#0E7A3E'] };
-      PUNTOS.forEach((x, j) => { const v = rec.puntajes[x[0]]; sh.getRange(r, 4 + j).setBackground(sc[v][0]).setFontColor(sc[v][1]).setFontWeight('bold').setHorizontalAlignment('center'); });
+      const bg = Array(C).fill(null), fc = Array(C).fill(null), fw = Array(C).fill(null), ha = Array(C).fill(null);
+      PUNTOS.forEach((x, j) => { const v = rec.puntajes[x[0]]; bg[3 + j] = sc[v][0]; fc[3 + j] = sc[v][1]; fw[3 + j] = 'bold'; ha[3 + j] = 'center'; });
+      [[4 + N, rec.resultado], [6 + 2 * N, rec.resultadoChecklist]].forEach(([i, res]) => { bg[i] = col[res][0]; fc[i] = col[res][1]; fw[i] = 'bold'; });
+      sh.getRange(r, 1, 1, C).setBackgrounds([bg]).setFontColors([fc]).setFontWeights([fw]).setHorizontalAlignments([ha]);
     });
   } catch (e) {
     subidas.forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (x) {} });   // sin fotos huérfanas
@@ -774,7 +844,10 @@ function leerAud_() {
   if (n < 1) return [];
   return sh.getRange(2, HEAD.length, n, 1).getValues().map(r => { try { return JSON.parse(r[0]); } catch (e) { return null; } }).filter(Boolean);
 }
-function getRegistro(token) { sesion_(token, 'auditoria'); return { lista: leerAud_(), params: params_() }; }
+function getRegistro(token) {
+  const s = sesion_(token, 'auditoria');
+  return { lista: leerAud_(), params: params_(), acciones: s.perms.indexOf('acciones') >= 0 ? tAll_('Acciones') : null };
+}
 function eliminarAuditoria(token, id) {
   const s = sesion_(token, 'auditoria', true);
   id = String(id || '');
@@ -992,20 +1065,19 @@ function getKPIs(token, desde, hasta) {
   const s = sesion_(token, 'kpi');
   autoSync_();
   hasta = fechaOk_(hasta) || hoy_(); desde = fechaOk_(desde) || '2000-01-01';
-  const aud = leerAud_().filter(a => a.fecha >= desde && a.fecha <= hasta).map(a => {
-    const c = Object.assign({}, a); delete c.fotos; delete c.uid; return c; });
+  const audN = leerAud_().filter(a => a.fecha >= desde && a.fecha <= hasta).length;
   const acc = tAll_('Acciones');
   const hoy = hoy_();
   const todasF = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta);
   const ing = todasF.filter(x => tipoDe_(x) === 'entrada');
   const sal = todasF.filter(x => tipoDe_(x) === 'salida' && vivo_(x));
-  const dupIntentos = tAll_('Historial').filter(h => (h.accion === 'ingreso_duplicado_bloqueado' || h.accion === 'entrada_duplicada_bloqueada' || h.accion === 'salida_duplicada_bloqueada') && h.ts.slice(0, 10) >= desde && h.ts.slice(0, 10) <= hasta).length;
+  const dupIntentos = contados_('dup', desde, hasta);   // contador por mes (no se recorre el historial completo)
   const porDia = {}; ing.filter(x => x.estado !== 'anulado').forEach(x => { porDia[x.fecha] = (porDia[x.fecha] || 0) + 1; });
   const cierres = tAll_('Cierres').filter(c => c.fecha >= desde && c.fecha <= hasta).sort((a, b) => a.fecha.localeCompare(b.fecha));
   const desdeCierre = cierres.length ? cierres[0].fecha : (desde > '2000-01-01' ? desde : hasta.slice(0, 8) + '01');
   const alertas = alertasCierre_(cierres, desdeCierre, hasta);
   return {
-    desde: desde, hasta: hasta, auditorias: aud, params: params_(),
+    desde: desde, hasta: hasta, auditoriasN: audN, params: params_(),
     acciones: { abiertas: acc.filter(a => a.estado === 'abierta' || a.estado === 'en_curso').length,
       vencidas: acc.filter(a => (a.estado === 'abierta' || a.estado === 'en_curso') && a.vence && a.vence < hoy).length,
       resueltas: acc.filter(a => a.estado === 'resuelta').length, total: acc.length },
@@ -1242,11 +1314,25 @@ function kpiComercial_(todos, cfg, hasta, sync) {
 }
 
 /* =================== Historial =================== */
+/* El historial es cronológico y solo crece: se ubica el rango por búsqueda binaria sobre la columna de fecha
+   y se leen únicamente esas filas (no toda la hoja). */
+function histRango_(desde, hasta) {
+  const sh = tabla_('Historial'), n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  const ts = sh.getRange(2, 1, n, 1).getValues();
+  const fechaDe = i => { const v = ts[i][0]; return Utilities.formatDate(v instanceof Date ? v : new Date(String(v)), TZ, 'yyyy-MM-dd'); };
+  let lo = 0, hi = n;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (fechaDe(m) < desde) lo = m + 1; else hi = m; }
+  const ini = lo; hi = n;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (fechaDe(m) <= hasta) lo = m + 1; else hi = m; }
+  if (lo <= ini) return [];
+  return sh.getRange(ini + 2, TABLAS.Historial.length + 1, lo - ini, 1).getValues().map(r => { try { return JSON.parse(r[0]); } catch (e) { return null; } }).filter(Boolean);
+}
 function listarHistorial(token, desde, hasta, q) {
   sesion_(token, 'historial');
   hasta = fechaOk_(hasta) || hoy_(); desde = fechaOk_(desde) || hasta.slice(0, 8) + '01';
   q = txt_(q, 40).toLowerCase();
-  return tAll_('Historial').filter(h => { const d = Utilities.formatDate(new Date(h.ts), TZ, 'yyyy-MM-dd'); return d >= desde && d <= hasta; })
+  return histRango_(desde, hasta)
     .filter(h => !q || (h.usuario + ' ' + h.accion + ' ' + h.detalle + ' ' + h.ref).toLowerCase().indexOf(q) >= 0)
     .map(h => ({ ts: h.ts, usuario: h.usuario, accion: h.accion, resultado: h.resultado, ref: h.ref, detalle: h.detalle })).reverse().slice(0, 1000);
 }
@@ -1337,6 +1423,8 @@ function setParams(token, p) {
 }
 
 /* =================== Retención (una vez por día, en segundo plano) =================== */
+/* Corre colgada de un pedido de personal jerárquico, así que trabaja por lotes acotados: si queda pendiente, sigue al día siguiente. */
+const PURGA_LOTE = 20;
 function purgaDiaria_() {
   const hoy = hoy_();
   if (PROPS.getProperty('ULTIMA_PURGA') === hoy) return;
@@ -1346,17 +1434,17 @@ function purgaDiaria_() {
     PROPS.setProperty('ULTIMA_PURGA', hoy);
     const cfg = cfg_();
     const limIng = new Date(Date.now() - cfg.retencionIngresosDias * 86400000).toISOString().slice(0, 10);
-    let n = 0;
-    tAll_('Ingresos').filter(x => x.foto && x.fecha < limIng).forEach(x => {
+    const vencidas = tAll_('Ingresos').filter(x => x.foto && x.fecha < limIng);
+    vencidas.slice(0, PURGA_LOTE).forEach(x => {
       try { DriveApp.getFileById(x.foto).setTrashed(true); } catch (e) {}
-      x.foto = null; x.fotoPurgada = true; x.tieneFoto = false; tUpd_('Ingresos', 'id', x.id, x); n++;
+      x.foto = null; x.fotoPurgada = true; x.tieneFoto = false; tUpd_('Ingresos', 'id', x.id, x);
     });
     const limAud = new Date(); limAud.setMonth(limAud.getMonth() - cfg.retencionAuditoriasMeses);
     let m = 0;
-    const it = fotosAud_().getFiles();
-    while (it.hasNext()) { const f = it.next(); if (f.getDateCreated() < limAud) { f.setTrashed(true); m++; } }
-    PROPS.setProperty('PURGA_RES', JSON.stringify({ fecha: hoy, fotosIngreso: n, fotosAuditoria: m }));
+    const it = fotosAud_().searchFiles("createdDate < '" + Utilities.formatDate(limAud, 'UTC', "yyyy-MM-dd'T'HH:mm:ss") + "'");
+    while (it.hasNext() && m < PURGA_LOTE) { it.next().setTrashed(true); m++; }
+    PROPS.setProperty('PURGA_RES', JSON.stringify({ fecha: hoy, fotosIngreso: Math.min(vencidas.length, PURGA_LOTE), fotosAuditoria: m, pendientes: vencidas.length > PURGA_LOTE || it.hasNext() }));
   } finally { l.releaseLock(); }
   const r = JSON.parse(PROPS.getProperty('PURGA_RES') || '{}');
-  if (r.fecha === hoy && (r.fotosIngreso || r.fotosAuditoria)) log_(null, 'retencion_automatica', 'ok', '', 'Fotos de ingreso a papelera: ' + r.fotosIngreso + ' · fotos de auditoría: ' + r.fotosAuditoria);
+  if (r.fecha === hoy && (r.fotosIngreso || r.fotosAuditoria)) log_(null, 'retencion_automatica', 'ok', '', 'Fotos de ingreso a papelera: ' + r.fotosIngreso + ' · fotos de auditoría: ' + r.fotosAuditoria + (r.pendientes ? ' · quedan más para mañana' : ''));
 }
