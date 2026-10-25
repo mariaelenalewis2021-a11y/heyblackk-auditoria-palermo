@@ -34,7 +34,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural"]);
+const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -660,6 +660,27 @@ function vFichar(body){
     el("p",{class:"lead",text:"Usá el usuario y el PIN que te dio tu jefe. Nadie más puede ver tus registros."}), el("div",{class:"grid"}, u, p, err, b)));
   setTimeout(()=>u.focus(),60);
 }
+/* 3.7 · Contratación: días que trabaja + horario. Calcula al instante la carga por día, por semana y del mes en curso. */
+const DIAS_SEM = [[1,"Lu"],[2,"Ma"],[3,"Mi"],[4,"Ju"],[5,"Vi"],[6,"Sá"],[0,"Do"]];
+const txtMin = m => { const h = Math.floor(m/60), r = Math.round(m%60); return r ? `${h} h ${r} min` : `${h} h`; };
+function diasDelMes(dias){ const d = new Date(), y = d.getFullYear(), m = d.getMonth(), n = new Date(y, m+1, 0).getDate(); let c = 0; for (let i=1;i<=n;i++) if (dias.includes(new Date(y,m,i).getDay())) c++; return c; }
+function editorContrato(h, diasSuc){
+  h = h || {}; const sel = new Set(h.dias && h.dias.length ? h.dias : (h.entrada ? (diasSuc||[]) : (diasSuc||[1,2,3,4,5])));
+  const e1 = el("input",{type:"time",value:h.entrada||"","aria-label":"Hora de entrada"}), e2 = el("input",{type:"time",value:h.salida||"","aria-label":"Hora de salida"});
+  const calc = el("p",{class:"carga37",role:"status"});
+  const chips = el("div",{class:"dias37",role:"group","aria-label":"Días que trabaja"}, DIAS_SEM.map(([d,t])=>{ const b = el("button",{type:"button",class:"dia37"+(sel.has(d)?" on":""),"aria-pressed":String(sel.has(d)),text:t});
+    b.onclick = ()=>{ sel.has(d) ? sel.delete(d) : sel.add(d); b.classList.toggle("on", sel.has(d)); b.setAttribute("aria-pressed", String(sel.has(d))); upd(); }; return b; }));
+  const minDia = () => { if (!e1.value || !e2.value || e2.value <= e1.value) return 0; const [a,b]=e1.value.split(":").map(Number), [c,d]=e2.value.split(":").map(Number); return (c*60+d)-(a*60+b); };
+  const upd = () => { const m = minDia(), dias = [...sel];
+    calc.textContent = !e1.value && !e2.value ? "Cargá entrada y salida para calcular la carga horaria." : !m ? "⚠️ La salida tiene que ser después de la entrada." : !dias.length ? "⚠️ Elegí al menos un día." :
+      `${txtMin(m)} por día · ${txtMin(m*dias.length)} por semana · ≈ ${txtMin(m*diasDelMes(dias))} este mes (${diasDelMes(dias)} días, antes de feriados y vacaciones)`; };
+  e1.oninput = upd; e2.oninput = upd; upd();
+  return { el: el("div",{class:"grid contrato37"}, el("span",{class:"k",text:"Días que trabaja"}), chips,
+      el("div",{class:"grid2"}, el("label",{class:"f"},"Entra",e1), el("label",{class:"f"},"Sale",e2)), calc),
+    valor: () => (!e1.value && !e2.value) ? null : { entrada:e1.value, salida:e2.value, dias:[...sel] },
+    completo: () => !!(minDia() && sel.size) };
+}
+const contratoTxt = c => c ? `🕑 ${c.diasTxt} · ${c.entrada}–${c.salida} · ${txtMin(c.minDia)}/día · ${txtMin(c.minSemana)}/semana` : "";
 /* ----- Personal (jefes) ----- */
 /* L: lista ya cargada (después de un alta, baja, etc. se actualiza en el teléfono con lo que devolvió el servidor, sin volver a pedirla). */
 let SUCS = [];
@@ -680,16 +701,27 @@ async function vPersonal(body, L){
   const pin = el("input",{type:"password",inputmode:"numeric",maxlength:"4",placeholder:"PIN de 4 números",autocomplete:"new-password"});
   const ayudaPin = el("span",{class:"hint",text:"Empleados: 4 números. Evitá 1234, 0000 o fechas obvias."});
   rol.onchange = ()=>{ const L6 = rol.value!=="empleado"; pin.maxLength = L6?6:4; pin.placeholder = L6?"PIN de 6 números":"PIN de 4 números"; ayudaPin.textContent = L6?"Jefes y administración: 6 números.":"Empleados: 4 números. Evitá 1234, 0000 o fechas obvias."; };
+  const diasSuc = () => { const x = SUCS.find(z=>z.nombre===su.value); return x && x.dias ? x.dias : null; };
+  let ctr = editorContrato(null, diasSuc()); const ctrSlot = el("div",{}, ctr.el);
+  const sugerido = el("p",{class:"hint",hidden:true,text:"💡 Contratación propuesta con lo que ya informó la administración. Revisala y cambiala si hace falta."});
+  let tocado = false; ctrSlot.addEventListener("input", ()=>{ tocado = true; }); ctrSlot.addEventListener("click", e=>{ if (e.target.closest(".dia37")) tocado = true; });
+  const sugerir = async ()=>{ if (tocado || rol.value!=="empleado" || n.value.trim().length < 3) return;
+    let h = null; try{ h = await apiS("contratoSugerido", n.value, su.value); }catch(e){}
+    ctr = editorContrato(h ? Object.assign({}, h, {dias: h.dias || diasSuc()}) : null, diasSuc()); ctrSlot.replaceChildren(ctr.el); sugerido.hidden = !h; };
+  n.addEventListener("change", sugerir);
+  su.addEventListener("change", ()=>{ if (!tocado) sugerir(); });
   const b = el("button",{class:"btn primary",type:"submit",text:"➕ Dar de alta"});
   body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b,"Guardando…");
-      try{ const r = await apiS("altaEmpleado", {nombre:n.value, legajo:u.value, sector:s.value, fechaIngreso:fi.value, rol:rol.value, pin:pin.value, sucursal:su.value});
+      if (rol.value==="empleado" && !ctr.completo()){ unspin(b); return toast("Cargá la contratación: días que trabaja, hora de entrada y de salida."); }
+      try{ const r = await apiS("altaEmpleado", {nombre:n.value, legajo:u.value, sector:s.value, fechaIngreso:fi.value, rol:rol.value, pin:pin.value, sucursal:su.value, horario: ctr.valor()});
         pin.value=""; toast(`✅ ${r.user.nombre} dado/a de alta. Usuario: ${r.user.legajo.toLowerCase()}`);
         if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN generado"}), el("p",{class:"lead",text:"Comunicáselo en persona. No se vuelve a mostrar."}), el("div",{class:"big mono",text:r.pinInicial})));
         L.push(r.user); body.textContent=""; vPersonal(body, L); }
       catch(x){ unspin(b); toast(msgErr(x)); } }},
     el("h2",{text:"Alta de personal"}), el("p",{class:"lead",text:"Asigná el nombre, el usuario y el PIN con el que va a fichar. Solo se piden los datos necesarios."}),
     el("div",{class:"grid2"}, el("label",{class:"f"},"Nombre y apellido",n), el("label",{class:"f"},"Usuario",u), el("label",{class:"f"},"Sector o puesto",s),
-      el("label",{class:"f"},"Fecha de ingreso",fi), el("label",{class:"f"},"Sucursal",su), el("label",{class:"f"},"Tipo de acceso",rol), el("label",{class:"f"},"PIN",pin,ayudaPin)), b));
+      el("label",{class:"f"},"Fecha de ingreso",fi), el("label",{class:"f"},"Sucursal",su), el("label",{class:"f"},"Tipo de acceso",rol), el("label",{class:"f"},"PIN",pin,ayudaPin)),
+    el("h3",{text:"Contratación"}), sugerido, ctrSlot, b));
   // Listado
   const q = el("input",{type:"search",placeholder:"Buscar por nombre o usuario"}), fe = el("select",{}, el("option",{value:"activo",text:"Activos"}), el("option",{value:"inactivo",text:"Dados de baja"}), el("option",{value:"",text:"Todos"}));
   const lista = el("div",{class:"plist"});
@@ -714,7 +746,7 @@ function fichaPersona(x, body, L){
           if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN generado"}), el("p",{class:"lead",text:"Comunicáselo en persona."}), el("div",{class:"big mono",text:r.pinInicial})));
           else toast("✅ PIN actualizado"); recargar({bloqueado:false}); }catch(e){ unspin(ok); toast(msgErr(e)); } };
     }}));
-    acc.append(el("button",{class:"btn sm",type:"button",text:"🏬 Sucursal y horas",onclick:()=>editarSucHoras(x, recargar)}));
+    acc.append(el("button",{class:"btn sm",type:"button",text:"🕑 Contratación",onclick:()=>editarSucHoras(x, recargar)}));
     acc.append(el("button",{class:"btn sm",type:"button",text:x.registraIngreso?"⏸ No ficha":"▶ Ficha",title:"Habilitar o no la fichada",onclick:async e=>{ const bt=e.currentTarget; spinBtn(bt); try{ recargar(await apiS("editarEmpleado",x.id,{registraIngreso:!x.registraIngreso})); }catch(err){ unspin(bt); toast(msgErr(err)); } }}));
     if (!yo) acc.append(el("button",{class:"btn sm danger",type:"button",text:"⛔ Dar de baja",onclick:async()=>{
       const f = el("input",{type:"date",value:hoy()}), mo = el("input",{type:"text",maxlength:"200",placeholder:"Motivo (opcional)"}), ok = el("button",{class:"btn danger",type:"button",text:"Confirmar baja"});
@@ -732,7 +764,8 @@ function fichaPersona(x, body, L){
   if (esAdmin && !yo && x.estado==="activo") acc.append(el("button",{class:"btn sm",type:"button",text:"🛡️ Rol y permisos",onclick:()=>editarPermisos(x, recargar)}));
   return el("div",{class:"persona"+(x.estado!=="activo"?" off":"")},
     el("div",{class:"pinfo"}, el("b",{text:x.nombre}), el("span",{class:"mono",text:"usuario: "+x.legajo.toLowerCase()}),
-      el("span",{text:[rolTxt, "🏬 "+(x.sucursal||"Palermo"), x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):"", x.horasEsperadas?`${x.horasEsperadas.horas} h por ${x.horasEsperadas.tipo==="semana"?"semana":"día"}`:"", x.horario?`${x.horario.entrada} a ${x.horario.salida}`:""].filter(Boolean).join(" · ")}),
+      el("span",{text:[rolTxt, "🏬 "+(x.sucursal||"Palermo"), x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):"", x.contrato ? "" : x.horasEsperadas?`${x.horasEsperadas.horas} h por ${x.horasEsperadas.tipo==="semana"?"semana":"día"}`:""].filter(Boolean).join(" · ")}),
+      x.contrato ? el("span",{class:"hint",text:contratoTxt(x.contrato)}) : (x.estado==="activo" && x.registraIngreso ? el("span",{class:"pill warn",text:"Sin contratación cargada"}) : null),
       x.estado!=="activo" ? el("span",{class:"pill bad",text:`Baja ${fmtF(x.fechaBaja)}${x.bajaPor?" · por "+x.bajaPor:""}${x.motivoBaja?" · "+x.motivoBaja:""}`}) :
         el("span",{class:"row",style:"gap:6px"}, el("span",{class:"pill ok",text:"Activo"}), x.registraIngreso?el("span",{class:"pill",text:"Ficha"}):null, x.bloqueado?el("span",{class:"pill bad",text:"Bloqueado: asignar PIN"}):null)),
     acc);
@@ -740,18 +773,23 @@ function fichaPersona(x, body, L){
 /* 3.4: sucursal de la persona y horas esperadas (informativas, para comparar con lo trabajado). */
 function editarSucHoras(x, recargar){
   const su = el("select",{"aria-label":"Sucursal"}, ...(SUCS.length ? SUCS : [{nombre:x.sucursal||"Palermo"}]).map(s=>el("option",{value:s.nombre,text:s.nombre+(s.incompleta&&s.incompleta.length?" (incompleta)":""),selected:s.nombre===(x.sucursal||"Palermo")})));
-  const he = x.horasEsperadas||{}, tp = el("select",{"aria-label":"Tipo de horas esperadas"}, el("option",{value:"dia",text:"Por día de apertura",selected:he.tipo!=="semana"}), el("option",{value:"semana",text:"Por semana",selected:he.tipo==="semana"}));
-  const hs = el("input",{type:"number",min:"0",max:"80",step:"0.5",value:he.horas||"",placeholder:"Vacío = sin dato","aria-label":"Horas esperadas"});
-  const ho = x.horario||{}, he1 = el("input",{type:"time",value:ho.entrada||"","aria-label":"Horario de entrada"}), he2 = el("input",{type:"time",value:ho.salida||"","aria-label":"Horario de salida"});
+  const sd = (SUCS.find(z=>z.nombre===(x.sucursal||"Palermo"))||{}).dias || null;
+  const ctr = editorContrato(x.horario ? Object.assign({}, x.horario, {dias: x.horario.dias || (x.contrato && x.contrato.dias) || sd}) : null, sd);
+  const he = x.horasEsperadas||{}, sinHor = !x.horario && he.tipo==="semana";
+  const hs = el("input",{type:"number",min:"0",max:"80",step:"0.5",value:sinHor?he.horas:"",placeholder:"Solo si no tiene horario fijo","aria-label":"Horas por semana"});
   const va = el("input",{type:"number",min:"0",max:"60",step:"1",value:x.vacacionesAnuales||"","aria-label":"Días de vacaciones por año"});
   const ok = el("button",{class:"btn primary",type:"button",text:"Guardar"});
-  const m = modal(el("div",{class:"grid"}, el("h2",{text:"Sucursal y horas · "+x.nombre}), el("label",{class:"f"},"Sucursal",su),
-    el("div",{class:"grid2"}, el("label",{class:"f"},"Horas pactadas",tp), el("label",{class:"f"},"Cantidad de horas",hs)),
-    el("div",{class:"grid2"}, el("label",{class:"f"},"Horario habitual: entrada",he1), el("label",{class:"f"},"Horario habitual: salida",he2)),
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:"Contratación · "+x.nombre}), el("label",{class:"f"},"Sucursal",su),
+    ctr.el,
+    el("details",{open:sinHor||null}, el("summary",{text:"No tiene horario fijo (solo horas por semana)"}), el("label",{class:"f"},"Horas por semana",hs)),
     el("label",{class:"f"},"Días de vacaciones por año (para el saldo)",va),
-    el("p",{class:"hint",text:"Son datos informativos: se usan para comparar con lo trabajado y para las alertas del Panorama RRHH (tardanzas con la tolerancia configurada), sin calcular pagos ni descontar nada."}),
+    el("p",{class:"hint",text:"Con esto la app espera a la persona solo los días que le tocan, calcula su carga por día, semana y mes, y la compara con lo que ficha. Es informativo: no calcula pagos."}),
     el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
-  ok.onclick = async ()=>{ spinBtn(ok,"Guardando…"); try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horasEsperadas: Number(hs.value)>0 ? {tipo:tp.value, horas:Number(hs.value)} : null, horario: he1.value||he2.value ? {entrada:he1.value, salida:he2.value} : null, vacacionesAnuales: Number(va.value)>0 ? Number(va.value) : null})); m.cerrar(); toast("✅ Guardado"); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+  ok.onclick = async ()=>{
+    const hor = ctr.valor(); if (hor && !ctr.completo()) return toast("Revisá la contratación: días, entrada y salida.");
+    spinBtn(ok,"Guardando…");
+    try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horario: hor, horasEsperadas: hor ? null : (Number(hs.value)>0 ? {tipo:"semana", horas:Number(hs.value)} : null), vacacionesAnuales: Number(va.value)>0 ? Number(va.value) : null})); m.cerrar(); toast("✅ Contratación guardada"); }
+    catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
 function editarPermisos(x, recargar){
   const NOM = {ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
@@ -794,6 +832,11 @@ async function jornada(body, j){
   card.append(el("div",{class:"estado-actual "+(j.estado.tipo==="entrada"?"adentro":j.estado.tipo==="salida"?"afuera":"")}, el("span",{class:"k",text:"Estado actual"}), el("b",{text:j.estado.texto})));
   if (j.pares && j.pares.length) card.append(el("div",{class:"pares"}, el("span",{class:"k",text:"Hoy"}),
     el("span",{class:"mono",text:paresTxt(j.pares)}), j.minutosHoy ? el("b",{text:"Total "+horas(j.minutosHoy)}) : null));
+  if (j.contrato){ const c = j.contrato, M = c.mes || {};   // 3.7: su horario, lo de hoy y el avance del mes contra su carga
+    card.append(el("div",{class:"contrato-hoy"},
+      el("span",{class:"k",text:c.hoyLeToca ? `Hoy te toca de ${c.entrada} a ${c.salida} (${hm(c.minDia)} h)` : `Hoy no te toca · tu horario: ${c.diasTxt} de ${c.entrada} a ${c.salida}`}),
+      c.hoyLeToca ? el("div",{class:"barra-hoy"}, el("i",{style:`width:${Math.min(100, Math.round((c.minutosHoy||0)/Math.max(1,c.minDia)*100))}%`})) : null,
+      M.carga!=null ? el("span",{class:"hint",text:`Este mes: ${hm(M.trabajado)} h trabajadas de ${hm(M.carga)} h de tu carga (${M.diasCarga} días)${M.esperadoHastaHoy!=null?` · a hoy deberías llevar ${hm(M.esperadoHastaHoy)} h`:""}.`}) : null)); }
   if ((j.manualesPendientes||[]).length) card.append(el("div",{class:"notice warn",text:`✋ ${j.manualesPendientes.map(m=>`${m.tipo==="salida"?"Salida":"Entrada"} manual de las ${m.hora}`).join(" y ")}: pendiente de aprobación de un jefe.`}));
   const incompleta = (j.sucursal.incompleta||[]).length>0;
   if (incompleta) card.append(el("div",{class:"notice bad",text:`⚠️ Tu sucursal (${j.sucursal.nombre}) no tiene cargado: ${j.sucursal.incompleta.join(", ")}. Hasta que un jefe lo complete no se puede fichar con ubicación. Podés pedir un fichaje manual.`}));
@@ -1076,7 +1119,8 @@ function tablaHorasEmpleado(e, r, jefe, onCorregir){
   if (e.vacaciones) avisos.push(`${e.vacaciones} día(s) de vacaciones y ${e.feriados} feriado(s): no cuentan como ausencia.`);
   else if (e.feriados) avisos.push(`${e.feriados} feriado(s): no cuentan como ausencia.`);
   if (avisos.length) box.append(el("ul",{class:"hint lista-avisos"}, avisos.map(a=>el("li",{text:a}))));
-  if (e.diferencia!=null) box.append(el("p",{class:"hint",text:`Esperado: ${e.horasEsperadas.horas} h por ${e.horasEsperadas.tipo==="semana"?"semana":"día de apertura"} (sin vacaciones ni feriados). La diferencia es informativa: no calcula pagos ni horas extra.`}));
+  if (e.contrato) box.append(el("p",{class:"hint",text:`Contratación: ${e.contrato.diasTxt} de ${e.contrato.entrada} a ${e.contrato.salida} (${hm(e.contrato.minDia)} h por día, ${hm(e.contrato.minSemana)} h por semana)${e.cargaMes?` · carga de ${e.cargaMes.mes.split("-").reverse().join("/")}: ${hm(e.cargaMes.minutos)} h en ${e.cargaMes.dias} días (sin feriados ni vacaciones)`:""}. Lo esperado cuenta solo los días que le tocan; es informativo, no calcula pagos.`}));
+  else if (e.diferencia!=null) box.append(el("p",{class:"hint",text:`Esperado: ${e.horasEsperadas.horas} h por ${e.horasEsperadas.tipo==="semana"?"semana":"día de apertura"} (sin vacaciones ni feriados). La diferencia es informativa: no calcula pagos ni horas extra.`}));
   if (r.redondeo>1) box.append(el("p",{class:"hint",text:`Horas por día redondeadas a ${r.redondeo} minutos.`}));
   if (e.semanas.length){ const tw = el("tbody"); e.semanas.forEach(w=>tw.append(el("tr",{}, el("td",{class:"mono",text:"Semana del "+fmtF(w.semana).slice(0,5)}), el("td",{class:"n",text:hm(w.minutos)}), el("td",{class:"n",text:w.esperado==null?"–":hm(w.esperado)}), el("td",{class:"n",text:w.esperado==null?"–":difTxt(w.minutos-w.esperado)}))));
     box.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, el("th",{text:"Semana"}), el("th",{class:"n",text:"Horas"}), el("th",{class:"n",text:"Esperado"}), el("th",{class:"n",text:"Diferencia"}))), tw))); }
@@ -1210,7 +1254,7 @@ function vIngresos(main){
   tabs(main, T, "hoy", (id, body)=>
     ({hoy:vHoyFich, pendientes:vPendientesFich, horas:vHorasJefes, rrhh:vPanoramaRRHH, fichadas:vFichadas, sucursales:vSucursales, borrar:vBorradoFich})[id](body));
 }
-const EST_HOY = {adentro:["Adentro","ok"], salio:["Salió",""], falta:["Sin fichaje","bad"], vacaciones:["De vacaciones","ok"], feriado:["Feriado","fer-l"], no_abre:["No abre hoy",""], manual_pendiente:["Manual pendiente","warn"], revisar:["Revisar secuencia","warn"]};
+const EST_HOY = {adentro:["Adentro","ok"], salio:["Salió",""], falta:["Sin fichaje","bad"], vacaciones:["De vacaciones","ok"], feriado:["Feriado","fer-l"], no_abre:["No abre hoy",""], no_le_toca:["Hoy no le toca",""], manual_pendiente:["Manual pendiente","warn"], revisar:["Revisar secuencia","warn"]};
 async function vHoyFich(body){
   body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando el día…"));
   let P; try{ P = await apiS("panelFichajesHoy"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
@@ -2068,7 +2112,7 @@ function pintarPanorama(res, P, recargar){
       el("td",{class:"n",text:r.vacacionesTomadas||""}), el("td",{class:"n",text:v(r.saldoVacaciones)}))));
     res.append(el("div",{class:"card"}, el("h3",{text:"Resumen por persona"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"},
       el("thead",{}, el("tr",{}, ...["Persona","Sucursal","Horas / pactadas","Cumplimiento","Faltas","Tardanzas","Incompletos","Vacaciones tomadas","Saldo de vacaciones"].map((x,i)=>el("th",{class:i>1?"n":null,text:x})))), tb)),
-      el("p",{class:"hint",text:"Las horas pactadas, el horario (para tardanzas) y los días de vacaciones por año se cargan en Personal → «Sucursal y horas»."})));
+      el("p",{class:"hint",text:"La contratación de cada persona (días, horario y carga horaria) y los días de vacaciones por año se cargan en Personal → «Contratación»."})));
   }
   res.append(editorUmbrales(P.umbrales, recargar));
 }
