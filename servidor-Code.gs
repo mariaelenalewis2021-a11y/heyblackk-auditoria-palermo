@@ -788,6 +788,7 @@ function clima37_() {
       aviso = { fecha: ll.fecha, cuando: cuando, prob: ll.prob, mm: ll.mm,
         texto: cuando + ' se espera ' + ll.desc + (ll.prob != null ? ' (' + ll.prob + ' % de probabilidad)' : '') + ': la venta del local puede ser menor' +
           (imp && imp.pct < 0 ? ' (en los días de lluvia de los últimos meses vendiste ' + Math.abs(imp.pct) + ' % menos que un día seco)' : '') + '.',
+        dato: imp && imp.pct >= 0 ? 'Dato a favor: en los últimos 6 meses, los ' + imp.diasLluvia + ' días de lluvia vendiste ' + imp.pct + ' % más que un día seco del mismo día de la semana; tené stock y personal completos.' : '',
         accion: 'Reforzá WhatsApp, Instagram y la venta online ese día, y avisá a las clientas habituales de alguna promo o novedad.' };
     }
     const out = { lugar: P.nombre, dias: dias.slice(0, 4), aviso: aviso, impacto: imp, fuente: 'Open-Meteo', ts: new Date().toISOString() };
