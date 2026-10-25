@@ -34,9 +34,9 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes"]);
+const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe"]);
+const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -92,6 +92,8 @@ const toast = t => { const x=$("toast"); x.textContent=t; x.hidden=false; clearT
 const fechaLocal = d => { const x=new Date(d); x.setMinutes(x.getMinutes()-x.getTimezoneOffset()); return x.toISOString().slice(0,10); };
 const hoy = () => fechaLocal(new Date());
 const diasAtras = n => { const d=new Date(); d.setDate(d.getDate()-n); return fechaLocal(d); };
+/* Fecha y hora siempre en 24 h y en hora de Buenos Aires (sin "a. m./p. m." ambiguos). */
+const fechaHora = d => new Date(d).toLocaleString("es-AR",{timeZone:"America/Argentina/Buenos_Aires",hour12:false,day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
 const fmtF = s => s ? String(s).slice(0,10).split("-").reverse().join("/") : "";
 const fmt1 = n => (n==null||isNaN(n)) ? "–" : Number(n).toFixed(1).replace(".",",");
 const pct = n => (n==null||isNaN(n)) ? "–" : Math.round(n*100)+"%";
@@ -175,15 +177,32 @@ function elegirFoto(camaraFrontal){
     document.body.append(i); i.click();
   });
 }
+/* 3.5 · Ubicación. IMPORTANTE: se llama de forma SINCRÓNICA dentro del toque del botón (gesto de la persona), antes de cualquier await,
+   para que Chrome muestre el pedido de permiso. Errores separados: 1 = permiso denegado, 2 = no disponible / GPS apagado, 3 = tiempo agotado. */
 function ubicacion(){
   return new Promise(res=>{
-    if (!navigator.geolocation) return res({error:"no_disponible"});
-    let listo=false; const fin=v=>{ if(!listo){ listo=true; res(v); } };
-    setTimeout(()=>fin({error:"tiempo_agotado"}), 13000);
-    // 3.4: una sola lectura en este momento (sin seguimiento y sin reutilizar una ubicación vieja).
-    navigator.geolocation.getCurrentPosition(p=>fin({lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy}),
-      e=>fin({error: e.code===1?"sin_permiso":e.code===3?"tiempo_agotado":"no_disponible"}), {enableHighAccuracy:true,timeout:12000,maximumAge:0});
+    const amb = entornoGeo();
+    if (!amb.seguro) return res({error:"inseguro", amb});
+    if (!navigator.geolocation) return res({error:"no_soportado", amb});
+    let listo=false; const fin=v=>{ if(!listo){ listo=true; clearTimeout(t); res(v); } };
+    const t = setTimeout(()=>fin({error:"tiempo_agotado", codigo:3, amb}), 16500);   // respaldo por si el navegador nunca responde
+    try{
+      navigator.geolocation.getCurrentPosition(p=>{ lsSet("hb36_geo_ok",1); fin({lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy}); },
+        e=>fin({error: e.code===1?"sin_permiso":e.code===3?"tiempo_agotado":"no_disponible", codigo:e.code, amb}),
+        {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+    }catch(x){ fin({error:"no_disponible", codigo:2, amb}); }
   });
+}
+/* Diagnóstico del entorno: página segura (https), dentro de un iframe, navegador interno de otra app (WebView de Instagram, Facebook, WhatsApp…). */
+function entornoGeo(){
+  const ua = navigator.userAgent || "";
+  let iframe = false; try{ iframe = window.self !== window.top; }catch(e){ iframe = true; }
+  const webview = /; wv\)|FBAN|FBAV|FB_IAB|Instagram|Line\/|WhatsApp|Twitter|TikTok|musical_ly|Snapchat|GSA\//.test(ua);
+  return { seguro: window.isSecureContext !== false, iframe, webview, android: /android/i.test(ua), ios: /iphone|ipad|ipod/i.test(ua) };
+}
+/** Estado del permiso de ubicación ("granted" | "prompt" | "denied" | null si el navegador no lo informa). Solo para diagnóstico. */
+async function estadoPermisoGeo(){
+  try{ if (!navigator.permissions || !navigator.permissions.query) return null; const r = await navigator.permissions.query({name:"geolocation"}); return r.state || null; }catch(e){ return null; }
 }
 /* Miniatura de una foto privada: se pide al servidor con la sesión y se muestra; si falla, se informa. */
 function miniFoto(fn, id, titulo){
@@ -214,6 +233,7 @@ function route(){
   } else { ++S.nav; pintar(); }
 }
 function pintarVista(id){
+  if (S.view !== id) VOZ.detener();   // 3.6: al cambiar de sección se corta el audio anterior
   S.view = id; window.scrollTo(0,0);
   $("nav-home").hidden = id==="home";
   $("btn-salir").hidden = id==="home" || !S.user;   // en el panel, "Cerrar sesión" está en la fila de sesión
@@ -227,7 +247,7 @@ function pintarVista(id){
   if (id==="otros") return vOtros(main);
   if (!S.user) return loginCard(main, "Ingresá con tu usuario y PIN para abrir este módulo.");
   if (!puedeVer(m)) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
-  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones}[id];
+  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, produccion:vProduccion}[id];
   V(main);
 }
 addEventListener("hashchange", route);
@@ -377,6 +397,8 @@ const ICONOS = {
   salir: '<path d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10"/><path d="M15 8l4 4-4 4M19 12H9"/>',
   vacaciones: '<path d="M3 20h18"/><path d="M12 20V9"/><path d="M4.5 9.5a7.5 7.5 0 0 1 15 0z"/><path d="M12 2.5V4"/><path d="M12 20c0 0-3 .5-4 2"/>',
   feriado: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/><path d="m10.5 16 1.5-3 1.5 3M10 15.5h4"/>',
+  clientes: '<path d="M3 8l9-4 9 4-9 4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/>',
+  produccion: '<path d="M4 20V10l5 3V10l5 3V6h6v14z"/><path d="M8 17h2M13 17h2"/>',
   audio: '<path d="M4 10v4h3l4 3.5v-11L7 10z"/><path d="M15 9.5a3.5 3.5 0 0 1 0 5"/><path d="M17.5 7a7 7 0 0 1 0 10"/>'
 };
 /* Íconos: trazos fijos definidos arriba (no son datos), por eso se cargan con innerHTML sobre un SVG propio. */
@@ -396,6 +418,8 @@ const MODULOS = [
   {id:"cierre",    t:"Cierre diario", d:"Cierres de caja de la planilla.", c:"#EA580C", perm:"cierre"},
   {id:"rrhh",      t:"Novedades RR. HH.", d:"Llegadas tarde y ausencias.", c:"#DB2777", perm:"rrhh"},
   {id:"vacaciones",t:"Vacaciones", d:"Solicitudes del equipo.", c:"#0891B2", perm:"vacaciones"},
+  {id:"clientes",  t:"Clientes y pedidos", d:"Qué pidió cada cliente, qué se entregó y qué falta.", c:"#B45309", perm:"clientes"},
+  {id:"produccion",t:"Producción", d:"Planificado, ingresado, talleres y lo que falta fabricar.", c:"#4F46E5", perm:"produccion"},
   {id:"otros",     t:"Otros", d:"Instalar la app y cambiar tu PIN.", c:"#CA8A04", perm:null},
   {id:"config",    t:"Configuración", d:"Ubicación, objetivos y alertas.", c:"#111113", perm:"config"}
 ];
@@ -423,7 +447,6 @@ function chipDe(id, R){
   if (id==="auditoria"){
     if (R.acciones && R.acciones.vencidas) return al(plural(R.acciones.vencidas, "1 acción vencida", "% acciones vencidas"));
     if (R.auditoria) return ok(`${fmtF(R.auditoria.fecha).slice(0,5)}: ${R.auditoria.resultado}`);
-    if (R.auditoria===null) return ok("Sin auditorías");
   }
   if (id==="kpi" && R.mes){
     if (R.mes.objetivo && R.mes.total) return ok(`${Math.round(R.mes.total/R.mes.objetivo*100)}% del objetivo`);
@@ -432,11 +455,11 @@ function chipDe(id, R){
   }
   if (id==="cierre" && "diasSinCierre" in R){
     if (R.diasSinCierre) return al(plural(R.diasSinCierre, "1 día sin cierre", "% días sin cierre"));
-    return ok(R.cierre ? "Al día ("+fmtF(R.cierre.fecha).slice(0,5)+")" : "Sin cierres");
+    return R.cierre ? ok("Al día ("+fmtF(R.cierre.fecha).slice(0,5)+")") : null;
   }
-  if (id==="historial" && R.historialHoy!=null) return ok(plural(R.historialHoy, "1 evento hoy", "% eventos hoy"));
-  if (id==="rrhh" && R.rrhh) return R.rrhh.abiertas ? al(plural(R.rrhh.abiertas, "1 abierta", "% abiertas")) : ok("Sin novedades");
-  if (id==="vacaciones" && R.vacaciones) return R.vacaciones.pendientes ? {t:plural(R.vacaciones.pendientes, "1 pendiente", "% pendientes"), alerta:true, rojo:true} : ok("Sin pendientes");
+  if (id==="historial" && R.historialHoy) return ok(plural(R.historialHoy, "1 evento hoy", "% eventos hoy"));
+  if (id==="rrhh" && R.rrhh) return R.rrhh.abiertas ? al(plural(R.rrhh.abiertas, "1 abierta", "% abiertas")) : null;
+  if (id==="vacaciones" && R.vacaciones) return R.vacaciones.pendientes ? {t:plural(R.vacaciones.pendientes, "1 pendiente", "% pendientes"), alerta:true, rojo:true} : null;
   return null;
 }
 function chipEl(id, R, bloqueada){
@@ -479,7 +502,7 @@ function tiraHoy(R){
   if (R.correccionesPendientes) fila("Correcciones de fichada", plural(R.correccionesPendientes, "1 por aprobar", "% por aprobar"), true);
   if (R.acciones && R.acciones.vencidas) fila("Acciones correctivas", plural(R.acciones.vencidas, "1 vencida", "% vencidas"), true);
   if (R.vacaciones && R.vacaciones.pendientes) fila("Vacaciones por resolver", plural(R.vacaciones.pendientes, "1 solicitud", "% solicitudes") + (R.vacaciones.demoradas ? ` · ${R.vacaciones.demoradas} con más de 3 días` : ""), true);
-  if (!datos.children.length) fila("Hoy", "Sin novedades por ahora");
+  if (!datos.children.length){ box.hidden = true; return box; }   // 3.5: si no hay nada para informar, solo queda el saludo con el nombre
   box.append(datos);
   return box;
 }
@@ -593,7 +616,8 @@ function vEmpleados(main){
   const items = [["fichar","📸 Fichar entrada / salida"], ["vacaciones","🏖️ Vacaciones"]];
   if (S.user && tiene("personal")) items.push(["personal","🗂️ Personal (altas y bajas)"]);
   else items.push(["personal","🗂️ Personal (jefes)"]);
-  tabs(main, items, "fichar", (id, body)=> id==="fichar" ? vFichar(body) : id==="vacaciones" ? vVacacionesEmp(body) : (S.user && tiene("personal") ? vPersonal(body) :
+  if (S.user && S.user.rol==="admin") items.push(["permisos","🔐 Permisos de jefes"]);   // 3.6: solo administración
+  tabs(main, items, "fichar", (id, body)=> id==="fichar" ? vFichar(body) : id==="vacaciones" ? vVacacionesEmp(body) : id==="permisos" ? vPermisosJefes(body) : (S.user && tiene("personal") ? vPersonal(body) :
     S.user ? body.append(el("div",{class:"card empty",text:"🔒 Solo jefes y administración pueden gestionar el personal."})) : loginCard(body,"Solo jefes: ingresá con tu usuario y PIN de 6 números.",()=>route())));
 }
 
@@ -684,7 +708,7 @@ function fichaPersona(x, body, L){
   if (esAdmin && !yo && x.estado==="activo") acc.append(el("button",{class:"btn sm",type:"button",text:"🛡️ Rol y permisos",onclick:()=>editarPermisos(x, recargar)}));
   return el("div",{class:"persona"+(x.estado!=="activo"?" off":"")},
     el("div",{class:"pinfo"}, el("b",{text:x.nombre}), el("span",{class:"mono",text:"usuario: "+x.legajo.toLowerCase()}),
-      el("span",{text:[rolTxt, "🏬 "+(x.sucursal||"Palermo"), x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):"", x.horasEsperadas?`${x.horasEsperadas.horas} h por ${x.horasEsperadas.tipo==="semana"?"semana":"día"}`:""].filter(Boolean).join(" · ")}),
+      el("span",{text:[rolTxt, "🏬 "+(x.sucursal||"Palermo"), x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):"", x.horasEsperadas?`${x.horasEsperadas.horas} h por ${x.horasEsperadas.tipo==="semana"?"semana":"día"}`:"", x.horario?`${x.horario.entrada} a ${x.horario.salida}`:""].filter(Boolean).join(" · ")}),
       x.estado!=="activo" ? el("span",{class:"pill bad",text:`Baja ${fmtF(x.fechaBaja)}${x.bajaPor?" · por "+x.bajaPor:""}${x.motivoBaja?" · "+x.motivoBaja:""}`}) :
         el("span",{class:"row",style:"gap:6px"}, el("span",{class:"pill ok",text:"Activo"}), x.registraIngreso?el("span",{class:"pill",text:"Ficha"}):null, x.bloqueado?el("span",{class:"pill bad",text:"Bloqueado: asignar PIN"}):null)),
     acc);
@@ -694,12 +718,16 @@ function editarSucHoras(x, recargar){
   const su = el("select",{"aria-label":"Sucursal"}, ...(SUCS.length ? SUCS : [{nombre:x.sucursal||"Palermo"}]).map(s=>el("option",{value:s.nombre,text:s.nombre+(s.incompleta&&s.incompleta.length?" (incompleta)":""),selected:s.nombre===(x.sucursal||"Palermo")})));
   const he = x.horasEsperadas||{}, tp = el("select",{"aria-label":"Tipo de horas esperadas"}, el("option",{value:"dia",text:"Por día de apertura",selected:he.tipo!=="semana"}), el("option",{value:"semana",text:"Por semana",selected:he.tipo==="semana"}));
   const hs = el("input",{type:"number",min:"0",max:"80",step:"0.5",value:he.horas||"",placeholder:"Vacío = sin dato","aria-label":"Horas esperadas"});
+  const ho = x.horario||{}, he1 = el("input",{type:"time",value:ho.entrada||"","aria-label":"Horario de entrada"}), he2 = el("input",{type:"time",value:ho.salida||"","aria-label":"Horario de salida"});
+  const va = el("input",{type:"number",min:"0",max:"60",step:"1",value:x.vacacionesAnuales||"","aria-label":"Días de vacaciones por año"});
   const ok = el("button",{class:"btn primary",type:"button",text:"Guardar"});
   const m = modal(el("div",{class:"grid"}, el("h2",{text:"Sucursal y horas · "+x.nombre}), el("label",{class:"f"},"Sucursal",su),
-    el("div",{class:"grid2"}, el("label",{class:"f"},"Horas esperadas",tp), el("label",{class:"f"},"Cantidad de horas",hs)),
-    el("p",{class:"hint",text:"Las horas esperadas son informativas: se muestra la diferencia con lo trabajado, sin calcular pagos ni horas extra."}),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Horas pactadas",tp), el("label",{class:"f"},"Cantidad de horas",hs)),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Horario habitual: entrada",he1), el("label",{class:"f"},"Horario habitual: salida",he2)),
+    el("label",{class:"f"},"Días de vacaciones por año (para el saldo)",va),
+    el("p",{class:"hint",text:"Son datos informativos: se usan para comparar con lo trabajado y para las alertas del Panorama RRHH (tardanzas con la tolerancia configurada), sin calcular pagos ni descontar nada."}),
     el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
-  ok.onclick = async ()=>{ spinBtn(ok,"Guardando…"); try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horasEsperadas: Number(hs.value)>0 ? {tipo:tp.value, horas:Number(hs.value)} : null})); m.cerrar(); toast("✅ Guardado"); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+  ok.onclick = async ()=>{ spinBtn(ok,"Guardando…"); try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horasEsperadas: Number(hs.value)>0 ? {tipo:tp.value, horas:Number(hs.value)} : null, horario: he1.value||he2.value ? {entrada:he1.value, salida:he2.value} : null, vacacionesAnuales: Number(va.value)>0 ? Number(va.value) : null})); m.cerrar(); toast("✅ Guardado"); }catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
 function editarPermisos(x, recargar){
   const NOM = {ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
@@ -754,10 +782,16 @@ async function jornada(body, j){
     const bE = mk("entrada"), bS = mk("salida");
     card.append(el("div",{class:"fbtns"}, bE, bS),
       el("p",{class:"aviso",id:"fichar-ayuda",text: j.siguiente==="entrada" ? "Te toca fichar la ENTRADA." : "Te toca fichar la SALIDA."}),
-      el("p",{class:"aviso",text:"📍 Al tocar el botón se pide la ubicación del teléfono una sola vez, para validar que estés en tu sucursal."+(j.fotoObligatoria?" 📷 Después te sacás la foto.":"")}));
+      el("p",{class:"aviso",text:"📍 Al tocar el botón se pide la ubicación del teléfono una sola vez, para validar que estés en tu sucursal."+(j.fotoObligatoria?" 📷 Después te sacás la foto.":"")}),
+      botonProbar(body));
     if (incompleta) card.append(el("button",{class:"btn",type:"button",text:"✋ Solicitar fichaje manual",onclick:()=>formManual(body, j.siguiente, {motivo:"sucursal_incompleta", sucursal:j.sucursal.nombre, faltan:j.sucursal.incompleta}, null)}));
   }
   if (j.vacacionesNovedades) card.append(el("div",{class:"notice ok"}, `📬 ${j.vacacionesNovedades===1?"Tenés 1 solicitud de vacaciones resuelta":"Tenés "+j.vacacionesNovedades+" solicitudes de vacaciones resueltas"}. `, el("button",{class:"btn sm",type:"button",text:"Ver",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }})));
+  if (j.habilitado && !j.abiertaAnterior) estadoPermisoGeo().then(p=>{ if (!card.isConnected) return;
+    const amb = entornoGeo();
+    if (p==="denied" || amb.webview || amb.iframe) bloqueAyudaGeo({error: amb.webview?"no_soportado":"sin_permiso", amb}, true).then(b=>{ if (card.isConnected) card.insertBefore(b, card.querySelector(".fbtns")); });
+    else if (p==="prompt" && !lsGet("hb36_geo_ok")) card.insertBefore(el("div",{class:"notice",text:"📍 La primera vez el teléfono te va a preguntar por la ubicación: elegí «Permitir» (o «Mientras se usa la app»). Si querés, probala antes con «Probar mi ubicación»."}), card.querySelector(".fbtns"));
+  });
   card.append(el("div",{class:"row"},
     el("button",{class:"btn",type:"button",text:"⏱️ Mis horas",onclick:()=>misHoras(body)}),
     el("button",{class:"btn",type:"button",text:"🧾 Mis registros y correcciones",onclick:()=>misRegistros(body)}),
@@ -776,56 +810,114 @@ function formAbierta(body, ab){
     el("span",{text:"Para fichar hoy, indicá a qué hora saliste ese día. Un jefe lo revisa y queda registrado (tu fichaje original no se modifica)."}),
     el("div",{class:"grid2"}, el("label",{class:"f"},"Hora de salida",h), el("label",{class:"f"},"Motivo",m)), b);
 }
-/* Aviso del primer uso: para qué se usa la ubicación (una vez por persona y teléfono). */
-function avisoPrimerUso(texto){
-  const k = "hb34_geo_"+((S.user&&S.user.legajo)||F.nombre||"");
-  if (lsGet(k)) return Promise.resolve(true);
-  return new Promise(res=>{
-    const m = modal(el("div",{class:"grid"}, el("div",{class:"lockicon",text:"📍"}), el("h2",{text:"Antes de fichar"}),
-      el("p",{style:"margin:0;font-size:15.5px",text:texto||"Usamos la ubicación del teléfono solo en el momento de fichar, para validar que estés en tu sucursal."}),
-      el("ul",{class:"pasos"}, el("li",{text:"Se toma una sola vez, cuando tocás «Fichar». No hay seguimiento."}), el("li",{text:"La distancia y la hora las calcula el servidor."}), el("li",{text:"Tu ubicación solo la ven los jefes."})),
-      el("div",{class:"row"}, el("button",{class:"btn primary",type:"button",text:"Entendido",onclick:()=>{ lsSet(k,1); m.cerrar(); res(true); }}),
-        el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>{ m.cerrar(); res(false); }}))), {cerrable:false});
-  });
+/* Aviso del primer uso (una vez por persona y teléfono). El botón «Entendido» pide la ubicación EN EL MISMO TOQUE (gesto de la persona). */
+const claveAviso = () => "hb34_geo_"+((S.user&&S.user.legajo)||F.nombre||"");
+function avisoPrimerUso(texto, alAceptar, alCancelar){
+  const m = modal(el("div",{class:"grid"}, el("div",{class:"lockicon",text:"📍"}), el("h2",{text:"Antes de fichar"}),
+    el("p",{style:"margin:0;font-size:15.5px",text:texto||"Usamos la ubicación del teléfono solo en el momento de fichar, para validar que estés en tu sucursal."}),
+    el("ul",{class:"pasos"}, el("li",{text:"Se toma una sola vez, cuando tocás «Fichar». No hay seguimiento."}), el("li",{text:"Enseguida el teléfono te pregunta si permitís la ubicación: elegí «Permitir» (o «Mientras se usa la app»)."}), el("li",{text:"La distancia y la hora las calcula el servidor. Tu ubicación solo la ven los jefes."})),
+    el("div",{class:"row"}, el("button",{class:"btn primary",type:"button",text:"Entendido",onclick:()=>{ const pGeo = ubicacion(); lsSet(claveAviso(),1); m.cerrar(); alAceptar(pGeo); }}),
+      el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>{ m.cerrar(); alCancelar(); }}))), {cerrable:false});
 }
 let fichando = false, liberarT = null;
-/* Un toque: bloqueo de unos segundos (evita dobles toques) → ubicación → validación en el servidor → foto → registro. */
-async function pulsarFichar(body, tipo, botones){
+/* Un toque: la ubicación se pide en ese mismo instante (sin await antes) → validación en el servidor → foto → registro. */
+function pulsarFichar(body, tipo, botones){
   if (fichando) return; fichando = true;
   botones.forEach(b=>b.disabled=true);
   const liberar = ()=>{ clearTimeout(liberarT); liberarT = setTimeout(()=>{ fichando=false; botones.forEach(b=>{ if (b.isConnected) b.disabled = !(F.j && F.j.siguiente===(b.classList.contains("salida")?"salida":"entrada")); }); }, 4000); };
-  try{
-    if (!(await avisoPrimerUso(F.j && F.j.avisoUbicacion))) return;
-    const boton = botones.find(b=>b.classList.contains(tipo)); if (boton) spinBtn(boton, "Obteniendo ubicación…");
-    const geo = await ubicacion();
-    if (boton) unspin(boton);
-    if (geo.error) return pantallaRechazo(body, tipo, {motivo:geo.error}, geo);
-    let v; try{ v = await api("verificarUbicacion", F.token, tipo, geo); }
-    catch(e){ return errorFichada(body, tipo, e, geo); }
-    if (!v.ok) return pantallaRechazo(body, tipo, v, geo);
-    if (F.j && F.j.fotoObligatoria) pasoFoto(body, tipo, geo, v); else enviarFichada(body, tipo, geo, null);
-  } finally { liberar(); }
+  if (lsGet(claveAviso())) return seguirFichar(body, tipo, ubicacion(), botones.find(b=>b.classList.contains(tipo))).finally(liberar);
+  avisoPrimerUso(F.j && F.j.avisoUbicacion, pGeo=>seguirFichar(body, tipo, pGeo, botones.find(b=>b.classList.contains(tipo))).finally(liberar), liberar);
 }
+async function seguirFichar(body, tipo, pGeo, boton){
+  if (boton) spinBtn(boton, "Obteniendo ubicación…");
+  const geo = await pGeo;
+  if (boton && boton.isConnected) unspin(boton);
+  if (geo.error) return pantallaRechazo(body, tipo, {motivo:geo.error, codigo:geo.codigo}, geo);
+  let v; try{ v = await api("verificarUbicacion", F.token, tipo, geo); }
+  catch(e){ return errorFichada(body, tipo, e, geo); }
+  if (!v.ok) return pantallaRechazo(body, tipo, v, geo);
+  if (F.j && F.j.fotoObligatoria) pasoFoto(body, tipo, geo, v); else enviarFichada(body, tipo, geo, null);
+}
+/* «Probar mi ubicación»: pide la ubicación y la valida contra la sucursal SIN registrar ningún fichaje. */
+function botonProbar(body){
+  const out = el("div",{class:"probar-out",role:"status","aria-live":"polite"});
+  const b = el("button",{class:"btn",type:"button",text:"📡 Probar mi ubicación",onclick:()=>{
+    const pGeo = ubicacion();   // en el mismo toque
+    spinBtn(b,"Buscando tu ubicación…"); out.textContent="";
+    pGeo.then(async geo=>{
+      if (geo.error){ unspin(b); out.append(await bloqueAyudaGeo(geo, true)); return; }
+      let v; try{ v = await api("probarUbicacion", F.token, geo); }catch(e){ unspin(b); out.append(el("div",{class:"notice bad",text:"📍 La ubicación del teléfono funciona, pero no pudimos consultar al servidor: "+msgErr(e)})); return; }
+      unspin(b);
+      const prec = geo.acc!=null ? ` · precisión ±${Math.round(geo.acc)} m` : "";
+      if (v.ok) out.append(el("div",{class:"notice ok",text:`✅ La ubicación funciona: estás a ${v.distancia} m de ${v.sucursal} (radio ${v.radio} m${prec}). Ya podés fichar. No se registró nada.`}));
+      else if (v.motivo==="fuera") out.append(el("div",{class:"notice warn",text:`📍 La ubicación funciona, pero estás a ${Number(v.distancia).toLocaleString("es-AR")} m de ${v.sucursal} (hace falta estar a menos de ${v.radio} m${prec}). No se registró nada.`}));
+      else if (v.motivo==="precision") out.append(el("div",{class:"notice warn",text:`📍 La ubicación funciona, pero es poco precisa (±${v.precision} m; se necesita ${v.precisionMax||100} m o menos). Activá «precisión alta» y acercate a una ventana.`}));
+      else if (v.motivo==="sucursal_incompleta") out.append(el("div",{class:"notice warn",text:`📍 La ubicación funciona, pero a ${v.sucursal} le falta cargar: ${(v.faltan||[]).join(", ")}. Avisá a un jefe.`}));
+      else out.append(el("div",{class:"notice warn",text:"📍 La ubicación funciona, pero no se pudo validar contra la sucursal."}));
+    });
+  }});
+  return el("div",{class:"probar"}, b, out);
+}
+/* Ayuda según el caso: permiso bloqueado (1), GPS apagado / sin señal (2), tiempo agotado (3), navegador interno de otra app, iframe, página no segura. */
+async function bloqueAyudaGeo(geo, corto){
+  const amb = geo.amb || entornoGeo(), perm = await estadoPermisoGeo();
+  const box = el("div",{class:"notice "+(geo.error==="tiempo_agotado"?"warn":"bad")+" ayuda-geo"});
+  const pasos = L => el("ol",{class:"pasos"}, ...L.map(t=>el("li",{text:t})));
+  const urlApp = location.origin + location.pathname;
+  if (amb.webview || geo.error==="no_soportado"){
+    box.append(el("b",{text:"Estás usando el navegador interno de otra app (Instagram, Facebook, WhatsApp…). Ahí la ubicación no funciona."}),
+      pasos(["Abrí la app en Chrome con el botón de abajo (o con el menú ⋮ → «Abrir en el navegador»).", "Ahí tocá «Fichar» y elegí «Permitir» cuando pregunte por la ubicación."]),
+      el("div",{class:"row"}, amb.android ? el("a",{class:"btn primary",href:"intent://"+location.host+location.pathname+"#Intent;scheme=https;package=com.android.chrome;end",text:"Abrir en Chrome"}) : null,
+        el("button",{class:"btn",type:"button",text:"📋 Copiar enlace",onclick:()=>copiarTexto(urlApp)})));
+    return box;
+  }
+  if (amb.iframe){
+    box.append(el("b",{text:"La app está abierta dentro de otra página (un marco), que bloquea la ubicación."}),
+      el("div",{class:"row"}, el("a",{class:"btn primary",href:urlApp,target:"_blank",rel:"noopener",text:"Abrir en pestaña propia"}), el("button",{class:"btn",type:"button",text:"📋 Copiar enlace",onclick:()=>copiarTexto(urlApp)})));
+    return box;
+  }
+  if (geo.error==="inseguro"){ box.append(el("b",{text:"La página no está abierta con una dirección segura (https), y así el teléfono no da la ubicación."}), el("a",{class:"btn primary",href:urlApp.replace(/^http:/,"https:"),text:"Abrir la dirección segura"})); return box; }
+  if (geo.error==="sin_permiso"){
+    box.append(el("b",{text: perm==="denied" ? "La ubicación está BLOQUEADA para esta página: por eso el teléfono no te muestra el pedido de permiso." : "Se rechazó el permiso de ubicación."}));
+    if (amb.ios) box.append(pasos(["Ajustes → Privacidad y seguridad → Localización: activala.", "En la lista, elegí Safari (o la app instalada) → «Al usar la app» y activá «Ubicación exacta».", "Volvé acá y tocá «Reintentar»."]));
+    else box.append(pasos(perm==="denied" ? ["En Chrome tocá el candado 🔒 (o el ícono de ajustes) a la izquierda de la dirección → Permisos → Ubicación → Permitir.", "Si sigue sin andar: Ajustes del celular → Apps → Chrome → Permisos → Ubicación → «Permitir solo mientras se usa la app».", "Si usás la app instalada en la pantalla de inicio: el permiso es de Chrome, no de la app (por eso «Hey Blackk» no aparece en Permisos). Abrí Chrome → menú ⋮ → Configuración → Configuración de sitios → Ubicación → buscá «"+location.host+"» → Permitir.", "Volvé acá, recargá la página y tocá «Reintentar»."]
+      : ["Tocá «Reintentar» y, cuando el teléfono pregunte, elegí «Permitir».", "Si no aparece el pedido: tocá el candado 🔒 de la barra de dirección → Permisos → Ubicación → Permitir.", "Si tampoco: Ajustes del celular → Apps → Chrome → Permisos → Ubicación → «Permitir solo mientras se usa la app» (si Chrome no tiene permiso del celular, la página no puede ni preguntar).", "Si usás la app instalada en la pantalla de inicio: el permiso es de Chrome, no de la app. En Chrome: menú ⋮ → Configuración → Configuración de sitios → Ubicación → «"+location.host+"» → Permitir."]));
+  } else if (geo.error==="no_disponible"){
+    box.append(el("b",{text:"El GPS del teléfono está apagado o no encuentra señal."}),
+      pasos(["Bajá el panel de notificaciones y activá «Ubicación» (GPS).", "Si tu teléfono lo ofrece, activá «Precisión de ubicación» / «ubicación precisa».", "Tocá «Reintentar»."]));
+  } else {
+    box.append(el("b",{text:"El teléfono tardó demasiado en encontrar tu ubicación."}),
+      pasos(["Revisá que la ubicación (GPS) esté activada en el panel de notificaciones.", "Acercate a una ventana o a la puerta del local y esperá unos segundos.", "Tocá «Reintentar»."]));
+  }
+  if (!corto && perm) box.append(el("p",{class:"aviso",style:"margin:6px 0 0",text:"Estado del permiso en este navegador: "+({granted:"permitido",prompt:"pregunta cada vez",denied:"bloqueado"}[perm]||perm)+"."}));
+  return box;
+}
+function copiarTexto(t){ try{ navigator.clipboard.writeText(t).then(()=>toast("Enlace copiado. Pegalo en Chrome."), ()=>toast(t)); }catch(e){ toast(t); } }
 /* Ubicación que no valida: mensaje claro + reintentar + fichaje manual con motivo (lo aprueba un jefe). */
 function pantallaRechazo(body, tipo, v, geo){
   vigilarF(body);
   body.textContent="";
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const card = el("div",{class:"card fichar rechazo"});
   const titulo = { fuera:`Estás a ${v.distancia!=null ? v.distancia.toLocaleString("es-AR") : "?"} metros de la sucursal`, precision:"La ubicación del teléfono es poco precisa",
-    sucursal_incompleta:"Tu sucursal no tiene la ubicación completa", sin_permiso:"Activá la ubicación para fichar", no_disponible:"No pudimos obtener tu ubicación", tiempo_agotado:"No pudimos obtener tu ubicación" }[v.motivo] || "No se pudo validar la ubicación";
+    sucursal_incompleta:"Tu sucursal no tiene la ubicación completa", sin_permiso:"Falta el permiso de ubicación", no_disponible:"El GPS está apagado o sin señal", tiempo_agotado:"Se agotó el tiempo para ubicarte",
+    no_soportado:"Este navegador no da la ubicación", inseguro:"Abrí la app con la dirección segura" }[v.motivo] || "No se pudo validar la ubicación";
+  const errGeo = ["sin_permiso","no_disponible","tiempo_agotado","no_soportado","inseguro"].includes(v.motivo);
   card.append(el("div",{class:"bigok",text:v.motivo==="fuera"?"📏":"📍"}), el("h2",{text:titulo}));
   if (v.motivo==="fuera") card.append(el("p",{class:"lead",text:`Para fichar tenés que estar a menos de ${v.radio} m de ${v.sucursal}. El fichaje no se registró.`}));
   else if (v.motivo==="precision") card.append(el("p",{class:"lead",text:`El GPS marca con un margen de ±${v.precision} m (se necesita ${v.precisionMax||100} m o menos). El fichaje no se registró.`}),
     el("ol",{class:"pasos"}, ...["Activá la ubicación con «precisión alta» (o «ubicación precisa»).", "Acercate a una ventana o a la puerta del local y esperá unos segundos.", "Tocá «Reintentar»."].map(t=>el("li",{text:t}))));
   else if (v.motivo==="sucursal_incompleta") card.append(el("p",{class:"lead",text:`A ${v.sucursal} le falta: ${(v.faltan||[]).join(", ")}. Avisá a un jefe para que lo complete. Mientras tanto podés pedir un fichaje manual.`}));
-  else card.append(el("p",{class:"lead",text:(v.motivo==="sin_permiso"?"No diste permiso de ubicación a la app.":"La ubicación del teléfono está apagada o no respondió a tiempo.")+" Sin ubicación el fichaje no se registra."}),
-    el("ol",{class:"pasos"}, ...(ios ? ["Ajustes → Privacidad y seguridad → Localización: activá «Localización».", "En la misma lista, elegí Safari (o la app instalada) → «Al usar la app» y «Ubicación exacta».", "Volvé acá y tocá «Reintentar»."]
-      : ["Bajá el panel de notificaciones y activá «Ubicación» (GPS).", "Si el navegador no la pidió: tocá el candado 🔒 de la barra de dirección → Permisos → Ubicación → Permitir.", "Volvé acá y tocá «Reintentar»."]).map(t=>el("li",{text:t}))));
-  card.append(el("div",{class:"row",style:"justify-content:center"},
-    v.motivo!=="sucursal_incompleta" ? el("button",{class:"btn primary big-btn",type:"button",text:"Reintentar",onclick:()=>jornada(body, F.j)}) : null,
+  else if (errGeo){ card.append(el("p",{class:"lead",text:"Sin ubicación el fichaje no se registra. Seguí estos pasos:"})); bloqueAyudaGeo(geo||v, false).then(b=>card.insertBefore(b, filaBtns)); }
+  const reintentar = el("button",{class:"btn primary big-btn",type:"button",text:"Reintentar",onclick:()=>{
+    const pGeo = ubicacion();   // se vuelve a pedir en este mismo toque
+    seguirFichar(body, tipo, pGeo, reintentar);
+  }});
+  const filaBtns = el("div",{class:"row",style:"justify-content:center"},
+    v.motivo!=="sucursal_incompleta" ? reintentar : null,
     el("button",{class:"btn big-btn",type:"button",text:"✋ Solicitar fichaje manual",onclick:()=>formManual(body, tipo, v, geo)}),
-    el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)})));
+    el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)}));
+  card.append(filaBtns);
+  if (errGeo) card.append(botonProbar(body));
   body.append(card);
 }
 function formManual(body, tipo, v, geo){
@@ -1040,13 +1132,14 @@ function detalleIngreso(x, recargar){
       x.latitud!=null ? el("span",{class:"mono hint",text:`Lat ${x.latitud} · Long ${x.longitud} (solo jefes)`}) : null,
       el("span",{text:"Modo: "+(x.modo==="manual"?"manual":x.modo==="correccion"?"por corrección":"automático")}),
       x.horaCorregida ? el("span",{text:`Hora original: ${x.hora||"sin registro"} · vigente: ${x.horaCorregida}`}) : null,
-      (x.correcciones||[]).length ? el("ul",{class:"hint lista-avisos"}, x.correcciones.map(c=>el("li",{text:`${new Date(c.ts).toLocaleString("es-AR")} · ${c.por}: ${c.de||"(sin registro)"} → ${c.a} · ${c.motivo}`}))) : null,
+      (x.correcciones||[]).length ? el("ul",{class:"hint lista-avisos"}, x.correcciones.map(c=>el("li",{text:`${fechaHora(c.ts)} · ${c.por}: ${c.de||"(sin registro)"} → ${c.a} · ${c.motivo}`}))) : null,
       x.revisadoPor ? el("span",{class:"hint",text:"Revisado por "+x.revisadoPor}) : null,
       el("p",{class:"hint",text:"La foto, la hora y la ubicación son datos de apoyo: por sí solos no prueban identidad ni presencia."}))));
   box.append(el("div",{class:"grid2"}, el("label",{class:"f"},"Observación",obs), el("label",{class:"f"},"Estado",est)),
     el("div",{class:"row"}, el("button",{class:"btn sm primary",type:"button",text:"Guardar revisión",onclick:async e=>{ e.stopPropagation(); try{ await apiS("observarIngreso", x.id, obs.value, est.value); toast("Revisión guardada"); recargar(); }catch(err){ toast(msgErr(err)); } }}),
       x.estado!=="anulado" ? el("button",{class:"btn sm",type:"button",text:"✎ Corregir hora",onclick:e=>{ e.stopPropagation(); corregirHora(x, recargar); }}) : null,
-      el("button",{class:"btn sm",type:"button",text:"Derivar a RR. HH.",onclick:e=>{ e.stopPropagation(); derivar({ingresoId:x.id}, x.nombre); }})));
+      el("button",{class:"btn sm",type:"button",text:"Derivar a RR. HH.",onclick:e=>{ e.stopPropagation(); derivar({ingresoId:x.id}, x.nombre); }}),
+      botonBorrarRegistro(x, recargar)));
   box.append(el("p",{class:"hint",text:"Para anular, elegí «anulado» y escribí el motivo en la observación (es obligatorio). Nada se borra: queda el registro original y quién lo cambió."}));
   return box;
 }
@@ -1071,8 +1164,10 @@ async function xlsxIngresos(r){
    Hoy por sucursal · Pendientes (fichajes manuales y correcciones) · Horas (filtros y exportación a la planilla) · Fichadas · Sucursales.
    Todo se valida en el servidor; acá solo se muestra. La ubicación (lat/long) llega solo a esta sección. */
 function vIngresos(main){
-  tabs(main, [["hoy","📍 Hoy"],["pendientes","✋ Pendientes"],["horas","⏱️ Horas"],["fichadas","🧾 Fichadas"],["sucursales","🏬 Sucursales"]], "hoy", (id, body)=>
-    ({hoy:vHoyFich, pendientes:vPendientesFich, horas:vHorasJefes, fichadas:vFichadas, sucursales:vSucursales})[id](body));
+  const T = [["hoy","📍 Hoy"],["pendientes","✋ Pendientes"],["horas","⏱️ Horas"],["rrhh","👥 Panorama RRHH"],["fichadas","🧾 Fichadas"],["sucursales","🏬 Sucursales"]];
+  if (S.user && S.user.rol==="admin") T.push(["borrar","🗑️ Borrar registros"]);   // 3.5: solo administración (el servidor también lo exige)
+  tabs(main, T, "hoy", (id, body)=>
+    ({hoy:vHoyFich, pendientes:vPendientesFich, horas:vHorasJefes, rrhh:vPanoramaRRHH, fichadas:vFichadas, sucursales:vSucursales, borrar:vBorradoFich})[id](body));
 }
 const EST_HOY = {adentro:["Adentro","ok"], salio:["Salió",""], falta:["Sin fichaje","bad"], vacaciones:["De vacaciones","ok"], feriado:["Feriado","fer-l"], no_abre:["No abre hoy",""], manual_pendiente:["Manual pendiente","warn"], revisar:["Revisar secuencia","warn"]};
 async function vHoyFich(body){
@@ -1144,7 +1239,7 @@ async function vPendientesFich(body){
       el("span",{class:"mono",text: c.clase==="manual" ? `${fmtF(c.fecha)} ${String(c.horaSolicitada||c.horaPropuesta).slice(0,5)} (hora del servidor al pedirlo) · ${c.sucursal||""}` : `${fmtF(c.fecha)} · ${(c.horaOriginal||"sin registro").slice(0,5)} → ${c.horaPropuesta}`}),
       el("span",{text:"Motivo: "+c.motivo}),
       c.clase==="manual" ? el("span",{class:"hint",text:`Ubicación del intento: ${GEOM[c.geoMotivo]||c.geoMotivo||"—"}${c.distancia!=null?" · a "+c.distancia+" m":""}${c.precision!=null?" · ±"+c.precision+" m":""}${c.geo?" · lat "+c.geo.lat+", long "+c.geo.lng:""}`}) : null,
-      el("span",{class:"hint",text:"Pedido el "+new Date(c.creado).toLocaleString("es-AR")})),
+      el("span",{class:"hint",text:"Pedido el "+fechaHora(c.creado)})),
     el("div",{class:"row"}, el("button",{class:"btn sm primary",type:"button",text:"✔ Aprobar",onclick:async e=>{ const b=e.currentTarget; spinBtn(b); try{ await apiS("resolverCorreccion", c.id, true, ""); toast("✅ Aprobado"); recargar(); }catch(x){ unspin(b); toast(msgErr(x)); } }}),
       el("button",{class:"btn sm danger",type:"button",text:"✖ Rechazar",onclick:()=>rechazarSolicitud(c, recargar)})));
   body.append(el("div",{class:"card"}, el("h2",{text:`✋ Fichajes manuales pendientes (${man.length})`}),
@@ -1381,7 +1476,7 @@ function detalleAud(a){
       fs.length ? el("div",{class:"fotos"}, fs.map((f,i)=>miniFoto("getFoto", f.id, `${p.l} · ${fmtF(a.fecha)} · foto ${i+1}`))) : null,
       ac.map(x=>el("div",{class:"accmini"}, el("span",{class:"pill "+(x.estado==="resuelta"?"ok":x.vence&&x.vence<hoy()?"bad":"warn"),text:x.estado}), " ", x.descripcion, x.vence?` · vence ${fmtF(x.vence)}`:"", x.responsable?` · ${x.responsable}`:""))));
   });
-  const box = el("div",{class:"dl"}, el("div",{class:"row"}, el("span",{text:`📅 ${fmtF(a.fecha)} · 👤 ${a.auditor}`}), el("span",{class:"spacer"}), el("span",{class:"mono hint",text:a.creado?"Cargada "+new Date(a.creado).toLocaleString("es-AR"):""})), g);
+  const box = el("div",{class:"dl"}, el("div",{class:"row"}, el("span",{text:`📅 ${fmtF(a.fecha)} · 👤 ${a.auditor}`}), el("span",{class:"spacer"}), el("span",{class:"mono hint",text:a.creado?"Cargada "+fechaHora(a.creado):""})), g);
   const gen = fotosDe("general");
   if (a.comentarioGeneral) box.append(el("div",{},el("b",{text:"💬 Comentario general: "}),a.comentarioGeneral));
   if (gen.length) box.append(el("div",{}, el("b",{text:"📷 Fotos generales"}), el("div",{class:"fotos"}, gen.map((f,i)=>miniFoto("getFoto", f.id, `General · ${fmtF(a.fecha)} · foto ${i+1}`)))));
@@ -1470,7 +1565,7 @@ async function buildXLSX(list){
   ws.addImage(logoId, {tl:{col:0.15,row:0.2}, ext:{width:260,height:34}});
   ws.getRow(1).height=32;
   ws.getCell("A3").value="Registro de auditorías · Sucursal Palermo"; ws.getCell("A3").font={bold:true,size:14};
-  ws.getCell("A4").value=`${rangoTxt()} · ${list.length} auditorías · generado ${new Date().toLocaleString("es-AR")}`; ws.getCell("A4").font={size:10,color:{argb:"FF5F5F68"}};
+  ws.getCell("A4").value=`${rangoTxt()} · ${list.length} auditorías · generado ${fechaHora()}`; ws.getCell("A4").font={size:10,color:{argb:"FF5F5F68"}};
   const head=["Fecha","Auditor",...PUNTOS.map(p=>p.l),"Promedio","Resultado","Infracciones","Checklist","Días pedido","Comentario general"];
   const NP=PUNTOS.length;
   const hr = ws.getRow(6); hr.values=head; hr.height=44;
@@ -1521,7 +1616,7 @@ function buildPDF(list){
   doc.addImage(LOGO, "PNG", 14, 10, 62, 8.2);
   doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(20,20,22); doc.text("Registro de auditorías · Sucursal Palermo", 14, 27);
   doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(95,95,104);
-  doc.text(`${rangoTxt()} · ${list.length} auditorías · generado ${new Date().toLocaleString("es-AR")}`, 14, 32);
+  doc.text(`${rangoTxt()} · ${list.length} auditorías · generado ${fechaHora()}`, 14, 32);
   const n=list.length, prom=list.reduce((s,a)=>s+a.promedio,0)/n, tot=list.reduce((s,a)=>s+(a.totalInfracciones||0),0);
   const cnt=r=>list.filter(a=>a.resultado===r).length;
   const RGB={Excelente:[[220,252,231],[21,128,61]],Advertencia:[[254,243,199],[180,83,9]],Reclamo:[[254,226,226],[200,30,30]]};
@@ -1575,8 +1670,8 @@ function kpi(k,v,s,c){ return el("div",{class:"kpi "+(c||"")}, el("span",{class:
 function renderKPI(){
   const body=$("kpi-body"); body.textContent="";
   const L = filtKPI(), n=L.length, P=S.params;
-  $("kpi-lead").textContent = n ? `${n} auditoría${n===1?"":"s"} en el período · datos al momento de desbloquear` : "Sin auditorías en el período";
-  if (!n){ body.append(el("div",{class:"card empty",text: S.lista.length ? "No hay auditorías en este período. Probá con «Todo»." : "Los indicadores aparecen con la primera auditoría validada."})); return; }
+  $("kpi-lead").textContent = n ? `${n} auditoría${n===1?"":"s"} en el período · datos al momento de desbloquear` : "";
+  if (!n) return;   // 3.5: sin auditorías en el período no se muestra nada
   const asc=[...L].sort((a,b)=>(a.fecha+a.creado).localeCompare(b.fecha+b.creado));
   const ult=asc[n-1], ant=asc[n-2];
   const prom = L.reduce((s,a)=>s+(a.promedio||0),0)/n;
@@ -1592,7 +1687,7 @@ function renderKPI(){
     kpi("⭐ Puntaje promedio", fmt1(prom), "de 5 · "+REMO[rp]+" "+rp, cls(rp)),
     kpi("✅ Auditorías", n, `${pct(dist.Excelente/n)} excelentes`),
     kpi("📅 Última auditoría", fmt1(ult.promedio), `${fmtF(ult.fecha)} · ${ult.resultado}`, cls(ult.resultado)),
-    kpi("📈 Tendencia", tend? (tend==="Mejora"?"↑ Mejora":tend==="Empeora"?"↓ Empeora":"= Igual") : "–", ant?`vs ${fmt1(ant.promedio)} el ${fmtF(ant.fecha)}`:"Hace falta una segunda auditoría", tend==="Mejora"?"ok":tend==="Empeora"?"bad":null),
+    tend ? kpi("📈 Tendencia", tend==="Mejora"?"↑ Mejora":tend==="Empeora"?"↓ Empeora":"= Igual", `vs ${fmt1(ant.promedio)} el ${fmtF(ant.fecha)}`, tend==="Mejora"?"ok":tend==="Empeora"?"bad":null) : null,
     kpi("🔢 Infracciones", totInf, `${fmt1(totInf/n)} por visita · ${inf30} en 30 días`, totInf?"warn":"ok"),
     kpi("⏳ Pedido más viejo", maxDias==null?"–":maxDias+" días", fuera?`${fuera} visita${fuera===1?"":"s"} fuera de plazo (>${P.diasMax} d)`:`Límite ${P.diasMax} días`, fuera?"bad":(maxDias!=null?"ok":null))));
 
@@ -1617,7 +1712,7 @@ function renderKPI(){
 
   body.append(el("div",{class:"card"}, el("h3",{text:"🔢 Infracciones por categoría · Pareto"}),
     el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, el("th",{text:"Categoría"}),el("th",{class:"n",text:"Total"}),el("th",{class:"n",text:"% total"}),el("th",{class:"n",text:"% acum."}),el("th",{class:"n",text:"Prom./visita"}),el("th",{class:"n",text:"Recurrencia"}))), tbl)),
-    el("p",{class:"lead",style:"margin:10px 0 0",text: totInf? `Problema más frecuente: ${cat[0].p.inf} (${cat[0].tot}).` : "Sin infracciones registradas en el período."})));
+    el("p",{class:"lead",style:"margin:10px 0 0",text: totInf? `Problema más frecuente: ${cat[0].p.inf} (${cat[0].tot}).` : "✅ Ninguna infracción en el período."})));
 
   const acc=el("ul",{class:"action"});
   const top = cat.filter(c=>c.tot>0); let cum=0; const pareto=[]; for (const c of top){ pareto.push(c); cum+=c.tot; if (cum/totInf>=0.8) break; }
@@ -1671,7 +1766,7 @@ function barras(datos, {alto=200, fmt=moneyK, linea=null, etiqueta="Gráfico de 
 function info(def, act){
   if (!def) return null;
   const d = el("details",{class:"kinfo"}, el("summary",{"aria-label":"Cómo se calcula",text:"ℹ️"}),
-    el("div",{}, el("b",{text:def.nombre}), el("p",{text:def.definicion}), el("p",{class:"mono",text:"Fórmula: "+def.formula}), el("p",{text:"Fuente: "+def.fuente}), act?el("p",{text:"Actualizado: "+new Date(act).toLocaleString("es-AR")}):null));
+    el("div",{}, el("b",{text:def.nombre}), el("p",{text:def.definicion}), el("p",{class:"mono",text:"Fórmula: "+def.formula}), el("p",{text:"Fuente: "+def.fuente}), act?el("p",{text:"Actualizado: "+fechaHora(act)}):null));
   return d;
 }
 function kpiC(k,v,s,c,def,act,onclick){ return el("div",{class:"kpi "+(c||""),onclick:onclick||null,style:onclick?"cursor:pointer":null}, el("span",{class:"k"},k, info(def,act)), el("span",{class:"v",style:c?`color:var(--${c})`:null,text:v}), s?el("span",{class:"s",text:s}):null); }
@@ -1683,20 +1778,24 @@ async function vKPI(main){
   body.textContent="";
   const C = K.comercial, def = id => (C.definiciones||[]).find(d=>d.id===id), act = C.actualizado;
   body.append(el("div",{class:"card row"}, el("span",{text:"Fuente: "+C.fuente}), el("span",{class:"spacer"}),
-    el("span",{class:"hint",text: act ? "Última lectura de la planilla: "+new Date(act).toLocaleString("es-AR") : "Todavía no se leyó la planilla."}),
+    act ? el("span",{class:"hint",text:"Última lectura de la planilla: "+fechaHora(act)}) : null,
     tiene("cierre") ? el("button",{class:"btn sm",type:"button",text:"↻ Sincronizar",onclick:async e=>{ spinBtn(e.target,"Leyendo…"); try{ await apiS("sincronizarCierre"); main.textContent=""; route(); }catch(x){ unspin(e.target); toast(msgErr(x)); } }}) : null));
   // ----- 3.3: resumen hablado (arriba del tablero) y feriados
   body.append(barraAudio(K.audio));
   const fb = bannerFeriados(K.feriados, {confirmar: tiene("cierre"), alConfirmar: ()=>{ main.textContent=""; route(); }});
   if (!fb.hidden) body.append(fb);
-  if (C.sinDatos){ body.append(el("div",{class:"card empty",text:"No hay cierres cargados todavía. Cuando la planilla tenga ventas, los indicadores se calculan solos."})); return; }
+  // 3.5 · Regla: solo se muestra lo que tiene datos (sin avisos de "no hay datos"). Orden: comercial → auditoría → RRHH.
+  const fe = cardFechasEspeciales(C.fechasEspeciales);
+  if (C.sinDatos){ if (fe) body.append(fe); body.append(...cardsControlResumen(K)); const rr = cardRRHHResumen(K.rrhh); if (rr) body.append(rr); return; }
 
   // ----- Panel ejecutivo
   const ej = el("div",{class:"card exec"}, el("h2",{text:"🧭 Qué está pasando y qué decisiones tomar"}));
-  (C.resumen||[]).forEach(r=>ej.append(el("div",{class:"qa"}, el("b",{text:r.pregunta}), el("span",{text:r.respuesta}))));
-  body.append(ej);
-  // ----- 3.3: ¿mes bajo? y acciones comerciales para Palermo
-  body.append(cardAccionesComerciales(C));
+  (C.resumen||[]).filter(r=>r && r.respuesta).forEach(r=>ej.append(el("div",{class:"qa"}, el("b",{text:r.pregunta}), el("span",{text:r.respuesta}))));
+  if (ej.children.length>1) body.append(ej);
+  // ----- 3.3: ¿mes bajo? y acciones comerciales para Palermo · 3.5: días flojos y fechas especiales
+  const acc = cardAccionesComerciales(C); if (acc) body.append(acc);
+  const df = cardDiasFlojos(C.diasFlojos); if (df) body.append(df);
+  if (fe) body.append(fe);
   if ((C.recomendaciones||[]).length){
     const rc = el("div",{class:"recs"});
     C.recomendaciones.forEach((r,i)=>rc.append(el("details",{class:"rec p"+r.prioridad,open:i<2},
@@ -1719,12 +1818,10 @@ async function vKPI(main){
     ultDia ? kpiC("💵 Último cierre", moneyK(ultDia.total), fmtF(ultDia.fecha), null, def("venta_dia"), act) : null,
     ultSem ? kpiC("📅 Última semana con ventas", moneyK(ultSem.total), `Semana del ${fmtF(ultSem.semana)} · ${ultSem.dias} días${ultSem.deltaPct!=null?" · "+sign(ultSem.deltaPct)+" vs. anterior":""}`, vCls(ultSem.deltaPct), def("venta_semana"), act) : null,
     ref ? kpiC("🗓️ "+cap(ref.nombre), moneyK(ref.total), `${ref.dias} días con cierre${prev?" · total "+sign(prev.deltaTotalPct)+" vs. "+mesNom(prev.mes)+" (ver promedio por día)":""}`, null, def("venta_mes"), act, ()=>detalleMes(ref, C)) : null,
-    ref ? kpiC("📊 Promedio por día", moneyK(ref.promDia), (prev?`${sign(prev.deltaPromPct)} vs. ${moneyK(prev.promDia)} en ${mesNom(prev.mes)}`:"Sin mes anterior para comparar") + (ref.diasCerrados&&ref.diasCerrados.length?` · ${ref.diasCerrados.length} día(s) cerrado(s) descontado(s)`:""), vCls(prev&&prev.deltaPromPct), def("prom_dia"), act) : null,
+    ref ? kpiC("📊 Promedio por día", moneyK(ref.promDia), (prev?`${sign(prev.deltaPromPct)} vs. ${moneyK(prev.promDia)} en ${mesNom(prev.mes)}`:"") + (ref.diasCerrados&&ref.diasCerrados.length?` · ${ref.diasCerrados.length} día(s) cerrado(s) descontado(s)`:""), vCls(prev&&prev.deltaPromPct), def("prom_dia"), act) : null,
     anio ? kpiC("📆 Año "+anio.anio, moneyK(anio.total), `${anio.dias} días con cierre · desde ${fmtF(anio.desde)}`, null, def("venta_anio"), act) : null,
-    P && !P.bloqueada ? kpiC("🔮 Proyección "+(actual?actual.nombre:""), moneyK(P.medio), `Estimación: ${moneyK(P.minimo)} a ${moneyK(P.maximo)} · incertidumbre ${P.incertidumbre}`, "warn", def("proyeccion"), act) :
-      P ? kpiC("🔮 Proyección del mes", "No disponible", "Faltan cierres de días ya pasados. Ver «¿Cómo cerraría el mes?».", null, def("proyeccion"), act) : null,
-    P && P.objetivo ? kpiC("🎯 Objetivo del mes", P.avancePct!=null?P.avancePct+"%":"–", `Objetivo ${moneyK(P.objetivo)}${P.necesarioPorDia?" · faltan "+moneyK(P.necesarioPorDia)+" por día":""}`, P.avancePct>=100?"ok":"warn", def("objetivo"), act) :
-      tiene("config") ? kpiC("🎯 Objetivo del mes", "Sin cargar", "Cargalo en Configuración → Objetivos", null, def("objetivo"), act, ()=>ir("config")) : null));
+    P && !P.bloqueada ? kpiC("🔮 Proyección "+(actual?actual.nombre:""), moneyK(P.medio), `Estimación: ${moneyK(P.minimo)} a ${moneyK(P.maximo)} · incertidumbre ${P.incertidumbre}`, "warn", def("proyeccion"), act) : null,
+    P && P.objetivo ? kpiC("🎯 Objetivo del mes", P.avancePct!=null?P.avancePct+"%":"–", `Objetivo ${moneyK(P.objetivo)}${P.necesarioPorDia?" · faltan "+moneyK(P.necesarioPorDia)+" por día":""}`, P.avancePct>=100?"ok":"warn", def("objetivo"), act) : null));
   if (P && !P.bloqueada) body.append(el("div",{class:"card"}, el("h3",{text:"🔮 Supuestos de la proyección (no es venta real)"}), el("ul",{class:"action"}, P.supuestos.map(s=>el("li",{text:s})))));
   if (prev && prev.notaFeriados) body.append(el("div",{class:"notice",text:"📅 "+prev.notaFeriados}));
 
@@ -1742,11 +1839,11 @@ async function vKPI(main){
   const ds = C.diaSemana||[];
   const mix = ref && ref.mix;
   body.append(el("div",{class:"split"},
-    el("div",{class:"card",style:"--kc:#EA580C"}, el("h3",{},"Rendimiento por día de la semana ", info(def("dia_semana"),act)),
+    ds.length ? el("div",{class:"card",style:"--kc:#EA580C"}, el("h3",{},"Rendimiento por día de la semana ", info(def("dia_semana"),act)),
       barras(ds.map(d=>({label:d.nombre.slice(0,3), v:d.promedio, title:`${d.nombre}: ${money(d.promedio)} de promedio · ${d.participacion}% de la facturación · ${d.n} días`})), {etiqueta:"Rendimiento por día de la semana"}),
-      el("div",{class:"row"}, ds.map(d=>el("span",{class:"pill",text:`${d.nombre}: ${d.participacion}%`})))),
-    el("div",{class:"card"}, el("h3",{},"Mix de medios de pago · "+(ref?ref.nombre:""), info(def("mix"),act)),
-      mix ? mixBar(mix, prev && conDatos[conDatos.length-2] && conDatos[conDatos.length-2].mix) : el("p",{class:"lead",text:"Sin datos."}))));
+      el("div",{class:"row"}, ds.map(d=>el("span",{class:"pill",text:`${d.nombre}: ${d.participacion}%`})))) : null,
+    mix ? el("div",{class:"card"}, el("h3",{},"Mix de medios de pago · "+(ref?ref.nombre:""), info(def("mix"),act)),
+      mixBar(mix, prev && conDatos[conDatos.length-2] && conDatos[conDatos.length-2].mix)) : null));
 
   // ----- Semanas
   const sem = C.semanas||[];
@@ -1756,27 +1853,25 @@ async function vKPI(main){
 
   // ----- Alertas
   const al = C.alertas||[];
-  body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas comerciales y de datos"}),
-    al.length ? el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Alerta","Valor observado","Comparado con","Por qué requiere atención"].map(x=>el("th",{text:x})))),
-      el("tbody",{}, al.map(a=>el("tr",{}, el("td",{}, el("span",{class:"pill "+(a.nivel==="alta"?"bad":"warn"),text:a.nivel}), " ", a.titulo), el("td",{text:a.observado}), el("td",{text:a.comparado}), el("td",{text:a.motivo})))))) :
-      el("p",{class:"lead",text:"Sin alertas con los umbrales configurados."}),
+  if (al.length) body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas comerciales y de datos"}),
+    el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Alerta","Valor observado","Comparado con","Por qué requiere atención"].map(x=>el("th",{text:x})))),
+      el("tbody",{}, al.map(a=>el("tr",{}, el("td",{}, el("span",{class:"pill "+(a.nivel==="alta"?"bad":"warn"),text:a.nivel}), " ", a.titulo), el("td",{text:a.observado}), el("td",{text:a.comparado}), el("td",{text:a.motivo})))))),
     el("p",{class:"hint",text:"Las alertas se calculan solo con datos suficientes (mínimo de días configurable) para evitar avisos por fluctuaciones normales. Umbrales en Configuración."})));
 
   // ----- Operación
   const I=K.ingresos, A=K.acciones;
-  body.append(el("div",{class:"card"}, el("h3",{text:"⚙️ Indicadores operativos"}), el("div",{class:"kpis"},
-    kpiC("🕘 Entradas registradas", I.total, `${I.validos} válidas · ${I.revisar} para revisar · ${I.corregidos} corregidas`),
-    kpiC("🏁 Salidas", I.salidas, `${I.sinSalida} jornadas sin salida${I.minutosPromedio!=null?" · promedio "+horas(I.minutosPromedio):""}`, I.sinSalida?"warn":null),
-    kpiC("📍 Fuera del radio / sin ubicación", I.fuera+" / "+I.sinUbicacion, "Datos de apoyo para revisión"),
-    kpiC("🔁 Duplicados evitados", I.duplicadosBloqueados, "Intentos de fichar dos veces"),
-    kpiC("🛠️ Acciones abiertas", A.abiertas, `${A.vencidas} vencidas · ${A.resueltas} resueltas`, A.vencidas?"bad":null),
-    kpiC("📋 Auditorías", K.auditoriasN ?? (K.auditorias||[]).length, "en el período"))));
-
-  // ----- Sin datos
-  body.append(el("div",{class:"card"}, el("h3",{text:"🧩 Indicadores que la planilla todavía no permite"}),
-    el("p",{class:"lead",text:"No se calculan para no inventar datos. Para habilitarlos haría falta el detalle por operación del sistema de caja o de facturación."}),
-    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, el("th",{text:"Indicador"}), el("th",{text:"Dato que falta"}))),
-      el("tbody",{}, (C.noDisponible||[]).map(n=>el("tr",{}, el("td",{text:n.kpi}), el("td",{text:n.falta}))))))));
+  const nAud = K.auditoriasN ?? (K.auditorias||[]).length;
+  const ops = [
+    I && I.total ? kpiC("🕘 Entradas registradas", I.total, [I.validos?I.validos+" válidas":"", I.revisar?I.revisar+" para revisar":"", I.corregidos?I.corregidos+" corregidas":""].filter(Boolean).join(" · ")) : null,
+    I && I.salidas ? kpiC("🏁 Salidas", I.salidas, [I.sinSalida?I.sinSalida+" jornadas sin salida":"", I.minutosPromedio!=null?"promedio "+horas(I.minutosPromedio):""].filter(Boolean).join(" · "), I.sinSalida?"warn":null) : null,
+    I && (I.fuera||I.sinUbicacion) ? kpiC("📍 Fuera del radio / sin ubicación", I.fuera+" / "+I.sinUbicacion, "Datos de apoyo para revisión") : null,
+    I && I.duplicadosBloqueados ? kpiC("🔁 Duplicados evitados", I.duplicadosBloqueados, "Intentos de fichar dos veces") : null,
+    A && (A.abiertas||A.vencidas) ? kpiC("🛠️ Acciones abiertas", A.abiertas, [A.vencidas?A.vencidas+" vencidas":"", A.resueltas?A.resueltas+" resueltas":""].filter(Boolean).join(" · "), A.vencidas?"bad":null) : null,
+    nAud ? kpiC("📋 Auditorías", nAud, "en el período") : null].filter(Boolean);
+  if (ops.length) body.append(el("div",{class:"card"}, el("h3",{text:"⚙️ Indicadores operativos"}), el("div",{class:"kpis"}, ...ops)));
+  // ----- 3.5 · Panorama RRHH (solo jefes): las alertas más importantes, al final del resumen
+  body.append(...cardsControlResumen(K));   // 3.6: solo las secciones que el jefe tiene habilitadas (el servidor no manda las otras)
+  const rr = cardRRHHResumen(K.rrhh); if (rr) body.append(rr);
   // ----- Definiciones
   body.append(el("details",{class:"card"}, el("summary",{text:"📖 Definiciones, fórmulas y fuente de cada KPI"}),
     el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["KPI","Definición","Fórmula"].map(x=>el("th",{text:x})))),
@@ -1805,7 +1900,7 @@ async function detalleMes(m){
 function cardAccionesComerciales(C){
   const mb = C.mesBajo, A = C.accionesComerciales||[];
   const card = el("div",{class:"card acciones-com"}, el("h2",{text:"🛍️ Acciones comerciales para Palermo"}));
-  if (!mb || mb.esBajo==null){ card.append(el("p",{class:"lead",text:(mb&&mb.mensaje)||"Sin datos suficientes para evaluar el mes."}), mb&&mb.aclaracion?el("p",{class:"hint",text:mb.aclaracion}):null); return card; }
+  if (!mb || mb.esBajo==null) return null;   // 3.5: sin datos suficientes no se muestra
   card.append(el("div",{class:"notice "+(mb.esBajo?"warn":"ok"),text:(mb.esBajo?"📉 ":"✅ ")+mb.mensaje}));
   if (mb.aclaracion) card.append(el("p",{class:"hint",text:mb.aclaracion}));
   const comps = (mb.comparaciones||[]).map(c=>el("span",{class:"pill "+(c.bajo?"bad":"ok"),text:`${sign(c.deltaPromPct)} vs. ${c.contra}${c.deltaProyPct!=null?" · proyección "+sign(c.deltaProyPct):""}`}));
@@ -1822,6 +1917,385 @@ function cardAccionesComerciales(C){
   card.append(ol);
   return card;
 }
+/* ===================== 3.5 · Días flojos, fechas especiales, Panorama RRHH y borrado de fichajes =====================
+   Regla del resumen: solo se muestra lo que tiene datos. Si una sección queda vacía, no aparece (ni título ni aviso).
+   El Panorama RRHH es informativo: no sanciona ni descuenta nada, y solo lo ven jefes y administración (lo valida el servidor). */
+const SEM = {rojo:["🔴","Atención","bad"], amarillo:["🟡","A seguir","warn"], verde:["🟢","Positivo","ok"]};
+const fdm = f => fmtF(f).slice(0,5);
+
+/* ---------- Días flojos (ventas por debajo del promedio de su mismo día de la semana) ---------- */
+function cardDiasFlojos(D){
+  if (!D || !((D.flojos||[]).length || D.diaMasFlojo)) return null;
+  const card = el("div",{class:"card dias-flojos"}, el("h2",{text:"📉 Días flojos y cómo traccionarlos"}));
+  if ((D.flojos||[]).length) card.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"},
+    el("thead",{}, el("tr",{}, ...["Día","Vendido","Promedio de ese día","Diferencia"].map((x,i)=>el("th",{class:i?"n":null,text:x})))),
+    el("tbody",{}, D.flojos.map(f=>el("tr",{}, el("td",{text:`${f.dia} ${fdm(f.fecha)}`}), el("td",{class:"n",text:moneyK(f.total)}), el("td",{class:"n",text:moneyK(f.promedioDia)}), el("td",{class:"n"}, el("span",{class:"pill bad",text:sign(f.deltaPct)}))))))));
+  if (D.diaMasFlojo && D.diaMasFlojo.vsGeneralPct!=null && D.diaMasFlojo.vsGeneralPct<0) card.append(el("p",{class:"lead",text:`El ${D.diaMasFlojo.nombre} es el día más flojo: ${moneyK(D.diaMasFlojo.promedio)} de promedio, ${sign(D.diaMasFlojo.vsGeneralPct)} vs. el promedio de los días de apertura.`}));
+  if ((D.acciones||[]).length) card.append(el("ol",{class:"acciones-lista"}, D.acciones.map(a=>el("li",{}, el("b",{text:a.titulo+". "}), a.detalle, a.meta ? el("span",{class:"hint",text:" "+a.meta}) : null))));
+  card.append(el("p",{class:"hint",text:"Se compara cada día con el promedio de su mismo día de la semana en las últimas 8 semanas (solo días de apertura, sin feriados)."}));
+  return card;
+}
+
+/* ---------- Fechas especiales que se vienen (aviso con 3 a 4 semanas) y plan por etapas ---------- */
+function cardFechasEspeciales(L){
+  if (!(L||[]).length) return null;
+  const card = el("div",{class:"card fechas-esp"}, el("h2",{text:"📅 Fechas especiales que se vienen"}));
+  L.forEach((f,i)=>{
+    const cuando = f.faltan<=0 ? "¡Es hoy!" : f.faltan===1 ? "Mañana" : `En ${f.faltan} días`;
+    const rango = f.hasta && f.hasta!==f.fecha ? `${fdm(f.fecha)} al ${fdm(f.hasta)}` : fdm(f.fecha);
+    const actual = {tres_cuatro:0, dos:1, previa:2, dia:3}[f.etapa];
+    card.append(el("details",{class:"fecha-esp",open:i===0},
+      el("summary",{}, el("b",{text:f.nombre}), " ", el("span",{class:"pill "+(f.faltan<=7?"warn":""),text:`${rango} · ${cuando}`}), f.aConfirmar ? el("span",{class:"pill",text:"fecha a confirmar"}) : null),
+      el("div",{class:"notice ok",text:"👉 Ahora: "+f.accionAhora}),
+      el("ol",{class:"etapas"}, (f.etapas||[]).map((e,k)=>el("li",{class:k===actual?"actual":k<actual?"pasada":null}, el("b",{text:e.cuando+": "}), e.que))),
+      f.refuerzoLocal ? el("p",{class:"hint",text:"🏬 "+f.refuerzoLocal}) : null));
+  });
+  return card;
+}
+
+/* ---------- Tarjeta de RRHH en el resumen (KPIs): rojas primero, positivas al final ---------- */
+function cardRRHHResumen(R){
+  if (!R || !(R.alertas||[]).length) return null;
+  const card = el("div",{class:"card rrhh-res"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"👥 Panorama RRHH"}), el("span",{class:"spacer"}),
+    el("span",{class:"hint",text:`${fdm(R.periodo.desde)} al ${fdm(R.periodo.hasta)}`}),
+    el("button",{class:"btn sm",type:"button",text:"Ver panel",onclick:()=>{ location.hash="#/ingresos/rrhh"; }})));
+  card.append(listaAlertas(R.alertas.slice(0,8), false));
+  if ((R.ranking||[]).length) card.append(el("p",{class:"hint",text:"🏆 Más cumplidores: "+R.ranking.map(r=>`${r.puesto}. ${r.nombre}${r.cumplimiento!=null?" ("+r.cumplimiento+" %)":""}`).join(" · ")}));
+  card.append(el("p",{class:"hint",text:"Informativo: la app no sanciona ni descuenta nada. Solo lo ven jefes y administración."}));
+  return card;
+}
+function listaAlertas(A, conPeriodo){
+  return el("ul",{class:"alertas-rrhh"}, A.map(a=>{ const [ic,txt,c] = SEM[a.nivel]||SEM.amarillo;
+    return el("li",{class:"al-"+a.nivel}, el("span",{class:"sem",title:txt,"aria-label":txt,text:ic}),
+      el("div",{}, el("b",{text:a.nombre}), a.sucursal ? el("span",{class:"hint",text:" · "+a.sucursal}) : null, el("div",{text:a.titulo}),
+        a.detalle ? el("div",{class:"hint",text:a.detalle}) : null,
+        conPeriodo && a.periodo ? el("div",{class:"hint",text:`Período: ${fdm(a.periodo.desde)} al ${fdm(a.periodo.hasta)}`}) : null)); }));
+}
+
+/* ---------- Panel «Panorama RRHH» (pestaña de Fichaje y horas, solo jefes) ---------- */
+const RRHH_F = { sucursal:"", uid:"", per:"30", desde:"", hasta:"" };
+let RRHH_PERS = null;   // lista de personas del primer cálculo, para el filtro
+async function vPanoramaRRHH(body){
+  const hoyS = hoy(), iso = d => d.toISOString().slice(0,10);
+  const rango = () => { const t = new Date(hoyS+"T12:00:00");
+    if (RRHH_F.per==="mes") return {desde:hoyS.slice(0,8)+"01", hasta:hoyS};
+    if (RRHH_F.per==="mesant"){ const a = new Date(t.getFullYear(), t.getMonth()-1, 1, 12), b = new Date(t.getFullYear(), t.getMonth(), 0, 12); return {desde:iso(a), hasta:iso(b)}; }
+    if (RRHH_F.per==="otro") return {desde:RRHH_F.desde, hasta:RRHH_F.hasta};
+    return {}; };
+  const res = el("div",{class:"stack"});
+  const fsuc = el("select",{"aria-label":"Sucursal"}, el("option",{value:"",text:"Todas"}));
+  const femp = el("select",{"aria-label":"Empleado"}, el("option",{value:"",text:"Todo el equipo"}));
+  const fper = el("select",{"aria-label":"Período"}, ...[["30","Últimos 30 días"],["mes","Este mes"],["mesant","Mes anterior"],["otro","Elegir fechas"]].map(([v,t])=>el("option",{value:v,text:t,selected:RRHH_F.per===v})));
+  const fd = el("input",{type:"date",value:RRHH_F.desde,"aria-label":"Desde"}), fh = el("input",{type:"date",value:RRHH_F.hasta,"aria-label":"Hasta"});
+  const fechas = el("span",{class:"row",hidden:RRHH_F.per!=="otro"}, el("label",{class:"f inline"},"Desde",fd), el("label",{class:"f inline"},"Hasta",fh));
+  const cargar = async ()=>{
+    Object.assign(RRHH_F, {sucursal:fsuc.value, uid:femp.value, per:fper.value, desde:fd.value, hasta:fh.value}); fechas.hidden = fper.value!=="otro";
+    if (fper.value==="otro" && !(fd.value && fh.value)) return;
+    res.textContent=""; res.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Analizando fichajes, horarios y vacaciones…"));
+    let P; try{ P = await apiS("panoramaRRHH", Object.assign({sucursal:RRHH_F.sucursal||null, uid:RRHH_F.uid||null}, rango())); }
+    catch(e){ res.textContent=""; return res.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    if (fsuc.options.length===1) (P.sucursales||[]).forEach(s=>fsuc.append(el("option",{value:s,text:s,selected:RRHH_F.sucursal===s})));
+    if (!RRHH_PERS && !RRHH_F.uid && !RRHH_F.sucursal) RRHH_PERS = P.resumen.map(r=>({uid:r.uid, nombre:r.nombre}));
+    if (femp.options.length===1 && RRHH_PERS) RRHH_PERS.forEach(p=>femp.append(el("option",{value:p.uid,text:p.nombre,selected:RRHH_F.uid===p.uid})));
+    pintarPanorama(res, P, cargar);
+  };
+  [fsuc, femp, fper, fd, fh].forEach(x=>x.onchange = cargar);
+  body.append(el("div",{class:"card"}, el("div",{class:"row filtros"}, el("label",{class:"f inline"},"Sucursal",fsuc), el("label",{class:"f inline"},"Empleado",femp), el("label",{class:"f inline"},"Período",fper), fechas)), res);
+  cargar();
+}
+function pintarPanorama(res, P, recargar){
+  res.textContent="";
+  const per = `${fmtF(P.periodo.desde)} al ${fmtF(P.periodo.hasta)}`, c = P.cuenta||{};
+  const top = el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"👥 Panorama RRHH"}), el("span",{class:"hint",text:per}), el("span",{class:"spacer"}),
+    ...["rojo","amarillo","verde"].filter(n=>c[n]).map(n=>el("span",{class:"pill "+SEM[n][2],text:`${SEM[n][0]} ${c[n]} ${n==="verde"?(c[n]===1?"positiva":"positivas"):(c[n]===1?"alerta":"alertas")}`}))));
+  const voz = el("button",{class:"btn sm",type:"button",text:"🔊 Escuchar las 3 más importantes",onclick:()=>{
+    const t = P.alertas.filter(a=>a.nivel!=="verde").slice(0,3).map(a=>`${a.nombre}: ${a.titulo.charAt(0).toLowerCase()+a.titulo.slice(1)}.`);
+    const pos = P.alertas.find(a=>a.nivel==="verde"); if (pos && t.length<3) t.push(`Para destacar: ${pos.nombre}, ${pos.titulo.charAt(0).toLowerCase()+pos.titulo.slice(1)}.`);
+    if (!VOZ.hablar("Panorama de recursos humanos. "+t.join(" "))) toast("Este navegador no tiene voz."); }});
+  if (P.alertas.length && VOZ.soporta()) top.append(voz);
+  top.append(el("p",{class:"hint",text:"Informativo: la app no sanciona ni descuenta nada. Las faltas descuentan vacaciones aprobadas y feriados, y no cuentan los registros borrados por administración. Antes de sacar conclusiones, conversalo con la persona."}));
+  res.append(top);
+  const at = P.alertas.filter(a=>a.nivel!=="verde"), po = P.alertas.filter(a=>a.nivel==="verde");
+  if (at.length) res.append(el("div",{class:"card"}, el("h3",{text:"Para atender"}), listaAlertas(at, true)));
+  if (po.length) res.append(el("div",{class:"card"}, el("h3",{text:"Para destacar"}), listaAlertas(po, true)));
+  if ((P.ranking||[]).length) res.append(el("div",{class:"card"}, el("h3",{text:"🏆 Ranking de cumplimiento"}), el("ol",{class:"ranking"}, P.ranking.map(r=>el("li",{}, el("b",{text:r.nombre}), el("span",{class:"hint",text:` · ${r.sucursal}${r.cumplimiento!=null?" · "+r.cumplimiento+" % de las horas":""}${r.asistencia!=null?" · asistencia "+r.asistencia+" %":""}`}))))));
+  if ((P.resumen||[]).length){
+    const v = x => x==null ? "" : String(x);
+    const tb = el("tbody",{}, P.resumen.map(r=>el("tr",{}, el("td",{text:r.nombre}), el("td",{text:r.sucursal}),
+      el("td",{class:"n",text: r.horas ? hm(r.horas)+(r.esperado?" / "+hm(r.esperado):"") : ""}), el("td",{class:"n",text:r.cumplimiento!=null?r.cumplimiento+" %":""}),
+      el("td",{class:"n",text:r.faltas||""}), el("td",{class:"n",text:(r.tardanzas+r.salidasAnticipadas)||""}), el("td",{class:"n",text:r.incompletos||""}),
+      el("td",{class:"n",text:r.vacacionesTomadas||""}), el("td",{class:"n",text:v(r.saldoVacaciones)}))));
+    res.append(el("div",{class:"card"}, el("h3",{text:"Resumen por persona"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"},
+      el("thead",{}, el("tr",{}, ...["Persona","Sucursal","Horas / pactadas","Cumplimiento","Faltas","Tardanzas","Incompletos","Vacaciones tomadas","Saldo de vacaciones"].map((x,i)=>el("th",{class:i>1?"n":null,text:x})))), tb)),
+      el("p",{class:"hint",text:"Las horas pactadas, el horario (para tardanzas) y los días de vacaciones por año se cargan en Personal → «Sucursal y horas»."})));
+  }
+  res.append(editorUmbrales(P.umbrales, recargar));
+}
+function editorUmbrales(U, recargar){
+  const campos = [["tolerancia","Tolerancia de llegada / salida (min)"],["faltasAmarillo","Faltas para 🟡"],["faltasRojo","Faltas para 🔴"],["tardanzasAmarillo","Tardanzas para 🟡"],["tardanzasRojo","Tardanzas para 🔴"],
+    ["incompletosAmarillo","Fichajes incompletos para 🟡"],["incompletosRojo","Fichajes incompletos para 🔴"],["cumplimientoAmarillo","Cumplimiento de horas por debajo de (%) → 🟡"],["cumplimientoRojo","Cumplimiento por debajo de (%) → 🔴"],
+    ["extraPct","Horas extra por encima de (%) → 🟡"],["jornadaMaxHoras","Jornada larga: más de (h)"],["ubicacionAmarillo","Rechazos de ubicación / manuales para 🟡"],["ubicacionRojo","Rechazos de ubicación / manuales para 🔴"],["rachaDias","Racha destacada desde (días)"]];
+  const ins = {}; const grid = el("div",{class:"grid2"}, campos.map(([k,t])=>{ ins[k] = el("input",{type:"number",min:"0",value:U[k]}); return el("label",{class:"f"},t,ins[k]); }));
+  const b = el("button",{class:"btn primary",type:"button",text:"Guardar umbrales"});
+  b.onclick = async ()=>{ spinBtn(b,"Guardando…"); const u={}; for (const k in ins) u[k]=ins[k].value;
+    try{ await apiS("setUmbralesRRHH", u); toast("✅ Umbrales guardados"); recargar(); }catch(e){ unspin(b); toast(msgErr(e)); } };
+  return el("details",{class:"card"}, el("summary",{text:"⚙️ Umbrales de las alertas (editables)"}), grid, b);
+}
+
+/* ---------- Borrado de fichajes (solo administración) ---------- */
+async function vBorradoFich(body){
+  if (!(S.user && S.user.rol==="admin")) return body.append(el("div",{class:"card notice bad",text:"Solo la administración puede borrar registros de fichaje."}));
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando personal…"));
+  let L; try{ L = await apiS("listarPersonal"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  L.sort((a,b)=>(a.estado==="activo"?0:1)-(b.estado==="activo"?0:1) || a.nombre.localeCompare(b.nombre));
+  const emp = el("select",{"aria-label":"Empleado"}, el("option",{value:"",text:"Elegí el empleado…"}), ...L.map(u=>el("option",{value:u.id,text:u.nombre+" ("+u.legajo+")"+(u.estado!=="activo"?" · dado de baja":"")})));
+  const todos = el("input",{type:"checkbox"}), d1 = el("input",{type:"date","aria-label":"Desde"}), d2 = el("input",{type:"date","aria-label":"Hasta"});
+  const rango = el("div",{class:"grid2"}, el("label",{class:"f"},"Desde (opcional)",d1), el("label",{class:"f"},"Hasta (opcional)",d2));
+  const prev = el("div",{class:"previa",role:"status","aria-live":"polite"});
+  const bCalc = el("button",{class:"btn",type:"button",text:"🔎 Ver cuántos registros se borran"});
+  const crit = () => ({uid:emp.value, todos:todos.checked, desde:todos.checked?null:(d1.value||null), hasta:todos.checked?null:(d2.value||null)});
+  const invalidar = () => { prev.textContent=""; };
+  [emp, d1, d2].forEach(x=>x.onchange = invalidar);
+  todos.onchange = ()=>{ rango.hidden = todos.checked; invalidar(); };
+  bCalc.onclick = async ()=>{
+    const c = crit(); if (!c.uid) return toast("Elegí el empleado.");
+    if (!c.todos && !c.desde && !c.hasta) return toast("Elegí un rango de fechas o marcá «todos los registros».");
+    spinBtn(bCalc,"Contando…"); let r;
+    try{ r = await apiS("previaBorrado", c); }catch(e){ unspin(bCalc); return toast(msgErr(e)); }
+    unspin(bCalc); prev.textContent="";
+    const n = r.fichajes + r.solicitudes;
+    if (!n) return prev.append(el("div",{class:"notice ok",text:`${r.nombre} no tiene registros de fichaje ${r.rango==="todos los registros"?"":r.rango}. No hay nada para borrar.`}));
+    const conf = el("input",{type:"text",autocomplete:"off",placeholder:"Escribí BORRAR","aria-label":"Escribí BORRAR para confirmar"});
+    const bBorrar = el("button",{class:"btn danger",type:"button",text:`🗑️ Borrar ${n} registro${n===1?"":"s"} definitivamente`,disabled:true});
+    conf.oninput = ()=>{ bBorrar.disabled = conf.value.trim().toUpperCase()!=="BORRAR"; };
+    bBorrar.onclick = async ()=>{
+      if (!(await confirmar(`Vas a borrar ${n} registro${n===1?"":"s"} de ${r.nombre} (${r.rango}). No se puede deshacer. ¿Seguís?`, "Sí, borrar", true))) return;
+      spinBtn(bBorrar,"Borrando…");
+      try{ const x = await apiS("borrarFichajes", Object.assign(crit(), {confirmacion:conf.value, esperado:r.fichajes}));
+        toast(`✅ Borrados: ${x.fichajes} fichaje(s) y ${x.solicitudes} solicitud(es) de ${x.nombre}`);
+        prev.textContent=""; prev.append(el("div",{class:"notice ok",text:`✅ Listo: se borraron ${x.fichajes} fichaje(s), ${x.solicitudes} solicitud(es) y ${x.fotos} foto(s) fueron a la papelera. Quedó registrado en el Historial.`}));
+      }catch(e){ unspin(bBorrar); toast(msgErr(e)); }
+    };
+    prev.append(el("div",{class:"notice bad"},
+      el("b",{text:`Se van a borrar ${n} registro${n===1?"":"s"} de ${r.nombre}${r.estado!=="activo"?" (dado de baja)":""}:`}),
+      el("ul",{}, r.fichajes ? el("li",{text:`${r.fichajes} fichaje${r.fichajes===1?"":"s"}${r.primero?` (del ${fmtF(r.primero)} al ${fmtF(r.ultimo)})`:""}`}) : null,
+        r.solicitudes ? el("li",{text:`${r.solicitudes} solicitud${r.solicitudes===1?"":"es"} de fichaje manual o corrección`}) : null,
+        r.fotos ? el("li",{text:`${r.fotos} foto${r.fotos===1?"":"s"} (van a la papelera de Drive)`}) : null),
+      el("p",{style:"margin:6px 0",text:"Esta acción no se puede deshacer. Para confirmar escribí BORRAR y te vamos a pedir tu PIN."}),
+      el("div",{class:"row"}, conf, bBorrar)));
+    setTimeout(()=>conf.focus(),60);
+  };
+  body.append(el("div",{class:"card"}, el("h2",{text:"🗑️ Borrar registros de fichaje"}),
+    el("p",{class:"lead",text:"Solo administración. Sirve para limpiar registros de prueba o de personas que ya no están. Los registros borrados no cuentan en horas ni en el Panorama RRHH."}),
+    el("label",{class:"f"},"Empleado (incluye dados de baja)",emp),
+    el("label",{class:"check"}, todos, " Todos los registros de ese empleado"), rango, bCalc, prev,
+    el("p",{class:"hint",text:"En el Historial queda quién borró, cuándo, de qué empleado y cuántos registros. Los datos borrados no se guardan en ningún lado. Para borrar un solo registro, abrilo en «Fichadas» y tocá «Borrar este registro»."})));
+}
+/** Botón para borrar un registro individual (detalle de la fichada, solo administración). */
+function botonBorrarRegistro(x, recargar){
+  if (!(S.user && S.user.rol==="admin")) return null;
+  return el("button",{class:"btn sm danger",type:"button",text:"🗑️ Borrar este registro",onclick:async e=>{ e.stopPropagation();
+    if (!(await confirmar(`¿Borrar definitivamente la ${x.tipo} de ${x.nombre} del ${fmtF(x.fecha)}${x.hora?" a las "+x.hora:""}? No se puede deshacer (queda constancia en el Historial).`, "Borrar", true))) return;
+    try{ await apiS("borrarFichaje", x.id); toast("✅ Registro borrado"); S.openRow=null; recargar(); }catch(err){ toast(msgErr(err)); } }});
+}
+/* ===================== 3.6 · Clientes y pedidos · Producción · Permisos de jefes =====================
+   Los datos salen de la planilla «Control ingreso Nueva temporada 27» (la app solo la lee). Cada sección la ve solo el jefe que
+   la tiene habilitada: el servidor no envía los datos sin permiso. Regla: lo que no tiene datos no se muestra. */
+const SEM36 = {completo:["🟢","Completo","ok"], parcial:["🟡","Parcial","warn"], pendiente:["⚪","Pendiente",""], atrasado:["🔴","Atrasado","bad"]};
+const u36 = n => (Math.round(n||0)).toLocaleString("es-AR")+" u";
+const tsTxt = iso => iso ? fechaHora(iso) : "";
+
+/* Barra de audio de una sección: Escuchar resumen · Pausar/Reanudar · Detener · voz femenina/masculina (se recuerda). */
+function barraSeccion(texto, titulo){
+  if (!texto) return null;
+  const box = el("section",{class:"card audio","aria-label":"Resumen hablado"});
+  const estado = el("span",{class:"hint estado"}), txt = el("p",{class:"audio-txt",hidden:true,text:texto});
+  const gen = el("select",{"aria-label":"Voz"}, ...[["femenina","Femenina"],["masculina","Masculina"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.genero()===v})));
+  gen.onchange = ()=>{ VOZ.setGenero(gen.value); toast("Voz "+gen.value+" guardada"); };
+  const bPausa = el("button",{class:"btn",type:"button",text:"⏸️ Pausar",disabled:true,onclick:()=>{ if (VOZ.pausado()){ VOZ.reanudar(); bPausa.textContent="⏸️ Pausar"; } else { VOZ.pausar(); bPausa.textContent="▶️ Reanudar"; } }});
+  VOZ.onEstado = on => { box.classList.toggle("hablando", on); bPausa.disabled = !on; if (!on) bPausa.textContent="⏸️ Pausar"; estado.textContent = on ? "🔊 Leyendo…" : ""; };
+  box.append(el("h3",{},icono("audio",20)," Resumen hablado · "+titulo),
+    el("div",{class:"row"},
+      el("button",{class:"btn primary",type:"button",text:"🔊 Escuchar resumen","data-audio":"seccion",onclick:()=>{ txt.hidden=false; if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible."; return; } VOZ.hablar(texto); }}),
+      bPausa, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Voz",gen)),
+    estado, txt);
+  return box;
+}
+/* Fila con la última actualización de cada planilla y el botón «Actualizar datos» (relee las dos). */
+function filaActualizacion(D, recargar){
+  const items = [];
+  if (D.sync && D.sync.ts) items.push(el("span",{class:"pill "+(D.sync.ok?"":"bad"),text:`📗 Control ingreso: ${tsTxt(D.sync.ts)}${D.sync.ok?"":" · error: "+D.sync.error}`}));
+  if (D.cierreSync && D.cierreSync.ts) items.push(el("span",{class:"pill "+(D.cierreSync.ok?"":"bad"),text:`📘 Ventas Palermo: ${tsTxt(D.cierreSync.ts)}${D.cierreSync.ok?"":" · error"}`}));
+  const b = el("button",{class:"btn sm",type:"button",text:"🔄 Actualizar datos"});
+  b.onclick = async ()=>{ spinBtn(b,"Leyendo las planillas…");
+    try{ const r = await apiS("actualizarPlanillas"); toast(r.map(x=>`${x.ok?"✅":"⚠️"} ${x.planilla.replace(/\.xlsx$/,"")}: ${x.ok?fechaHora(x.ts):x.error}`).join(" · ")); recargar(); }
+    catch(e){ unspin(b); toast(msgErr(e)); } };
+  return el("div",{class:"card row act36"}, ...items, el("span",{class:"spacer"}), b);
+}
+const hk = (k,v,s,cls) => el("div",{class:"hk"+(cls?" "+cls:"")}, el("span",{class:"k",text:k}), el("b",{text:v}), s?el("span",{class:"hint",text:s}):null);
+
+/* ---------------- CLIENTES Y PEDIDOS ---------------- */
+const CF = { tipo:"", q:"", orden:"estado", estado:"" };
+async function vClientes(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  const cargar = async ()=>{
+    VOZ.detener(); body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Leyendo la planilla de clientes…"));
+    let D; try{ D = await apiS("clientesPedidos"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    body.textContent=""; pintarClientes(body, D, cargar);
+  };
+  cargar();
+}
+function pintarClientes(body, D, recargar){
+  const R = D.resumen;
+  body.append(filaActualizacion(D, recargar));
+  const ba = barraSeccion(D.audio, "Clientes y pedidos"); if (ba) body.append(ba);
+  if (!R.clientes) return;
+  body.append(el("div",{class:"card"}, el("div",{class:"hkpis"},
+    hk("Clientes con pedido", String(R.clientes)), hk("Unidades pedidas", u36(R.pedido)), hk("Entregadas", u36(R.entregado), R.separado?u36(R.separado)+" separadas":""),
+    hk("Pendientes", u36(R.pendiente), "", R.pendiente?"neg":""), hk("Cumplimiento", (R.cumplimiento||0)+" %"))));
+  if ((R.porTipo||[]).length > 1) body.append(el("div",{class:"row"}, R.porTipo.map(t=>el("span",{class:"pill",text:`${t.tipo}s: ${t.clientes} · ${u36(t.pendiente)} pendientes · ${t.cumplimiento||0} %`}))));
+  if ((R.alertas||[]).length || (R.recomendaciones||[]).length) body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas y prioridades"}),
+    el("ul",{class:"alertas-rrhh"}, R.alertas.map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
+      R.recomendaciones.map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
+  // Filtros
+  const ftipo = el("select",{"aria-label":"Tipo"}, el("option",{value:"",text:"Todos"}), ...["Franquicia","Mayorista"].filter(t=>D.clientes.some(c=>c.tipo===t)).map(t=>el("option",{value:t,text:t+"s",selected:CF.tipo===t})));
+  const fest = el("select",{"aria-label":"Estado"}, el("option",{value:"",text:"Todos"}), ...Object.keys(SEM36).filter(k=>D.clientes.some(c=>c.estado===k)).map(k=>el("option",{value:k,text:SEM36[k][1],selected:CF.estado===k})));
+  const ford = el("select",{"aria-label":"Ordenar"}, ...[["estado","Por estado (atrasados primero)"],["pendiente","Mayor cantidad pendiente"],["antiguedad","Primera entrega más antigua"],["nombre","Nombre"]].map(([v,t])=>el("option",{value:v,text:t,selected:CF.orden===v})));
+  const fq = el("input",{type:"search",placeholder:"Buscar cliente o modelo","aria-label":"Buscar",value:CF.q});
+  const tabla = el("div");
+  const ORD = {atrasado:0, pendiente:1, parcial:2, completo:3};
+  const pintar = ()=>{ Object.assign(CF,{tipo:ftipo.value, estado:fest.value, orden:ford.value, q:fq.value.trim()}); tabla.textContent="";
+    const q = nh(CF.q);
+    let L = D.clientes.filter(c=>(!CF.tipo||c.tipo===CF.tipo) && (!CF.estado||c.estado===CF.estado) && (!q || nh(c.nombre).includes(q) || c.items.some(x=>nh(x.producto).includes(q)||nh(x.codigo).includes(q))));
+    L.sort((a,b)=> CF.orden==="pendiente" ? b.pendiente-a.pendiente : CF.orden==="nombre" ? a.nombre.localeCompare(b.nombre) : CF.orden==="antiguedad" ? String(a.primeraEntrega||"9").localeCompare(String(b.primeraEntrega||"9")) : (ORD[a.estado]-ORD[b.estado]) || b.pendiente-a.pendiente);
+    const conMonto = L.some(c=>c.monto), conSaldo = L.some(c=>c.pendienteFacturar);
+    const tb = el("tbody",{}, L.map(c=>{ const [ic,txt,cls] = SEM36[c.estado]||["","",""];
+      return el("tr",{class:"clk",tabindex:"0",onclick:()=>detalleCliente(c),onkeydown:e=>{ if (e.key==="Enter") detalleCliente(c); }},
+        el("td",{}, el("b",{text:c.nombre})), el("td",{text:c.tipo}), el("td",{class:"n",text:u36(c.pedido)}), el("td",{class:"n",text:u36(c.entregado+c.separado)}),
+        el("td",{class:"n",text:c.pendiente?u36(c.pendiente):""}), el("td",{}, el("span",{class:"pill "+cls,text:ic+" "+txt})), conSaldo ? el("td",{class:"n",text:c.pendienteFacturar?moneyK(c.pendienteFacturar):""}) : conMonto ? el("td",{class:"n",text:c.monto?moneyK(c.monto):""}) : null); }));
+    tabla.append(el("div",{class:"tablewrap"}, el("table",{}, el("thead",{}, el("tr",{}, ...["Cliente","Tipo","Pedidas","Entregadas","Pendientes","Estado"].concat(conSaldo?["Saldo sin facturar"]:conMonto?["Monto del pedido"]:[]).map((x,i)=>el("th",{class:i>1&&i!==5?"n":null,text:x})))), tb)));
+  };
+  [ftipo, fest, ford].forEach(x=>x.onchange=pintar); fq.oninput = pintar;
+  body.append(el("div",{class:"card"}, el("h3",{text:"Pedidos por cliente"}),
+    el("div",{class:"row filtros"}, el("label",{class:"f inline"},"Tipo",ftipo), el("label",{class:"f inline"},"Estado",fest), el("label",{class:"f inline"},"Ordenar",ford), el("label",{class:"f inline"},"Buscar",fq)),
+    tabla, el("p",{class:"hint",text:"Tocá un cliente para ver su pedido modelo por modelo. Entregadas incluye lo separado en su depósito. Saldo sin facturar = monto del pedido − lo facturado en las hojas «SE LLEVÓ». Los pagos no figuran en la planilla."})));
+  if (S.user && S.user.rol==="admin") body.append(editorTipos(D.clientes, recargar));
+  pintar();
+}
+const nh = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+function detalleCliente(c){
+  const [ic,txt,cls] = SEM36[c.estado]||["","",""];
+  const filas = c.items.map(x=>el("tr",{}, el("td",{}, x.producto, el("div",{class:"hint mono",text:x.codigo})), el("td",{class:"n",text:x.pedido}), el("td",{class:"n",text:(x.entregado+x.separado)||""}),
+    el("td",{class:"n"}, x.pendiente ? el("b",{text:x.pendiente}) : ""), el("td",{text:[x.ultimaEntrega?"últ. entrega "+fmtF(x.ultimaEntrega).slice(0,5):"", x.pendiente&&x.listaEl?"lista ~"+fmtF(x.listaEl).slice(0,5):"", x.pendiente&&x.stockLima?"stock Lima "+x.stockLima:""].filter(Boolean).join(" · ")})));
+  const m = modal(el("div",{class:"grid"},
+    el("div",{class:"row"}, el("h2",{style:"margin:0",text:c.nombre}), el("span",{class:"pill "+cls,text:ic+" "+txt}), el("span",{class:"pill",text:c.tipo})),
+    el("div",{class:"hkpis"}, hk("Pedidas",u36(c.pedido)), hk("Entregadas",u36(c.entregado),c.separado?u36(c.separado)+" separadas":""), c.pendiente?hk("Faltan",u36(c.pendiente),"","neg"):null, c.monto?hk("Monto del pedido",moneyK(c.monto)):null, c.facturado?hk("Facturado",moneyK(c.facturado)):null, c.pendienteFacturar?hk("Saldo sin facturar",moneyK(c.pendienteFacturar)):null),
+    c.entregaEstimada && c.pendiente ? el("p",{class:"lead",text:`Entrega total estimada: ${fmtF(c.entregaEstimada)}${c.queHacer?" · "+c.queHacer:""}`}) : null,
+    c.separableYa ? el("div",{class:"notice ok",text:`👉 Hay ${u36(c.separableYa)} de lo pendiente con stock en HB Lima: se pueden separar ya.`}) : null,
+    (c.entregasPorFecha||[]).length ? el("p",{class:"hint",text:"Entregas: "+c.entregasPorFecha.map(x=>`${fmtF(x.fecha).slice(0,5)} (${u36(x.unidades)})`).join(" · ")}) : null,
+    c.difDetalle ? el("p",{class:"hint",text:"ℹ️ "+c.difDetalle}) : null,
+    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Modelo","Pedidas","Entregadas","Faltan",""].map((x,i)=>el("th",{class:i&&i<4?"n":null,text:x})))), el("tbody",{}, filas))),
+    el("button",{class:"btn",type:"button",text:"Cerrar",onclick:()=>m.cerrar()})));
+}
+function editorTipos(L, recargar){
+  const box = el("div",{class:"grid2"}, L.map(c=>{ const s = el("select",{"aria-label":"Tipo de "+c.nombre}, ...["Franquicia","Mayorista"].map(t=>el("option",{value:t,text:t,selected:c.tipo===t})));
+    s.onchange = async ()=>{ try{ await apiS("setTipoCliente", c.clave, s.value); toast("✅ "+c.nombre+": "+s.value); recargar(); }catch(e){ toast(msgErr(e)); } };
+    return el("label",{class:"f"}, c.nombre, s); }));
+  return el("details",{class:"card"}, el("summary",{text:"⚙️ Tipo de cada cliente (Franquicia / Mayorista)"}), box, el("p",{class:"hint",text:"Se guarda en la app; la planilla no se toca."}));
+}
+
+/* ---------------- PRODUCCIÓN ---------------- */
+const PF = { q:"", taller:"", estado:"" };
+async function vProduccion(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  const cargar = async ()=>{
+    VOZ.detener(); body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Leyendo producción…"));
+    let D; try{ D = await apiS("produccionPanel"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    body.textContent=""; pintarProduccion(body, D, cargar);
+  };
+  cargar();
+}
+const EST_P = {completo:["🟢","Completo","ok"], parcial:["🟡","Parcial","warn"], pendiente:["⚪","Pendiente",""], atrasado:["🔴","Atrasado","bad"]};
+function pintarProduccion(body, D, recargar){
+  const R = D.resumen;
+  body.append(filaActualizacion(D, recargar));
+  const ba = barraSeccion(D.audio, "Producción"); if (ba) body.append(ba);
+  if (!R.planificado && !R.faltaFabricar) return;
+  body.append(el("div",{class:"card"}, el("div",{class:"hkpis"},
+    hk("Planificadas", u36(R.planificado)), hk("Ingresadas al depósito", u36(R.ingresado)), R.enProceso?hk("En talleres", u36(R.enProceso)):null, R.sinIniciar?hk("Sin taller asignado", u36(R.sinIniciar)):null,
+    R.faltaFabricar?hk("Falta fabricar p/ pedidos", u36(R.faltaFabricar), R.paraMinimo?u36(R.paraMinimo)+" para el mínimo":"", "neg"):null, hk("Avance", (R.avance||0)+" %")),
+    el("div",{class:"barra-avance",role:"img","aria-label":`Avance ${R.avance||0} %`}, el("i",{style:`width:${Math.min(100,R.avance||0)}%`}))));
+  if ((R.alertas||[]).length || (R.recomendaciones||[]).length) body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas y prioridades"}),
+    el("ul",{class:"alertas-rrhh"}, R.alertas.map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
+      R.recomendaciones.map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
+  const TL = (R.talleres||[]).filter(t=>t.planificado);
+  if (TL.length) body.append(el("div",{class:"card"}, el("h3",{text:"Por taller"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"},
+    el("thead",{}, el("tr",{}, ...["Taller","Planificado","Ingresado","Falta","Avance","Atrasados","Próxima fecha"].map((x,i)=>el("th",{class:i&&i<6?"n":null,text:x})))),
+    el("tbody",{}, TL.map(t=>el("tr",{}, el("td",{text:t.taller}), el("td",{class:"n",text:t.planificado}), el("td",{class:"n",text:t.ingresado||""}), el("td",{class:"n",text:t.faltante||""}),
+      el("td",{class:"n",text:t.avance!=null?t.avance+" %":""}), el("td",{class:"n"}, t.atrasadas?el("span",{class:"pill bad",text:String(t.atrasadas)}):""), el("td",{text:t.proxima?fmtF(t.proxima):""}))))))));
+  // Artículos con filtros
+  const est = x => x.atrasado ? "atrasado" : x.estado;
+  const ftal = el("select",{"aria-label":"Taller"}, el("option",{value:"",text:"Todos"}), ...TL.map(t=>el("option",{value:t.taller,text:t.taller,selected:PF.taller===t.taller})));
+  const fest = el("select",{"aria-label":"Estado"}, el("option",{value:"",text:"Todos"}), ...Object.keys(EST_P).filter(k=>D.lineas.some(x=>est(x)===k)).map(k=>el("option",{value:k,text:EST_P[k][1],selected:PF.estado===k})));
+  const fq = el("input",{type:"search",placeholder:"Buscar modelo o SKU","aria-label":"Buscar modelo",value:PF.q});
+  const tabla = el("div");
+  const pintar = ()=>{ Object.assign(PF,{taller:ftal.value, estado:fest.value, q:fq.value.trim()}); tabla.textContent=""; const q = nh(PF.q);
+    const L = D.lineas.filter(x=>(!PF.taller||x.taller===PF.taller) && (!PF.estado||est(x)===PF.estado) && (!q||nh(x.producto+" "+x.nombreTienda+" "+x.sku).includes(q)))
+      .sort((a,b)=>(a.atrasado?0:1)-(b.atrasado?0:1) || b.faltante-a.faltante);
+    tabla.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"},
+      el("thead",{}, el("tr",{}, ...["Modelo","Taller","Planificado","Ingresado","Falta","Estado","Fecha"].map((x,i)=>el("th",{class:i>1&&i<5?"n":null,text:x})))),
+      el("tbody",{}, L.map(x=>{ const [ic,t,c] = EST_P[est(x)]||["","",""]; const crit = x.faltante && x.planificado && x.faltante/x.planificado>=0.5;
+        return el("tr",{}, el("td",{}, x.nombreTienda||x.producto, el("div",{class:"hint mono",text:[x.sku, x.ot].filter(Boolean).join(" · ")})), el("td",{text:x.taller}),
+          el("td",{class:"n",text:x.planificado}), el("td",{class:"n",text:x.ingresado||""}), el("td",{class:"n"}, x.faltante ? el("b",{class:crit?"neg":null,text:x.faltante}) : ""),
+          el("td",{}, el("span",{class:"pill "+c,text:ic+" "+t})), el("td",{text:x.fechaPrometida?"prom. "+fmtF(x.fechaPrometida):x.ultimaLlegada?"llegó "+fmtF(x.ultimaLlegada):""})); })))));
+  };
+  [ftal, fest].forEach(x=>x.onchange=pintar); fq.oninput = pintar;
+  body.append(el("div",{class:"card"}, el("h3",{text:"Artículos (INGRESO)"}), el("div",{class:"row filtros"}, el("label",{class:"f inline"},"Taller",ftal), el("label",{class:"f inline"},"Estado",fest), el("label",{class:"f inline"},"Buscar",fq)), tabla));
+  pintar();
+  const FB = D.fabricar||[];
+  if (FB.length) body.append(el("details",{class:"card",open:FB.some(x=>x.faltanPedidos)}, el("summary",{text:`🧵 Falta fabricar (${FB.length} talles)`}), el("div",{class:"tablewrap"}, el("table",{class:"compact"},
+    el("thead",{}, el("tr",{}, ...["Producto","Talle","Para pedidos","Para el mínimo","OT","Estado","Prioridad"].map((x,i)=>el("th",{class:i===2||i===3?"n":null,text:x})))),
+    el("tbody",{}, FB.slice().sort((a,b)=>b.faltanPedidos-a.faltanPedidos).map(x=>el("tr",{}, el("td",{text:x.producto||x.sku}), el("td",{text:x.talle}), el("td",{class:"n"}, x.faltanPedidos?el("b",{text:x.faltanPedidos}):""), el("td",{class:"n",text:x.paraMinimo||""}),
+      el("td",{text:x.ot||""}), el("td",{text:x.estadoProduccion}), el("td",{}, x.prioridad?el("span",{class:"pill "+(/URGENTE/i.test(x.prioridad)?"bad":"warn"),text:x.prioridad}):""))))))));
+  const OT = (D.ots||[]).filter(o=>!o.terminada);
+  if (OT.length) body.append(el("div",{class:"card"}, el("h3",{text:"OTs en curso"}), el("ul",{class:"lista-avisos"}, OT.map(o=>el("li",{}, el("b",{text:`${o.ot} · ${o.prenda||o.sku}`}), ` · ${o.cantidad} u · ${o.taller||"sin taller"} · ${o.estado}${o.paso?" → "+o.paso:""}`, o.atrasada?el("span",{class:"pill bad",text:"atrasada"}):null)))));
+}
+
+/* ---------------- PERMISOS DE JEFES (solo administración) ---------------- */
+async function vPermisosJefes(body){
+  if (!(S.user && S.user.rol==="admin")) return body.append(el("div",{class:"card notice bad",text:"Solo la administración ve y cambia los permisos de los jefes."}));
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando jefes…"));
+  let P; try{ P = await apiS("permisosJefes"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const jefes = P.jefes.filter(j=>j.rol==="responsable");
+  const card = el("div",{class:"card"}, el("h2",{text:"🔐 Permisos de jefes"}),
+    el("p",{class:"lead",text:"Un interruptor por sección. Lo que un jefe no tiene habilitado no aparece en su menú y el servidor no le envía esos datos. Un jefe nuevo arranca sin Clientes y pedidos ni Producción."}));
+  if (!jefes.length) card.append(el("p",{class:"hint",text:"Cuando des de alta a un jefe (rol Jefe/Responsable en Personal), aparece acá."}));
+  const head = el("tr",{}, el("th",{text:"Jefe"}), ...P.secciones.map(s=>el("th",{class:"vert",text:s.nombre})));
+  const tb = el("tbody",{}, jefes.map(j=>el("tr",{}, el("th",{scope:"row",text:j.nombre}), ...P.secciones.map(s=>{
+    const c = el("input",{type:"checkbox",role:"switch",checked:j.permisos.includes(s.id),"aria-label":`${s.nombre} para ${j.nombre}`});
+    c.onchange = async ()=>{ c.disabled=true; try{ const u = await apiS("setPermisoJefe", j.id, s.id, c.checked); j.permisos = u.permisos; toast(`✅ ${j.nombre}: ${c.checked?"habilitado":"quitado"} «${s.nombre}»`); }
+      catch(e){ c.checked=!c.checked; toast(msgErr(e)); } c.disabled=false; };
+    return el("td",{class:"sw"}, el("label",{class:"switch"}, c, el("span",{})));
+  }))));
+  if (jefes.length) card.append(el("div",{class:"tablewrap"}, el("table",{class:"compact permisos"}, el("thead",{}, head), tb)));
+  card.append(el("p",{class:"hint",text:"Cada cambio pide tu PIN (vale 5 minutos) y queda en el Historial: quién, cuándo y qué cambió. La administración tiene acceso a todo."}));
+  body.append(card);
+}
+
+/* ---------------- Tarjetas para el resumen general (KPIs) ---------------- */
+function cardsControlResumen(K){
+  const out = [];
+  const C = K.clientes36, P = K.produccion36;
+  if (C && C.clientes) out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"📦 Clientes y pedidos"}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Ver sección",onclick:()=>ir("clientes")})),
+    el("div",{class:"hkpis"}, hk("Pedidas",u36(C.pedido)), hk("Entregadas",u36(C.entregado)), C.pendiente?hk("Pendientes",u36(C.pendiente),"","neg"):null, hk("Cumplimiento",(C.cumplimiento||0)+" %")),
+    (C.alertas||[]).length ? el("ul",{class:"lista-avisos"}, C.alertas.map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
+  if (P && (P.planificado || P.faltaFabricar)) out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"🧵 Producción"}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Ver sección",onclick:()=>ir("produccion")})),
+    el("div",{class:"hkpis"}, hk("Planificadas",u36(P.planificado)), hk("Ingresadas",u36(P.ingresado)), P.faltaFabricar?hk("Falta fabricar",u36(P.faltaFabricar),"","neg"):null, hk("Avance",(P.avance||0)+" %")),
+    (P.alertas||[]).length ? el("ul",{class:"lista-avisos"}, P.alertas.map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
+  return out;
+}
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
    El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
 const VOZ_KEY = "hb3_voz";
@@ -1831,28 +2305,40 @@ const VOZ = {
   setVelocidad(v){ lsSet(VOZ_KEY, v); },
   rate(){ return {lenta:0.85, normal:1, rapida:1.2}[this.velocidad()]; },
   voces(){ try{ return speechSynthesis.getVoices()||[]; }catch(e){ return []; } },
+  /* 3.5 · Voz femenina o masculina (se recuerda por usuario en este teléfono). Por defecto, femenina. */
+  claveGenero(){ return "hb35_voz_genero_"+((S.user&&(S.user.usuario||S.user.legajo||S.user.id))||"anon"); },
+  genero(){ const g = lsGet(this.claveGenero()); return g==="masculina" ? "masculina" : "femenina"; },
+  setGenero(g){ lsSet(this.claveGenero(), g==="masculina"?"masculina":"femenina"); },
+  generoDe(v){ const n = String(v && v.name || "");
+    if (/female|mujer|femenin|helena|laura|sabina|paulina|m[oó]nica|elena|luc[ií]a|isabel|camila|valeria|elvira|dalia|paloma|conchita|pen[eé]lope|lupe|esperanza|marisol|salom[eé]|carla|ximena|soledad|beatriz|francisca|catalina|esf|google espa[nñ]ol( de estados unidos)?$/i.test(n)) return "femenina";
+    if (/\bmale\b|hombre|masculin|tom[aá]s|ra[uú]l|pablo|jorge|[aá]lvaro|diego|carlos|juan|enrique|gerardo|federico|mateo|alonso|emilio|jos[eé]|andr[eé]s|gonzalo|lorenzo|esd\b|esc\b/i.test(n)) return "masculina";
+    return null; },
   /* es-AR primero; si no hay, es-419 / es-US / es-MX / es-ES; dentro del idioma, la voz de mejor calidad (natural/neural/Google). */
   mejorVoz(){
     const vs = this.voces(); if (!vs.length) return null;
-    const norm = l => String(l||"").replace("_","-").toLowerCase();
-    for (const l of ["es-ar","es-419","es-us","es-mx","es-es"]){
-      const c = vs.filter(v=>norm(v.lang)===l);
-      if (c.length) return c.find(v=>/natural|neural|premium|enhanced|google/i.test(v.name)) || c[0];
-    }
-    const es = vs.filter(v=>/^es/i.test(v.lang)); return es.find(v=>/natural|neural|google/i.test(v.name)) || es[0] || null;
+    const g = this.genero(), norm = l => String(l||"").replace("_","-").toLowerCase();
+    const buena = L => L.find(v=>/natural|neural|premium|enhanced|google/i.test(v.name)) || L[0];
+    const es = vs.filter(v=>/^es/i.test(v.lang));
+    // 1º: una voz del género elegido (en el orden de idiomas); 2º: cualquier voz en español (el tono se ajusta en pitch()).
+    for (const l of ["es-ar","es-419","es-us","es-mx","es-es"]){ const c = es.filter(v=>norm(v.lang)===l && this.generoDe(v)===g); if (c.length) return buena(c); }
+    const cg = es.filter(v=>this.generoDe(v)===g); if (cg.length) return buena(cg);
+    for (const l of ["es-ar","es-419","es-us","es-mx","es-es"]){ const c = es.filter(v=>norm(v.lang)===l); if (c.length) return buena(c); }
+    return es.length ? buena(es) : null;
   },
+  /** Si no hay una voz del género elegido, se aproxima con el tono. */
+  pitch(voz){ const g = this.genero(), gv = this.generoDe(voz); if (gv===g) return 1; if (g==="masculina") return gv==="femenina" ? 0.7 : 0.85; return gv==="masculina" ? 1.3 : 1.05; },
   activa:null, onEstado:null,
   hablar(texto, onFin){
     if (!this.soporta()) return false;
     this.detener();
-    const voz = this.mejorVoz(), rate = this.rate();
+    const voz = this.mejorVoz(), rate = this.rate(), pitch = this.pitch(voz);
     const partes = String(texto).match(/[^.!?]+[.!?]+["»]?\s*|[^.!?]+$/g) || [String(texto)];   // por oraciones: algunos navegadores cortan los textos largos
     const ses = { onFin, i:0 }; this.activa = ses;
     const siguiente = () => {
       if (this.activa !== ses) return;
       if (ses.i >= partes.length){ this.activa=null; if (this.onEstado) this.onEstado(false); if (onFin) onFin(); return; }
       const u = new SpeechSynthesisUtterance(partes[ses.i++]);
-      u.lang = voz ? voz.lang : "es-AR"; if (voz) u.voice = voz; u.rate = rate; u.pitch = 1;
+      u.lang = voz ? voz.lang : "es-AR"; if (voz) u.voice = voz; u.rate = rate; u.pitch = pitch;
       u.onend = siguiente; u.onerror = e => { if (e && (e.error==="interrupted"||e.error==="canceled")) return; siguiente(); };
       try{ speechSynthesis.speak(u); }catch(e){ siguiente(); }
     };
@@ -1860,26 +2346,32 @@ const VOZ = {
     siguiente();
     return true;
   },
-  detener(){ this.activa=null; try{ speechSynthesis.cancel(); }catch(e){} if (this.onEstado) this.onEstado(false); }
+  detener(){ this.activa=null; this._pausa=false; try{ speechSynthesis.cancel(); }catch(e){} if (this.onEstado) this.onEstado(false); },
+  pausar(){ try{ speechSynthesis.pause(); this._pausa=true; }catch(e){} },
+  reanudar(){ try{ speechSynthesis.resume(); this._pausa=false; }catch(e){} },
+  pausado(){ return !!this._pausa; }
 };
 try{ if (VOZ.soporta()){ speechSynthesis.getVoices(); speechSynthesis.addEventListener("voiceschanged", ()=>{}); } }catch(e){}
 addEventListener("pagehide", ()=>VOZ.detener());
 
-/* Barra de audio arriba del tablero: 4 botones, Detener y velocidad (se recuerda). Muestra en pantalla el mismo texto que se lee. */
+/* Barra de audio arriba del tablero: botones (solo los que tienen algo para leer), Detener, voz femenina/masculina y velocidad (se recuerdan).
+   Muestra en pantalla el mismo texto que se lee. */
 function barraAudio(A){
   const box = el("section",{class:"card audio","aria-label":"Resumen hablado"});
   if (!A) return box;
   const titulo = el("b",{text:""}), txt = el("p",{class:"audio-txt",hidden:true}), estado = el("span",{class:"hint estado",text:""});
   const sel = el("select",{"aria-label":"Velocidad de lectura"}, ...[["lenta","Lenta"],["normal","Normal"],["rapida","Rápida"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.velocidad()===v})));
   sel.onchange = ()=>{ VOZ.setVelocidad(sel.value); toast("Velocidad de lectura: "+sel.selectedOptions[0].text); };
-  const leer = (k, t) => { titulo.textContent = t; txt.textContent = A[k]; txt.hidden=false;
+  const gen = el("select",{"aria-label":"Voz"}, ...[["femenina","Femenina"],["masculina","Masculina"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.genero()===v})));
+  gen.onchange = ()=>{ VOZ.setGenero(gen.value); toast("Voz "+gen.value+" guardada"); };
+  const leer = (k, t) => { titulo.textContent = t.charAt(0).toUpperCase()+t.slice(1); txt.textContent = A[k]; txt.hidden=false;
     if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible para leerlo."; return; }
     VOZ.hablar(A[k]); };
   VOZ.onEstado = on => { box.classList.toggle("hablando", on); estado.textContent = on ? "🔊 Leyendo… tocá Detener para cortar." : ""; };
-  const B = [["general","🔊 Escuchar resumen"],["comercial","🔊 Escuchar KPIs comerciales"],["auditoria","🔊 Escuchar KPIs de auditoría"],["acciones","🔊 Escuchar acciones para Palermo"]]
-    .map(([k,t])=>el("button",{class:"btn"+(k==="general"?" primary":""),type:"button",text:t,"data-audio":k,onclick:()=>leer(k, t.replace("🔊 Escuchar ",""))}));
+  const B = [["general","🔊 Escuchar resumen"],["comercial","🔊 Escuchar KPIs comerciales"],["auditoria","🔊 Escuchar KPIs de auditoría"],["acciones","🔊 Escuchar acciones para Palermo"],["rrhh","🔊 Escuchar RRHH"]]
+    .filter(([k])=>A[k] && String(A[k]).trim()).map(([k,t])=>el("button",{class:"btn"+(k==="general"?" primary":""),type:"button",text:t,"data-audio":k,onclick:()=>leer(k, t.replace("🔊 Escuchar ",""))}));
   box.append(...[el("h3",{},icono("audio",20)," Resumen hablado"),
-    el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Velocidad",sel)),
+    el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Voz",gen), el("label",{class:"f inline"},"Velocidad",sel)),
     !VOZ.soporta() ? el("div",{class:"notice warn",text:"Tu navegador no tiene síntesis de voz. Al tocar un botón, el texto se muestra igual."}) : null,
     estado, el("div",{class:"audio-panel"}, titulo, txt)].filter(Boolean));
   return box;
@@ -2031,7 +2523,7 @@ async function vVacaciones(main){
   const fe = el("select",{}, el("option",{value:"",text:"Todas"}), ...["aprobada","rechazada","cancelada"].map(x=>el("option",{value:x,text:EST_VAC[x][0]})));
   const th = el("tbody");
   const pintarH = ()=>{ th.textContent=""; const L = resto.filter(v=>!fe.value||v.estado===fe.value);
-    L.forEach(v=>th.append(el("tr",{}, el("td",{text:v.nombre}), el("td",{class:"mono",text:rangoVac(v.desde,v.hasta)}), el("td",{class:"n",text:v.dias}), el("td",{},pillVac(v.estado)), el("td",{text:v.decididoPor||""}), el("td",{class:"mono",text:v.decidido?new Date(v.decidido).toLocaleString("es-AR"):""}), el("td",{text:v.motivo||v.comentario||""}))));
+    L.forEach(v=>th.append(el("tr",{}, el("td",{text:v.nombre}), el("td",{class:"mono",text:rangoVac(v.desde,v.hasta)}), el("td",{class:"n",text:v.dias}), el("td",{},pillVac(v.estado)), el("td",{text:v.decididoPor||""}), el("td",{class:"mono",text:v.decidido?fechaHora(v.decidido):""}), el("td",{text:v.motivo||v.comentario||""}))));
     if (!L.length) th.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin decisiones registradas."}))); };
   fe.onchange = pintarH; pintarH();
   body.append(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"Historial de decisiones"}), el("span",{class:"spacer"}), el("label",{class:"f inline"},"Estado",fe)),
@@ -2050,8 +2542,8 @@ function vCierre(main){
     const s = r.sync;
     body.append(el("div",{class:"card"}, el("h3",{text:"🔄 Sincronización con la planilla (solo lectura)"}),
       !s ? el("p",{class:"lead",text:"Todavía no se leyó la planilla."}) : el("div",{class:"grid"},
-        el("div",{class:"notice "+(s.ok?(s.errores&&s.errores.length?"warn":"ok"):"bad"),text: s.ok ? `Última lectura: ${new Date(s.ts).toLocaleString("es-AR")} · ${s.dias} días con cierre · ${s.nuevos} nuevos · ${s.cambiados} con cambios` : "Error: "+s.error}),
-        s.archivo ? el("span",{class:"hint",text:`Archivo: ${s.archivo} · modificado ${new Date(s.modificado).toLocaleString("es-AR")}`}) : null,
+        el("div",{class:"notice "+(s.ok?(s.errores&&s.errores.length?"warn":"ok"):"bad"),text: s.ok ? `Última lectura: ${fechaHora(s.ts)} · ${s.dias} días con cierre · ${s.nuevos} nuevos · ${s.cambiados} con cambios` : "Error: "+s.error}),
+        s.archivo ? el("span",{class:"hint",text:`Archivo: ${s.archivo} · modificado ${fechaHora(s.modificado)}`}) : null,
         s.errores && s.errores.length ? el("details",{}, el("summary",{text:`⚠️ ${s.errores.length} observación(es) en la planilla (para corregir)`}), el("ul",{}, s.errores.map(x=>el("li",{text:x})))) : null,
         s.avisos && s.avisos.length ? el("details",{}, el("summary",{text:`ℹ️ ${s.avisos.length} aviso(s) informativo(s) (se importa igual)`}), el("ul",{}, s.avisos.map(x=>el("li",{text:x})))) : null),
       el("p",{class:"hint",text:"La app no modifica tu planilla: la lee, calcula el total del día (tarjetas + transferencia + efectivo) y guarda una copia de los importes en su propia base."}),
@@ -2082,14 +2574,14 @@ function vHistorial(main){
   const de = el("input",{type:"date",value:hoy().slice(0,8)+"01"}), ha = el("input",{type:"date",value:hoy()}), q = el("input",{type:"search",placeholder:"Buscar usuario, acción o detalle"});
   const body = el("div",{class:"stack"}), ver = el("div");
   const cargar = async ()=>{ body.textContent=""; let L; try{ L = await apiS("listarHistorial", de.value, ha.value, q.value); }catch(e){ return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
-    const tb = el("tbody"); L.forEach(h=>tb.append(el("tr",{}, el("td",{class:"mono",text:new Date(h.ts).toLocaleString("es-AR")}), el("td",{text:h.usuario}), el("td",{text:h.accion.replace(/_/g," ")}),
+    const tb = el("tbody"); L.forEach(h=>tb.append(el("tr",{}, el("td",{class:"mono",text:fechaHora(h.ts)}), el("td",{text:h.usuario}), el("td",{text:h.accion.replace(/_/g," ")}),
       el("td",{},el("span",{class:"pill "+(/error/.test(h.resultado)?"bad":/alerta/.test(h.resultado)?"warn":h.resultado==="ok"?"ok":""),text:h.resultado})), el("td",{class:"mono hint",text:h.ref}), el("td",{text:h.detalle}))));
     if (!L.length) tb.append(el("tr",{},el("td",{colspan:"6",class:"empty",text:"Sin eventos en el período."})));
     body.append(el("div",{class:"card"}, el("p",{class:"lead",text:`${L.length} evento(s) · hora del servidor`}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha y hora","Usuario","Acción","Resultado","Registro","Detalle"].map(x=>el("th",{text:x})))), tb)))); };
   [de,ha].forEach(x=>x.onchange=cargar); q.addEventListener("change",cargar);
   main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Buscar",q)),
     el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"🔐 Verificar integridad",onclick:async e=>{ spinBtn(e.target,"Verificando…");
-      try{ const r = await apiS("verificarHistorial"); ver.textContent=""; ver.append(el("div",{class:"notice "+(r.ok?"ok":"bad"),text: r.ok ? `✅ Historial íntegro: ${r.eventos} eventos encadenados sin alteraciones.` : `⚠️ Se detectó una alteración en el evento n.º ${r.rotoEn} (${r.ts?new Date(r.ts).toLocaleString("es-AR"):""}). Revisá quién tiene acceso a la planilla.`})); }
+      try{ const r = await apiS("verificarHistorial"); ver.textContent=""; ver.append(el("div",{class:"notice "+(r.ok?"ok":"bad"),text: r.ok ? `✅ Historial íntegro: ${r.eventos} eventos encadenados sin alteraciones.` : `⚠️ Se detectó una alteración en el evento n.º ${r.rotoEn} (${r.ts?fechaHora(r.ts):""}). Revisá quién tiene acceso a la planilla.`})); }
       catch(x){ toast(msgErr(x)); } finally{ unspin(e.target); } }}), el("span",{class:"hint",text:"Cada evento queda encadenado con el anterior: si alguien edita o borra uno, la verificación lo detecta."})), ver), body);
   cargar();
 }
@@ -2194,7 +2686,7 @@ async function vConfig(main){
   const s = c.cierreSync;
   body.append(el("div",{class:"card"}, el("h2",{text:"🔗 Integración con Google Drive"}),
     el("p",{class:"lead",text:"Planilla de cierre de Palermo (solo lectura). Se identifica por su ID de archivo en Drive."}), el("label",{class:"f"},"ID del archivo",fid),
-    el("p",{class:"hint",text: s ? `Última lectura: ${new Date(s.ts).toLocaleString("es-AR")} · ${s.ok?"correcta":"con error: "+s.error}` : "Sin lecturas todavía."}), bD));
+    el("p",{class:"hint",text: s ? `Última lectura: ${fechaHora(s.ts)} · ${s.ok?"correcta":"con error: "+s.error}` : "Sin lecturas todavía."}), bD));
   // Parámetros de auditoría (los existentes)
   const p = S.params, inp = (v,a)=>el("input",Object.assign({type:"number",value:v},a||{}));
   const pe=inp(p.promExc,{step:"0.1",min:"1",max:"5"}), pa=inp(p.promAdv,{step:"0.1",min:"1",max:"5"}), pm=inp(p.maxInf,{min:"0"}), pd=inp(p.diasMax,{min:"0"});
@@ -2213,7 +2705,7 @@ function cardFeriadosConfig(F, alCambiar){
   const card = el("div",{class:"card"}, el("h2",{text:"📅 Feriados y excepciones"}));
   if (!F){ card.append(el("p",{class:"lead",text:"Sin datos de feriados."})); return card; }
   const sy = F.sync;
-  const estado = !sy ? "Todavía no se descargaron los feriados." : sy.ok ? `✅ Conectado: ${sy.nombreFuente||sy.fuente} · última actualización ${new Date(sy.ts).toLocaleString("es-AR")} · ${sy.total} feriados de ${sy.anios.join(" y ")}` :
+  const estado = !sy ? "Todavía no se descargaron los feriados." : sy.ok ? `✅ Conectado: ${sy.nombreFuente||sy.fuente} · última actualización ${fechaHora(sy.ts)} · ${sy.total} feriados de ${sy.anios.join(" y ")}` :
     `⚠️ No pude actualizar los feriados, usando la última lista guardada${sy.ultimaOk?" (del "+new Date(sy.ultimaOk).toLocaleDateString("es-AR")+")":""}. Fuentes probadas: ${(sy.intentos||[]).map(i=>i.fuente+(i.ok?" ✓":" ✗")).join(", ")}.`;
   const bA = el("button",{class:"btn",type:"button",text:"↻ Actualizar feriados ahora",onclick:async e=>{ spinBtn(e.currentTarget,"Consultando…"); try{ const r = await apiS("actualizarFeriados"); toast(r.sync&&r.sync.ok?"Feriados actualizados":"No se pudo actualizar: se mantiene la lista guardada"); alCambiar(r); }catch(x){ unspin(e.currentTarget); toast(msgErr(x)); } }});
   card.append(el("div",{class:"notice "+(!sy?"":sy.ok?"ok":"warn"),text:estado}), el("p",{class:"hint",text:"Fuentes públicas y gratuitas, en orden: ArgentinaDatos → Nager.Date → nolaborables.com.ar. Se actualizan solas una vez por semana (activador) y también si pasaron más de 7 días."}), bA);

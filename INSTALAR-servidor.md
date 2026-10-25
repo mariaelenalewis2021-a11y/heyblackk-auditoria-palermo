@@ -14,4 +14,13 @@
    modo, latitud, longitud, precisión y distancia en Ingresos; clase y sucursal en Correcciones) sin mover datos, y crea la hoja
    «Sucursales» con Palermo (con la ubicación ya configurada) y Lima. Revisá que las dos figuren «Completa» en Fichaje y horas → Sucursales.
 
+7. **3.5:** no requiere permisos nuevos. Al primer uso el servidor agrega en Usuarios las columnas «horario» y «vacacionesAnuales»
+   (sin mover datos). Los umbrales del Panorama RRHH se guardan en la configuración (se editan en Fichaje y horas → Panorama RRHH).
+   El borrado de fichajes es solo para el rol Administración, pide escribir BORRAR y el PIN, y deja constancia en el Historial.
+
+8. **3.6:** no requiere permisos nuevos (la planilla «Control ingreso Nueva temporada 27» se abre en solo lectura con SpreadsheetApp,
+   ID 1ecqEsW9ZILcGxYjAqWvSTqJAgOtaBA7lhSZ5hnf8zP0; se puede cambiar en la configuración `controlFileId`). En el primer ingreso
+   después de desplegar se aplica una sola vez el caso inicial de permisos: Thomás con Clientes y pedidos, Víctor con Producción.
+   El comando «actualizar las planillas» es `actualizarApp` (relee las dos planillas).
+
 Para volver atrás: Gestionar implementaciones → elegir la versión anterior.

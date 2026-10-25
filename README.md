@@ -1,4 +1,4 @@
-# Hey Blackk · Palermo y Lima — app de gestión (v3.4)
+# Hey Blackk · Palermo y Lima — app de gestión (v3.6)
 
 App interna (PWA) para Palermo: fichada de entrada y salida, personal, auditorías con fotos por punto,
 cierre diario leído de la planilla (solo lectura), KPIs comerciales con recomendaciones, historial protegido y RR. HH.
@@ -48,3 +48,24 @@ cierre diario leído de la planilla (solo lectura), KPIs comerciales con recomen
   Sección de jefes: Hoy por sucursal, Pendientes, Horas (filtros y exportación a la hoja "Horas"), Fichadas (correcciones con motivo
   y original conservado) y Sucursales. Contador rojo de pendientes. Ubicación visible solo para jefes; sin PIN en las hojas.
   Si una sucursal tiene datos incompletos, se avisa en pantalla y no se ficha sin validar.
+- **3.5 · Ubicación al fichar:** el pedido de ubicación se hace en el mismo toque del botón (gesto de la persona), con alta precisión
+  y 15 s de espera; errores separados (1 permiso denegado, 2 GPS apagado/sin señal, 3 tiempo agotado) con pasos por caso;
+  detecta permiso bloqueado (permissions.query), navegador interno de otras apps (WebView de Instagram, Facebook, WhatsApp…) con
+  «Abrir en Chrome» y marcos (iframe) con «Abrir en pestaña propia». Botones «Reintentar» y «Probar mi ubicación» (no registra nada).
+- **3.5 · Borrar registros de fichaje (solo Administración):** por empleado (incluye dados de baja), con rango o todos, vista previa
+  de cuántos se borran, confirmación escribiendo BORRAR + PIN, y borrado individual desde Fichadas. En el Historial queda quién,
+  cuándo, de quién y cuántos, sin los datos borrados.
+- **3.5 · Audio y acciones comerciales:** voz femenina o masculina (se recuerda por usuario), días flojos vs. el promedio del mismo día
+  de la semana con 3 acciones, fechas especiales de Argentina con 3-4 semanas de aviso y plan por etapas (y refuerzo del local).
+- **3.5 · Panorama RRHH (jefes y administración):** alertas con semáforo (ausentismo, tardanzas/salidas anticipadas con tolerancia,
+  incompletos, horas bajo lo pactado, exceso de horas, rechazos de ubicación, patrones) y positivas (cumplimiento, puntualidad, racha,
+  ranking); resumen por persona con saldo de vacaciones; filtros por sucursal, empleado y período; umbrales editables. Informativo.
+- **3.6 · Clientes y pedidos (jefes habilitados):** lee la planilla «Control ingreso Nueva temporada 27» (solo lectura): por cliente
+  pedidas, entregadas (incluye lo separado en su depósito), pendientes, estado con semáforo (Completo, Parcial, Pendiente, Atrasado),
+  monto del pedido y saldo sin facturar; detalle modelo por modelo; filtros, buscador, orden; alertas y prioridades; tipo Franquicia/Mayorista.
+- **3.6 · Producción (jefes habilitados):** planificado, ingresado, en talleres, sin taller, falta fabricar y avance; por taller; artículos con
+  semáforo y filtros; falta fabricar por talle; OTs en curso.
+- **3.6 · Permisos de jefes (solo administración):** interruptor por sección y por jefe, validado en el servidor (sin permiso no viajan los
+  datos); un jefe nuevo arranca sin Clientes ni Producción; cada cambio pide PIN y queda en el Historial.
+- **3.6 · Actualizar datos:** relee las dos planillas (Control ingreso y Ventas Palermo) cualquier día, con fecha y hora de cada una.
+- **3.5 · Resumen general:** comercial → auditoría → RRHH, en pantalla y en el audio; lo que no tiene datos no se menciona.
