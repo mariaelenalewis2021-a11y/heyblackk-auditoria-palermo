@@ -34,9 +34,9 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams"]);
+const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams"]);
+const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -179,9 +179,10 @@ function ubicacion(){
   return new Promise(res=>{
     if (!navigator.geolocation) return res({error:"no_disponible"});
     let listo=false; const fin=v=>{ if(!listo){ listo=true; res(v); } };
-    setTimeout(()=>fin({error:"tiempo_agotado"}), 9000);
+    setTimeout(()=>fin({error:"tiempo_agotado"}), 13000);
+    // 3.4: una sola lectura en este momento (sin seguimiento y sin reutilizar una ubicación vieja).
     navigator.geolocation.getCurrentPosition(p=>fin({lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy}),
-      e=>fin({error: e.code===1?"sin_permiso":e.code===3?"tiempo_agotado":"no_disponible"}), {enableHighAccuracy:true,timeout:8000,maximumAge:60000});
+      e=>fin({error: e.code===1?"sin_permiso":e.code===3?"tiempo_agotado":"no_disponible"}), {enableHighAccuracy:true,timeout:12000,maximumAge:0});
   });
 }
 /* Miniatura de una foto privada: se pide al servidor con la sesión y se muestra; si falla, se informa. */
@@ -226,7 +227,7 @@ function pintarVista(id){
   if (id==="otros") return vOtros(main);
   if (!S.user) return loginCard(main, "Ingresá con tu usuario y PIN para abrir este módulo.");
   if (!puedeVer(m)) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
-  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig}[id];
+  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones}[id];
   V(main);
 }
 addEventListener("hashchange", route);
@@ -331,6 +332,7 @@ async function conectar(t){
   let est;
   try{ est = await api("inicio", t||null); }
   catch(e){ redAviso("⚠️ Sin conexión con el servidor: "+msgErr(e)+" "); $("netbar").append(el("button",{class:"btn sm",type:"button",text:"Reintentar",onclick:()=>{ $("netbar").hidden=true; conectar(S.token); }})); return; }
+  if (!est || typeof est!=="object"){ redAviso("⚠️ El servidor no respondió bien. "); $("netbar").append(el("button",{class:"btn sm",type:"button",text:"Reintentar",onclick:()=>{ $("netbar").hidden=true; conectar(S.token); }})); return; }
   if (est.politica && !S.user) S.politica=est.politica;
   if (!est.usuarios){ limpiarSesion(); return vBootstrap(est); }
   if (t){
@@ -372,7 +374,10 @@ const ICONOS = {
   camara: '<path d="M4 8.5h3l1.5-2h7l1.5 2h3v10H4z"/><circle cx="12" cy="13" r="3"/>',
   flecha: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   acceso: '<rect x="3" y="7.5" width="18" height="12.5" rx="2.5"/><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5"/><path d="M3 12.5h18"/><path d="M10.5 12.5v2.5h3v-2.5"/>',
-  salir: '<path d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10"/><path d="M15 8l4 4-4 4M19 12H9"/>'
+  salir: '<path d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10"/><path d="M15 8l4 4-4 4M19 12H9"/>',
+  vacaciones: '<path d="M3 20h18"/><path d="M12 20V9"/><path d="M4.5 9.5a7.5 7.5 0 0 1 15 0z"/><path d="M12 2.5V4"/><path d="M12 20c0 0-3 .5-4 2"/>',
+  feriado: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/><path d="m10.5 16 1.5-3 1.5 3M10 15.5h4"/>',
+  audio: '<path d="M4 10v4h3l4 3.5v-11L7 10z"/><path d="M15 9.5a3.5 3.5 0 0 1 0 5"/><path d="M17.5 7a7 7 0 0 1 0 10"/>'
 };
 /* Íconos: trazos fijos definidos arriba (no son datos), por eso se cargan con innerHTML sobre un SVG propio. */
 function icono(nombre, tam=22){
@@ -384,12 +389,13 @@ function icono(nombre, tam=22){
 }
 const MODULOS = [
   {id:"empleados", t:"Empleados", d:"Fichá tu entrada y salida.", c:"#2563EB", perm:null},
-  {id:"ingresos",  t:"Registro de ingresos", d:"Entradas, salidas y correcciones.", c:"#0D9488", perm:"ingresos"},
+  {id:"ingresos",  t:"Fichaje y horas", d:"Hoy por sucursal, pendientes, horas y correcciones.", c:"#0D9488", perm:"ingresos"},
   {id:"auditoria", t:"Auditoría", d:"Auditar el local, fotos y acciones.", c:"#16A34A", perm:"auditar|auditoria"},
   {id:"kpi",       t:"KPIs comerciales", d:"Ventas, alertas y decisiones.", c:"#7C3AED", perm:"kpi"},
   {id:"historial", t:"Historial", d:"Actividad protegida contra cambios.", c:"#475569", perm:"historial"},
   {id:"cierre",    t:"Cierre diario", d:"Cierres de caja de la planilla.", c:"#EA580C", perm:"cierre"},
   {id:"rrhh",      t:"Novedades RR. HH.", d:"Llegadas tarde y ausencias.", c:"#DB2777", perm:"rrhh"},
+  {id:"vacaciones",t:"Vacaciones", d:"Solicitudes del equipo.", c:"#0891B2", perm:"vacaciones"},
   {id:"otros",     t:"Otros", d:"Instalar la app y cambiar tu PIN.", c:"#CA8A04", perm:null},
   {id:"config",    t:"Configuración", d:"Ubicación, objetivos y alertas.", c:"#111113", perm:"config"}
 ];
@@ -407,7 +413,9 @@ function chipDe(id, R){
   if (!R) return null;
   const al = t => ({t, alerta:true}), ok = t => ({t});
   if (id==="ingresos" && R.fichadas){
-    if (R.correccionesPendientes) return al(plural(R.correccionesPendientes, "1 corrección pendiente", "% correcciones pendientes"));
+    const pf = (R.manualesPendientes||0) + (R.correccionesPendientes||0);
+    if (pf) return {t:plural(pf, "1 pendiente", "% pendientes"), alerta:true, rojo:true};
+    if ((R.fichadas.sucursalesIncompletas||[]).length) return al("Sucursal incompleta");
     if (!R.fichadas.abre) return ok("Hoy no abre");
     return ok(`Fichadas ${R.fichadas.entradas}/${R.fichadas.esperadas}`);
   }
@@ -428,12 +436,13 @@ function chipDe(id, R){
   }
   if (id==="historial" && R.historialHoy!=null) return ok(plural(R.historialHoy, "1 evento hoy", "% eventos hoy"));
   if (id==="rrhh" && R.rrhh) return R.rrhh.abiertas ? al(plural(R.rrhh.abiertas, "1 abierta", "% abiertas")) : ok("Sin novedades");
+  if (id==="vacaciones" && R.vacaciones) return R.vacaciones.pendientes ? {t:plural(R.vacaciones.pendientes, "1 pendiente", "% pendientes"), alerta:true, rojo:true} : ok("Sin pendientes");
   return null;
 }
 function chipEl(id, R, bloqueada){
   if (bloqueada) return el("span",{class:"chip",text:"Con usuario"});
   const chip = chipDe(id, R);
-  if (chip) return el("span",{class:"chip"+(chip.alerta?" alerta":""),text:chip.t});
+  if (chip) return el("span",{class:"chip"+(chip.alerta?" alerta":"")+(chip.rojo?" rojo":""),text:chip.t});
   return R===undefined ? el("span",{class:"chip cargando","aria-hidden":"true"}) : null;
 }
 function tarjetaMod(m, i, R, bloqueada){
@@ -459,12 +468,17 @@ function tiraHoy(R){
   const fila = (k,v,alerta) => datos.append(el("div",{class:"dato"+(alerta?" alerta":"")}, el("span",{class:"k",text:k}), el("b",{text:v})));
   if (R.fichadas){
     box.append(anillo(R.fichadas.entradas, R.fichadas.esperadas));
-    fila("Fichadas de hoy", R.fichadas.abre ? `${R.fichadas.entradas} entradas, ${R.fichadas.salidas} salidas` : "Hoy no abre");
+    fila("Fichadas de hoy", (R.fichadas.abre ? `${R.fichadas.entradas} entradas, ${R.fichadas.salidas} salidas` : "Hoy no abre") + (R.fichadas.feriado ? ` · 🎉 ${R.fichadas.feriado}` : ""));
+    if ((R.fichadas.porSucursal||[]).length > 1) fila("Por sucursal", R.fichadas.porSucursal.map(x=>`${x.nombre} ${x.abre ? x.entradas+"/"+x.esperadas : "no abre"}`).join(" · "));
+    (R.fichadas.sucursalesIncompletas||[]).forEach(x=>fila("⚠️ Sucursal "+x.nombre, "Falta "+x.faltan.join(", ")+": no se puede fichar", true));
+    if (R.fichadas.deVacaciones) fila("De vacaciones hoy", plural(R.fichadas.deVacaciones, "1 persona (no cuenta como falta)", "% personas (no cuentan como falta)"));
   }
   if (R.cierre) fila("Último cierre", `${fmtF(R.cierre.fecha).slice(0,5)}: ${moneyK(R.cierre.total)}`);
   if (R.mes && R.mes.total) fila("Mes en curso", moneyK(R.mes.total) + (R.mes.objetivo ? ` de ${moneyK(R.mes.objetivo)}` : ""));
+  if (R.manualesPendientes) fila("Fichajes manuales", plural(R.manualesPendientes, "1 por aprobar", "% por aprobar"), true);
   if (R.correccionesPendientes) fila("Correcciones de fichada", plural(R.correccionesPendientes, "1 por aprobar", "% por aprobar"), true);
   if (R.acciones && R.acciones.vencidas) fila("Acciones correctivas", plural(R.acciones.vencidas, "1 vencida", "% vencidas"), true);
+  if (R.vacaciones && R.vacaciones.pendientes) fila("Vacaciones por resolver", plural(R.vacaciones.pendientes, "1 solicitud", "% solicitudes") + (R.vacaciones.demoradas ? ` · ${R.vacaciones.demoradas} con más de 3 días` : ""), true);
   if (!datos.children.length) fila("Hoy", "Sin novedades por ahora");
   box.append(datos);
   return box;
@@ -478,9 +492,15 @@ function renderHome(){
   home.append(el("header",{class:"saludo"}, el("h1",{tabindex:"-1",text: nombre ? `${saludoHora()}, ${nombre}` : saludoHora()}), el("p",{class:"fecha",text:fechaLarga()})));
   if (staff) home.append(filaSesion());
   if (staff && S.perms.length) home.append(tiraHoy(R));
+  /* 3.3: banner de feriados (próximos 30 días en días de apertura + pendientes de confirmar) arriba del tablero, solo para quien ve cierre/KPIs. */
+  if (staff && (tiene("cierre") || tiene("kpi"))) home.append(el("div",{class:"banner-slot"}, bannerFeriados(R && R.feriados, {confirmar: tiene("cierre")})));
   home.append(el("button",{class:"cta",type:"button",style:"--i:1",onclick:()=>{ location.hash="#/empleados/fichar"; }},
     el("span",{class:"ic"}, icono("camara",26)),
-    el("span",{class:"tx"}, el("b",{text:"Fichar entrada o salida"}), el("span",{text:"Con tu usuario y PIN. Sacate la foto y listo."})),
+    el("span",{class:"tx"}, el("b",{text:"Fichar entrada o salida"}), el("span",{text:"Con tu usuario y PIN. Ubicación activada, sacate la foto y listo."})),
+    el("span",{class:"fl"}, icono("flecha",20))));
+  home.append(el("button",{class:"cta sec",type:"button",style:"--i:2",onclick:()=>{ location.hash="#/empleados/vacaciones"; }},
+    el("span",{class:"ic"}, icono("vacaciones",26)),
+    el("span",{class:"tx"}, el("b",{text:"Mis vacaciones"}), el("span",{text:"Pedí tus vacaciones y mirá el estado de tus solicitudes."})),
     el("span",{class:"fl"}, icono("flecha",20))));
   const resto = MODULOS.filter(m=>m.id!=="empleados");
   const visibles = resto.filter(m=>!m.perm || (staff && puedeVer(m)));
@@ -503,12 +523,52 @@ function filaSesion(){
     el("span",{class:"ic"}, icono("acceso",18)),
     el("span",{class:"tx"}, el("b",{text: gestion ? "Panel de gestión y control" : "Sesión personal"}),
       el("span",{text:`${u.nombre} · ${rolTxt(u)} · se cierra sola tras ${min} min sin uso`})),
+    el("span",{class:"badge-slot"}, badgePendientes(S.resumen)),
     el("button",{class:"btn sm",type:"button",onclick:()=>salir("Sesión cerrada")}, icono("salir",16), " Cerrar sesión"));
+}
+/* 3.4 · Contador rojo de pendientes (fichajes manuales, correcciones y vacaciones) en la fila de sesión del panel. */
+function badgePendientes(R){
+  const n = R && R.pendientesTotal; if (!n) return null;
+  const destino = (R.manualesPendientes||R.correccionesPendientes) && tiene("ingresos") ? "#/ingresos/pendientes" : "#/vacaciones";
+  return el("a",{class:"badge-rojo",href:destino,"aria-label":plural(n, "1 pendiente por resolver", "% pendientes por resolver")}, String(n), el("span",{text:n===1?" pendiente":" pendientes"}));
+}
+/* 3.3 · Banner de feriados: próximos (30 días, solo días de apertura) y pendientes de confirmar, resolubles con un toque.
+   F = R.feriados del resumen (o K.feriados de los KPIs). confirmar: si la persona puede confirmar (permiso "cierre"). */
+function bannerFeriados(F, {confirmar=false, alConfirmar=null}={}){
+  const box = el("section",{class:"banner feriados","aria-label":"Feriados"});
+  if (F===undefined){ box.append(el("span",{class:"chip cargando"})); return box; }   // todavía cargando
+  if (F===null){ box.hidden=true; return box; }                                     // sin resumen (sin conexión)
+  const prox = F.proximos||[], pend = F.pendientes||[];
+  const sync = F.sync;
+  if (!prox.length && !pend.length && (!sync || sync.ok!==false)){ box.hidden=true; return box; }
+  const cab = el("div",{class:"bh"}, el("span",{class:"ic"}, icono("feriado",20)), el("b",{text:"Feriados"}));
+  box.append(cab);
+  if (sync && sync.ok===false) box.append(el("p",{class:"hint",text:"⚠️ No pude actualizar los feriados, usando la última lista guardada" + (sync.ultimaOk ? " (del "+new Date(sync.ultimaOk).toLocaleDateString("es-AR")+")" : "") + "."}));
+  if (prox.length) box.append(el("div",{class:"bl"}, el("span",{class:"k",text:"Próximos 30 días (mié–sáb)"}), el("ul",{}, prox.map(f=>el("li",{}, el("b",{class:"mono",text:fmtF(f.fecha).slice(0,5)}), ` ${f.dia} · ${f.nombre}`, f.finDeSemanaLargo?el("span",{class:"pill",text:"finde largo"}):null, f.palermo?el("span",{class:"pill "+(f.palermo==="cerrado"?"bad":"ok"),text:f.palermo==="cerrado"?"cerrado":"abre"}):null)))));
+  if (pend.length){
+    const ul = el("ul",{class:"pendf"});
+    pend.forEach(f=>{
+      const li = el("li",{}, el("span",{}, el("b",{class:"mono",text:fmtF(f.fecha).slice(0,5)}), ` ${f.dia} · ${f.nombre}`, el("span",{class:"pill warn",text:"Feriado: confirmar si abrió"})));
+      if (confirmar){
+        const acc = el("span",{class:"row"});
+        const bt = (txt, est, cls) => el("button",{class:"btn sm "+(cls||""),type:"button",text:txt,onclick:async e=>{ const b=e.currentTarget; spinBtn(b); try{ const r = await apiS("confirmarFeriado", f.fecha, est); toast(est==="cerrado"?"Marcado: estuvo cerrado (excluido de promedios y proyección)":"Marcado: abrió (queda como cierre pendiente de carga)"); if (alConfirmar) alConfirmar(r); else { if (S.resumen && S.resumen.feriados) S.resumen.feriados = {...S.resumen.feriados, pendientes:r.pendientes, proximos:r.proximos}; box.replaceWith(bannerFeriados(S.resumen && S.resumen.feriados, {confirmar, alConfirmar})); } }catch(x){ unspin(b); toast(msgErr(x)); } }});
+        acc.append(bt("Estuvo cerrado","cerrado"), bt("Abrió","abierto","primary"));
+        li.append(acc);
+      }
+      ul.append(li);
+    });
+    box.append(el("div",{class:"bl"}, el("span",{class:"k",text:plural(pend.length, "1 feriado pendiente de confirmar", "% feriados pendientes de confirmar")}), ul,
+      el("p",{class:"hint",text:"Nunca se asume que el local cerró. «Estuvo cerrado»: el día no cuenta en promedios ni proyección. «Abrió»: queda como cierre pendiente de carga en la planilla."})));
+  }
+  return box;
 }
 /* Actualiza en el lugar la tira "Hoy" y los chips con el resumen recibido, sin redibujar el panel. */
 function aplicarResumen(R){
   if (S.view!=="home") return;
   const hoy = document.querySelector(".home .hoy"); if (hoy) hoy.replaceWith(tiraHoy(R));
+  const bs = document.querySelector(".home .badge-slot"); if (bs){ bs.textContent=""; const b=badgePendientes(R); if (b) bs.append(b); }
+  const slot = document.querySelector(".home .banner-slot"); if (slot){ slot.textContent=""; slot.append(bannerFeriados(R && R.feriados, {confirmar: tiene("cierre")})); }
+  if (R && R.vacaciones && R.vacaciones.pendientes && !aplicarResumen._avisado){ aplicarResumen._avisado=true; if (tiene("vacaciones")) toast(`📬 ${plural(R.vacaciones.pendientes, "1 solicitud de vacaciones pendiente", "% solicitudes de vacaciones pendientes")}`); }
   document.querySelectorAll(".home .mod:not(.lk)").forEach(b=>{ const viejo=b.querySelector(".chip"); const nuevo=chipEl(b.dataset.id, R, false); if (viejo) nuevo ? viejo.replaceWith(nuevo) : viejo.remove(); else if (nuevo) b.append(nuevo); });
 }
 /* Resumen del día: se muestra el último conocido al instante y se actualiza en segundo plano (como mucho cada minuto). */
@@ -530,10 +590,10 @@ function tabs(main, items, activo, onSel){
   main.append(bar, body); sel(items.some(x=>x[0]===sub) ? sub : (activo || items[0][0]));
 }
 function vEmpleados(main){
-  const items = [["fichar","📸 Fichar entrada / salida"]];
+  const items = [["fichar","📸 Fichar entrada / salida"], ["vacaciones","🏖️ Vacaciones"]];
   if (S.user && tiene("personal")) items.push(["personal","🗂️ Personal (altas y bajas)"]);
   else items.push(["personal","🗂️ Personal (jefes)"]);
-  tabs(main, items, "fichar", (id, body)=> id==="fichar" ? vFichar(body) : (S.user && tiene("personal") ? vPersonal(body) :
+  tabs(main, items, "fichar", (id, body)=> id==="fichar" ? vFichar(body) : id==="vacaciones" ? vVacacionesEmp(body) : (S.user && tiene("personal") ? vPersonal(body) :
     S.user ? body.append(el("div",{class:"card empty",text:"🔒 Solo jefes y administración pueden gestionar el personal."})) : loginCard(body,"Solo jefes: ingresá con tu usuario y PIN de 6 números.",()=>route())));
 }
 
@@ -552,91 +612,13 @@ function vFichar(body){
     el("p",{class:"lead",text:"Usá el usuario y el PIN que te dio tu jefe. Nadie más puede ver tus registros."}), el("div",{class:"grid"}, u, p, err, b)));
   setTimeout(()=>u.focus(),60);
 }
-/* j: jornada ya recibida junto con el login (ahorra una llamada); si no viene, se pide. */
-async function jornada(body, j){
-  clearTimeout(F.t); F.t = setTimeout(()=>{ finFichada(); body.textContent=""; vFichar(body); toast("Sesión de fichada cerrada"); }, 3*60*1000);
-  if (!j){
-    body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
-    try{ j = await api("miJornada", F.token); }catch(e){ body.textContent=""; vFichar(body); return toast(msgErr(e)); }
-  }
-  body.textContent="";
-  const card = el("div",{class:"card fichar"});
-  card.append(el("h2",{text:`Hola, ${j.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:"Hoy, "+fmtF(j.fecha)}));
-  const est = el("div",{class:"jornada"},
-    el("div",{class:"jbox "+(j.entrada?"ok":"")}, el("span",{class:"k",text:"Entrada"}), el("b",{class:"mono",text:j.entrada?j.entrada.hora.slice(0,5):"—"}), j.entrada && j.entrada.estado==="revisar" ? el("span",{class:"pill warn",text:"Para revisar"}) : null),
-    el("div",{class:"jbox "+(j.salida?"ok":"")}, el("span",{class:"k",text:"Salida"}), el("b",{class:"mono",text:j.salida?j.salida.hora.slice(0,5):"—"}), j.salida && j.salida.minutos!=null ? el("span",{class:"s",text:horas(j.salida.minutos)}) : null));
-  card.append(est);
-  if (!j.habilitado) card.append(el("div",{class:"notice warn",text:"Tu usuario no está habilitado para fichar. Consultá con tu jefe."}));
-  else if (j.siguiente){
-    const tipo = j.siguiente, btn = el("button",{class:"btn fichar-btn "+tipo,type:"button"}, el("span",{text:tipo==="entrada"?"📸":"🏁"}), el("span",{text:tipo==="entrada"?"Fichar ENTRADA":"Fichar SALIDA"}));
-    btn.onclick = ()=>capturar(body, tipo, btn);
-    card.append(btn, el("p",{class:"aviso",text:"📷 "+(j.aviso||"")}));
-  } else card.append(el("div",{class:"notice ok",text:"✅ Ya registraste la entrada y la salida de hoy."}));
-  card.append(el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"Mis registros y correcciones",onclick:()=>misRegistros(body)}),
-    el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Terminar",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
-  body.append(card);
-}
-async function capturar(body, tipo, boton){
-  const geoP = ubicacion();               // se pide en paralelo; si no hay permiso, el registro queda "para revisar"
-  if (boton) spinBtn(boton, "Abriendo la cámara…");
-  const foto = await elegirFoto(true);
-  if (!foto){ if (boton) unspin(boton); return toast("Necesitás sacarte la foto para fichar."); }
-  body.textContent="";
-  const b = el("button",{class:"btn fichar-btn "+tipo,type:"button",text:"Confirmar "+tipo});
-  const otra = el("button",{class:"btn",type:"button",text:"Sacar otra foto",onclick:()=>capturar(body,tipo,otra)});
-  const card = el("div",{class:"card fichar"}, el("h2",{text:"Confirmá tu "+tipo}),
-    el("img",{src:foto,alt:"Tu foto",class:"selfie"}), b, otra,
-    el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)}));
-  body.append(card);
-  b.onclick = async ()=>{
-    spinBtn(b,"Registrando…");
-    const geo = await geoP; geo.ua = navigator.userAgent.slice(0,120);
-    try{
-      const r = await api("registrarFichada", F.token, tipo, foto, geo);
-      body.textContent="";
-      const geoTxt = {dentro:"en el showroom",fuera:"fuera del radio del showroom (queda para revisar)",sin_permiso:"sin permiso de ubicación (queda para revisar)",no_disponible:"ubicación no disponible (queda para revisar)",tiempo_agotado:"ubicación no disponible (queda para revisar)",no_configurado:"ubicación no requerida",sin_referencia:"ubicación registrada"}[r.geoResultado]||r.geoResultado;
-      body.append(el("div",{class:"card fichar done "+tipo},
-        el("div",{class:"bigok",text:"✅"}), el("h2",{text:(tipo==="entrada"?"Entrada":"Salida")+" registrada"}),
-        el("div",{class:"big mono",text:r.hora}), el("p",{class:"lead",text:fmtF(r.fecha)+" · hora del servidor"}),
-        el("p",{class:"lead",text:"📍 "+geoTxt + (r.fotoGuardada?" · 📷 foto guardada":"")}),
-        r.minutos!=null ? el("p",{class:"lead",text:"⏱️ Jornada: "+horas(r.minutos)}) : null,
-        el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
-      setTimeout(()=>{ if (F.token){ finFichada(); body.textContent=""; vFichar(body); } }, 20000);
-    }catch(e){
-      unspin(b);
-      const m = /^DUP:(\w+):(.+)$/.exec(e.message);
-      if (m) { body.textContent=""; body.append(el("div",{class:"card notice warn"}, `Ya registraste la ${m[1]} de hoy a las ${m[2].slice(0,5)}. Si hay un error, pedí una corrección.`)); setTimeout(()=>jornada(body),2500); }
-      else if (esAuth(e)) { toast("La sesión venció. Volvé a identificarte."); body.textContent=""; vFichar(body); }
-      else toast("No se registró: "+msgErr(e));
-    }
-  };
-}
-async function misRegistros(body){
-  body.textContent=""; let L=[];
-  try{ L = await api("misIngresos", F.token); }catch(e){ return toast(msgErr(e)); }
-  const tb = el("tbody");
-  L.forEach(x=>tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(x.fecha)}), el("td",{text:x.tipo==="salida"?"Salida":"Entrada"}),
-    el("td",{class:"mono",text:(x.horaCorregida? x.horaCorregida+" (corr.)" : (x.hora||"").slice(0,5))}),
-    el("td",{},el("span",{class:"pill "+(x.estado==="valido"?"ok":x.estado==="revisar"?"warn":""),text:x.estado})), el("td",{text:x.correccion||""}))));
-  const f = el("input",{type:"date",value:hoy(),max:hoy()}), t = el("select",{}, el("option",{value:"entrada",text:"Entrada"}), el("option",{value:"salida",text:"Salida"}));
-  const h = el("input",{type:"time",value:"09:00"}), m = el("input",{type:"text",maxlength:"300",placeholder:"Motivo (ej.: me olvidé de fichar)"});
-  const b = el("button",{class:"btn primary",type:"submit",text:"Enviar solicitud"});
-  body.append(el("div",{class:"card"}, el("h2",{text:"Mis últimos registros"}),
-      el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Tipo","Hora","Estado","Corrección"].map(x=>el("th",{text:x})))), tb))),
-    el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b,"Enviando…");
-        try{ await api("solicitarCorreccion", F.token, {fecha:f.value, tipo:t.value, horaPropuesta:h.value, motivo:m.value}); toast("✅ Solicitud enviada. La revisa un jefe."); misRegistros(body); }
-        catch(x){ unspin(b); toast(msgErr(x)); } }},
-      el("h2",{text:"Pedir una corrección"}), el("p",{class:"lead",text:"Tu registro original no se modifica: un jefe aprueba o rechaza el cambio y queda constancia."}),
-      el("div",{class:"grid2"}, el("label",{class:"f"},"Fecha",f), el("label",{class:"f"},"Tipo",t), el("label",{class:"f"},"Hora correcta",h)), el("label",{class:"f"},"Motivo",m),
-      el("div",{class:"row"}, b, el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)}))));
-}
-
 /* ----- Personal (jefes) ----- */
 /* L: lista ya cargada (después de un alta, baja, etc. se actualiza en el teléfono con lo que devolvió el servidor, sin volver a pedirla). */
+let SUCS = [];
 async function vPersonal(body, L){
   if (!L){
     body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando personal…"));
-    try{ L = await apiS("listarPersonal"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    try{ [L, SUCS] = await Promise.all([apiS("listarPersonal"), apiS("listarSucursales").catch(()=>[])]); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
   }
   body.textContent="";
   const esAdmin = S.user.rol==="admin";
@@ -645,20 +627,21 @@ async function vPersonal(body, L){
   const u = el("input",{type:"text",maxlength:"20",placeholder:"Usuario para entrar (ej.: lucia)",autocapitalize:"none",required:true});
   const s = el("input",{type:"text",maxlength:"40",placeholder:"Sector o puesto (ej.: Showroom)"});
   const fi = el("input",{type:"date",value:hoy()});
+  const su = el("select",{"aria-label":"Sucursal"}, ...(SUCS.length ? SUCS : [{nombre:"Palermo"}]).filter(x=>x.activa!==false).map(x=>el("option",{value:x.nombre,text:x.nombre})));
   const rol = el("select",{}, el("option",{value:"empleado",text:"Empleado (solo ficha)"}), esAdmin?el("option",{value:"responsable",text:"Jefe / Responsable"}):null, esAdmin?el("option",{value:"admin",text:"Administración"}):null);
   const pin = el("input",{type:"password",inputmode:"numeric",maxlength:"4",placeholder:"PIN de 4 números",autocomplete:"new-password"});
   const ayudaPin = el("span",{class:"hint",text:"Empleados: 4 números. Evitá 1234, 0000 o fechas obvias."});
   rol.onchange = ()=>{ const L6 = rol.value!=="empleado"; pin.maxLength = L6?6:4; pin.placeholder = L6?"PIN de 6 números":"PIN de 4 números"; ayudaPin.textContent = L6?"Jefes y administración: 6 números.":"Empleados: 4 números. Evitá 1234, 0000 o fechas obvias."; };
   const b = el("button",{class:"btn primary",type:"submit",text:"➕ Dar de alta"});
   body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b,"Guardando…");
-      try{ const r = await apiS("altaEmpleado", {nombre:n.value, legajo:u.value, sector:s.value, fechaIngreso:fi.value, rol:rol.value, pin:pin.value});
+      try{ const r = await apiS("altaEmpleado", {nombre:n.value, legajo:u.value, sector:s.value, fechaIngreso:fi.value, rol:rol.value, pin:pin.value, sucursal:su.value});
         pin.value=""; toast(`✅ ${r.user.nombre} dado/a de alta. Usuario: ${r.user.legajo.toLowerCase()}`);
         if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN generado"}), el("p",{class:"lead",text:"Comunicáselo en persona. No se vuelve a mostrar."}), el("div",{class:"big mono",text:r.pinInicial})));
         L.push(r.user); body.textContent=""; vPersonal(body, L); }
       catch(x){ unspin(b); toast(msgErr(x)); } }},
     el("h2",{text:"Alta de personal"}), el("p",{class:"lead",text:"Asigná el nombre, el usuario y el PIN con el que va a fichar. Solo se piden los datos necesarios."}),
     el("div",{class:"grid2"}, el("label",{class:"f"},"Nombre y apellido",n), el("label",{class:"f"},"Usuario",u), el("label",{class:"f"},"Sector o puesto",s),
-      el("label",{class:"f"},"Fecha de ingreso",fi), el("label",{class:"f"},"Tipo de acceso",rol), el("label",{class:"f"},"PIN",pin,ayudaPin)), b));
+      el("label",{class:"f"},"Fecha de ingreso",fi), el("label",{class:"f"},"Sucursal",su), el("label",{class:"f"},"Tipo de acceso",rol), el("label",{class:"f"},"PIN",pin,ayudaPin)), b));
   // Listado
   const q = el("input",{type:"search",placeholder:"Buscar por nombre o usuario"}), fe = el("select",{}, el("option",{value:"activo",text:"Activos"}), el("option",{value:"inactivo",text:"Dados de baja"}), el("option",{value:"",text:"Todos"}));
   const lista = el("div",{class:"plist"});
@@ -683,6 +666,7 @@ function fichaPersona(x, body, L){
           if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN generado"}), el("p",{class:"lead",text:"Comunicáselo en persona."}), el("div",{class:"big mono",text:r.pinInicial})));
           else toast("✅ PIN actualizado"); recargar({bloqueado:false}); }catch(e){ unspin(ok); toast(msgErr(e)); } };
     }}));
+    acc.append(el("button",{class:"btn sm",type:"button",text:"🏬 Sucursal y horas",onclick:()=>editarSucHoras(x, recargar)}));
     acc.append(el("button",{class:"btn sm",type:"button",text:x.registraIngreso?"⏸ No ficha":"▶ Ficha",title:"Habilitar o no la fichada",onclick:async e=>{ const bt=e.currentTarget; spinBtn(bt); try{ recargar(await apiS("editarEmpleado",x.id,{registraIngreso:!x.registraIngreso})); }catch(err){ unspin(bt); toast(msgErr(err)); } }}));
     if (!yo) acc.append(el("button",{class:"btn sm danger",type:"button",text:"⛔ Dar de baja",onclick:async()=>{
       const f = el("input",{type:"date",value:hoy()}), mo = el("input",{type:"text",maxlength:"200",placeholder:"Motivo (opcional)"}), ok = el("button",{class:"btn danger",type:"button",text:"Confirmar baja"});
@@ -700,13 +684,25 @@ function fichaPersona(x, body, L){
   if (esAdmin && !yo && x.estado==="activo") acc.append(el("button",{class:"btn sm",type:"button",text:"🛡️ Rol y permisos",onclick:()=>editarPermisos(x, recargar)}));
   return el("div",{class:"persona"+(x.estado!=="activo"?" off":"")},
     el("div",{class:"pinfo"}, el("b",{text:x.nombre}), el("span",{class:"mono",text:"usuario: "+x.legajo.toLowerCase()}),
-      el("span",{text:[rolTxt, x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):""].filter(Boolean).join(" · ")}),
+      el("span",{text:[rolTxt, "🏬 "+(x.sucursal||"Palermo"), x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):"", x.horasEsperadas?`${x.horasEsperadas.horas} h por ${x.horasEsperadas.tipo==="semana"?"semana":"día"}`:""].filter(Boolean).join(" · ")}),
       x.estado!=="activo" ? el("span",{class:"pill bad",text:`Baja ${fmtF(x.fechaBaja)}${x.bajaPor?" · por "+x.bajaPor:""}${x.motivoBaja?" · "+x.motivoBaja:""}`}) :
         el("span",{class:"row",style:"gap:6px"}, el("span",{class:"pill ok",text:"Activo"}), x.registraIngreso?el("span",{class:"pill",text:"Ficha"}):null, x.bloqueado?el("span",{class:"pill bad",text:"Bloqueado: asignar PIN"}):null)),
     acc);
 }
+/* 3.4: sucursal de la persona y horas esperadas (informativas, para comparar con lo trabajado). */
+function editarSucHoras(x, recargar){
+  const su = el("select",{"aria-label":"Sucursal"}, ...(SUCS.length ? SUCS : [{nombre:x.sucursal||"Palermo"}]).map(s=>el("option",{value:s.nombre,text:s.nombre+(s.incompleta&&s.incompleta.length?" (incompleta)":""),selected:s.nombre===(x.sucursal||"Palermo")})));
+  const he = x.horasEsperadas||{}, tp = el("select",{"aria-label":"Tipo de horas esperadas"}, el("option",{value:"dia",text:"Por día de apertura",selected:he.tipo!=="semana"}), el("option",{value:"semana",text:"Por semana",selected:he.tipo==="semana"}));
+  const hs = el("input",{type:"number",min:"0",max:"80",step:"0.5",value:he.horas||"",placeholder:"Vacío = sin dato","aria-label":"Horas esperadas"});
+  const ok = el("button",{class:"btn primary",type:"button",text:"Guardar"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:"Sucursal y horas · "+x.nombre}), el("label",{class:"f"},"Sucursal",su),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Horas esperadas",tp), el("label",{class:"f"},"Cantidad de horas",hs)),
+    el("p",{class:"hint",text:"Las horas esperadas son informativas: se muestra la diferencia con lo trabajado, sin calcular pagos ni horas extra."}),
+    el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ spinBtn(ok,"Guardando…"); try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horasEsperadas: Number(hs.value)>0 ? {tipo:tp.value, horas:Number(hs.value)} : null})); m.cerrar(); toast("✅ Guardado"); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+}
 function editarPermisos(x, recargar){
-  const NOM = {ingresos:"Registro de ingresos",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
+  const NOM = {ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
   const rol = el("select",{}, ...["empleado","responsable","admin"].map(r=>el("option",{value:r,text:{empleado:"Empleado",responsable:"Jefe / Responsable",admin:"Administración"}[r],selected:x.rol===r})));
   const checks = Object.keys(NOM).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:x.permisos.includes(k)}); return el("label",{class:"chk"},c," "+NOM[k]); });
   const pers = el("input",{type:"checkbox",checked:x.permisosPersonalizados});
@@ -720,10 +716,250 @@ function editarPermisos(x, recargar){
     try{ const r = await apiS("cambiarRol", x.id, rol.value, permisos); m.cerrar(); if (r.pinInicial) modal(el("div",{class:"grid"}, el("h2",{text:"PIN nuevo por cambio de nivel"}), el("div",{class:"big mono",text:r.pinInicial}))); else toast("✅ Permisos actualizados"); delete r.pinInicial; recargar(r); }
     catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
+/* ===================== 3.4 · Fichaje del empleado: entrada y salida (varios pares por día), validación de ubicación en el servidor,
+   fichaje manual cuando la ubicación no valida, entrada abierta de otro día, "Mis registros" y "Mis horas". =====================
+   La ubicación se pide UNA vez, en el momento de tocar el botón; no hay seguimiento. La distancia y la hora las calcula el servidor. */
+const estadoDiaTxt = {trabajado:"Trabajado", incompleto:"Incompleto", en_curso:"En curso", vacaciones:"Vacaciones", feriado:"Feriado", sin_fichaje:"Sin fichaje"};
+const estadoDiaCls = {trabajado:"ok", incompleto:"warn", en_curso:"", vacaciones:"ok", feriado:"fer-l", sin_fichaje:"bad"};
+const hm = m => m==null ? "–" : Math.floor(Math.abs(m)/60)+":"+String(Math.abs(m)%60).padStart(2,"0");
+const difTxt = m => m==null ? "–" : (m<0?"−":"+")+hm(m);
+const paresTxt = P => (P||[]).map(p=>(p.entrada||"¿?")+"–"+(p.salida||(p.enCurso?"…":"¿?"))).join(" · ");
+/** Reinicia el cierre automático de la sesión de fichada (3 min sin uso). */
+function vigilarF(body){ clearTimeout(F.t); F.t = setTimeout(()=>{ finFichada(); body.textContent=""; vFichar(body); toast("Sesión de fichada cerrada"); }, 3*60*1000); }
+
+/* j: jornada ya recibida junto con el login (ahorra una llamada); si no viene, se pide. */
+async function jornada(body, j){
+  vigilarF(body);
+  if (!j){
+    body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
+    try{ j = await api("miJornada", F.token); }catch(e){ body.textContent=""; vFichar(body); return toast(msgErr(e)); }
+  }
+  F.j = j; fichando = false; clearTimeout(liberarT);   // pantalla nueva: el bloqueo anti doble toque es solo para la pantalla anterior
+  body.textContent="";
+  const card = el("div",{class:"card fichar"});
+  card.append(el("h2",{text:`Hola, ${j.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:`Hoy, ${fmtF(j.fecha)} · Sucursal ${j.sucursal.nombre}`}));
+  // Estado actual, grande y claro
+  card.append(el("div",{class:"estado-actual "+(j.estado.tipo==="entrada"?"adentro":j.estado.tipo==="salida"?"afuera":"")}, el("span",{class:"k",text:"Estado actual"}), el("b",{text:j.estado.texto})));
+  if (j.pares && j.pares.length) card.append(el("div",{class:"pares"}, el("span",{class:"k",text:"Hoy"}),
+    el("span",{class:"mono",text:paresTxt(j.pares)}), j.minutosHoy ? el("b",{text:"Total "+horas(j.minutosHoy)}) : null));
+  if ((j.manualesPendientes||[]).length) card.append(el("div",{class:"notice warn",text:`✋ ${j.manualesPendientes.map(m=>`${m.tipo==="salida"?"Salida":"Entrada"} manual de las ${m.hora}`).join(" y ")}: pendiente de aprobación de un jefe.`}));
+  const incompleta = (j.sucursal.incompleta||[]).length>0;
+  if (incompleta) card.append(el("div",{class:"notice bad",text:`⚠️ Tu sucursal (${j.sucursal.nombre}) no tiene cargado: ${j.sucursal.incompleta.join(", ")}. Hasta que un jefe lo complete no se puede fichar con ubicación. Podés pedir un fichaje manual.`}));
+  if (!j.habilitado) card.append(el("div",{class:"notice warn",text:"Tu usuario no está habilitado para fichar. Consultá con tu jefe."}));
+  else if (j.abiertaAnterior) card.append(formAbierta(body, j.abiertaAnterior));
+  else {
+    const mk = tipo => { const b = el("button",{class:"btn fichar-btn "+tipo,type:"button",disabled:j.siguiente!==tipo,"aria-describedby":"fichar-ayuda"},
+        el("span",{text:tipo==="entrada"?"🟢":"🏁"}), el("span",{text:tipo==="entrada"?"Fichar entrada":"Fichar salida"}));
+      b.onclick = ()=>pulsarFichar(body, tipo, [bE,bS]); return b; };
+    const bE = mk("entrada"), bS = mk("salida");
+    card.append(el("div",{class:"fbtns"}, bE, bS),
+      el("p",{class:"aviso",id:"fichar-ayuda",text: j.siguiente==="entrada" ? "Te toca fichar la ENTRADA." : "Te toca fichar la SALIDA."}),
+      el("p",{class:"aviso",text:"📍 Al tocar el botón se pide la ubicación del teléfono una sola vez, para validar que estés en tu sucursal."+(j.fotoObligatoria?" 📷 Después te sacás la foto.":"")}));
+    if (incompleta) card.append(el("button",{class:"btn",type:"button",text:"✋ Solicitar fichaje manual",onclick:()=>formManual(body, j.siguiente, {motivo:"sucursal_incompleta", sucursal:j.sucursal.nombre, faltan:j.sucursal.incompleta}, null)}));
+  }
+  if (j.vacacionesNovedades) card.append(el("div",{class:"notice ok"}, `📬 ${j.vacacionesNovedades===1?"Tenés 1 solicitud de vacaciones resuelta":"Tenés "+j.vacacionesNovedades+" solicitudes de vacaciones resueltas"}. `, el("button",{class:"btn sm",type:"button",text:"Ver",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }})));
+  card.append(el("div",{class:"row"},
+    el("button",{class:"btn",type:"button",text:"⏱️ Mis horas",onclick:()=>misHoras(body)}),
+    el("button",{class:"btn",type:"button",text:"🧾 Mis registros y correcciones",onclick:()=>misRegistros(body)}),
+    el("button",{class:"btn",type:"button",text:"🏖️ Mis vacaciones",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }}),
+    el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Terminar",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
+  body.append(card);
+}
+/* Entrada abierta de un día anterior: antes de fichar hoy hay que decir a qué hora fue la salida (lo aprueba un jefe). */
+function formAbierta(body, ab){
+  const h = el("input",{type:"time",value:"18:00","aria-label":"Hora de salida"}), m = el("input",{type:"text",maxlength:"300",placeholder:"Motivo (ej.: me fui sin fichar la salida)","aria-label":"Motivo"});
+  const b = el("button",{class:"btn primary",type:"submit",text:"Enviar y seguir"});
+  return el("form",{class:"notice warn abierta",onsubmit:async e=>{ e.preventDefault(); if (m.value.trim().length<3) return toast("Contá brevemente el motivo."); spinBtn(b,"Enviando…");
+      try{ await api("solicitarCorreccion", F.token, {fecha:ab.fecha, tipo:"salida", horaPropuesta:h.value, motivo:m.value}); toast("✅ Corrección enviada. Ya podés fichar."); jornada(body); }
+      catch(x){ unspin(b); toast(msgErr(x)); } }},
+    el("b",{text:`⚠️ Tenés una entrada abierta del ${fmtF(ab.fecha)} a las ${ab.hora} sin salida.`}),
+    el("span",{text:"Para fichar hoy, indicá a qué hora saliste ese día. Un jefe lo revisa y queda registrado (tu fichaje original no se modifica)."}),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Hora de salida",h), el("label",{class:"f"},"Motivo",m)), b);
+}
+/* Aviso del primer uso: para qué se usa la ubicación (una vez por persona y teléfono). */
+function avisoPrimerUso(texto){
+  const k = "hb34_geo_"+((S.user&&S.user.legajo)||F.nombre||"");
+  if (lsGet(k)) return Promise.resolve(true);
+  return new Promise(res=>{
+    const m = modal(el("div",{class:"grid"}, el("div",{class:"lockicon",text:"📍"}), el("h2",{text:"Antes de fichar"}),
+      el("p",{style:"margin:0;font-size:15.5px",text:texto||"Usamos la ubicación del teléfono solo en el momento de fichar, para validar que estés en tu sucursal."}),
+      el("ul",{class:"pasos"}, el("li",{text:"Se toma una sola vez, cuando tocás «Fichar». No hay seguimiento."}), el("li",{text:"La distancia y la hora las calcula el servidor."}), el("li",{text:"Tu ubicación solo la ven los jefes."})),
+      el("div",{class:"row"}, el("button",{class:"btn primary",type:"button",text:"Entendido",onclick:()=>{ lsSet(k,1); m.cerrar(); res(true); }}),
+        el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>{ m.cerrar(); res(false); }}))), {cerrable:false});
+  });
+}
+let fichando = false, liberarT = null;
+/* Un toque: bloqueo de unos segundos (evita dobles toques) → ubicación → validación en el servidor → foto → registro. */
+async function pulsarFichar(body, tipo, botones){
+  if (fichando) return; fichando = true;
+  botones.forEach(b=>b.disabled=true);
+  const liberar = ()=>{ clearTimeout(liberarT); liberarT = setTimeout(()=>{ fichando=false; botones.forEach(b=>{ if (b.isConnected) b.disabled = !(F.j && F.j.siguiente===(b.classList.contains("salida")?"salida":"entrada")); }); }, 4000); };
+  try{
+    if (!(await avisoPrimerUso(F.j && F.j.avisoUbicacion))) return;
+    const boton = botones.find(b=>b.classList.contains(tipo)); if (boton) spinBtn(boton, "Obteniendo ubicación…");
+    const geo = await ubicacion();
+    if (boton) unspin(boton);
+    if (geo.error) return pantallaRechazo(body, tipo, {motivo:geo.error}, geo);
+    let v; try{ v = await api("verificarUbicacion", F.token, tipo, geo); }
+    catch(e){ return errorFichada(body, tipo, e, geo); }
+    if (!v.ok) return pantallaRechazo(body, tipo, v, geo);
+    if (F.j && F.j.fotoObligatoria) pasoFoto(body, tipo, geo, v); else enviarFichada(body, tipo, geo, null);
+  } finally { liberar(); }
+}
+/* Ubicación que no valida: mensaje claro + reintentar + fichaje manual con motivo (lo aprueba un jefe). */
+function pantallaRechazo(body, tipo, v, geo){
+  vigilarF(body);
+  body.textContent="";
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const card = el("div",{class:"card fichar rechazo"});
+  const titulo = { fuera:`Estás a ${v.distancia!=null ? v.distancia.toLocaleString("es-AR") : "?"} metros de la sucursal`, precision:"La ubicación del teléfono es poco precisa",
+    sucursal_incompleta:"Tu sucursal no tiene la ubicación completa", sin_permiso:"Activá la ubicación para fichar", no_disponible:"No pudimos obtener tu ubicación", tiempo_agotado:"No pudimos obtener tu ubicación" }[v.motivo] || "No se pudo validar la ubicación";
+  card.append(el("div",{class:"bigok",text:v.motivo==="fuera"?"📏":"📍"}), el("h2",{text:titulo}));
+  if (v.motivo==="fuera") card.append(el("p",{class:"lead",text:`Para fichar tenés que estar a menos de ${v.radio} m de ${v.sucursal}. El fichaje no se registró.`}));
+  else if (v.motivo==="precision") card.append(el("p",{class:"lead",text:`El GPS marca con un margen de ±${v.precision} m (se necesita ${v.precisionMax||100} m o menos). El fichaje no se registró.`}),
+    el("ol",{class:"pasos"}, ...["Activá la ubicación con «precisión alta» (o «ubicación precisa»).", "Acercate a una ventana o a la puerta del local y esperá unos segundos.", "Tocá «Reintentar»."].map(t=>el("li",{text:t}))));
+  else if (v.motivo==="sucursal_incompleta") card.append(el("p",{class:"lead",text:`A ${v.sucursal} le falta: ${(v.faltan||[]).join(", ")}. Avisá a un jefe para que lo complete. Mientras tanto podés pedir un fichaje manual.`}));
+  else card.append(el("p",{class:"lead",text:(v.motivo==="sin_permiso"?"No diste permiso de ubicación a la app.":"La ubicación del teléfono está apagada o no respondió a tiempo.")+" Sin ubicación el fichaje no se registra."}),
+    el("ol",{class:"pasos"}, ...(ios ? ["Ajustes → Privacidad y seguridad → Localización: activá «Localización».", "En la misma lista, elegí Safari (o la app instalada) → «Al usar la app» y «Ubicación exacta».", "Volvé acá y tocá «Reintentar»."]
+      : ["Bajá el panel de notificaciones y activá «Ubicación» (GPS).", "Si el navegador no la pidió: tocá el candado 🔒 de la barra de dirección → Permisos → Ubicación → Permitir.", "Volvé acá y tocá «Reintentar»."]).map(t=>el("li",{text:t}))));
+  card.append(el("div",{class:"row",style:"justify-content:center"},
+    v.motivo!=="sucursal_incompleta" ? el("button",{class:"btn primary big-btn",type:"button",text:"Reintentar",onclick:()=>jornada(body, F.j)}) : null,
+    el("button",{class:"btn big-btn",type:"button",text:"✋ Solicitar fichaje manual",onclick:()=>formManual(body, tipo, v, geo)}),
+    el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)})));
+  body.append(card);
+}
+function formManual(body, tipo, v, geo){
+  vigilarF(body);
+  body.textContent="";
+  const m = el("textarea",{maxlength:"300",placeholder:"Ej.: estoy en el local, el GPS marca a otra cuadra","aria-label":"Motivo",required:true});
+  const b = el("button",{class:"btn fichar-btn "+tipo,type:"submit",text:`Enviar ${tipo} manual`});
+  body.append(el("form",{class:"card fichar",onsubmit:async e=>{ e.preventDefault(); if (m.value.trim().length<5) return toast("Contá brevemente el motivo."); spinBtn(b,"Enviando…");
+      try{ const r = await api("solicitarFichajeManual", F.token, tipo, m.value, geo && !geo.error ? geo : (geo||{error:"no_disponible"}));
+        body.textContent="";
+        body.append(el("div",{class:"card fichar done "+tipo}, el("div",{class:"bigok",text:"✋"}), el("h2",{text:`${tipo==="entrada"?"Entrada":"Salida"} manual enviada`}),
+          el("div",{class:"big mono",text:r.hora.slice(0,5)}), el("p",{class:"lead",text:`${fmtF(r.fecha)} · hora del servidor · ${r.sucursal}`}),
+          el("p",{class:"lead",text:"Queda pendiente: un jefe la aprueba o la rechaza. Si la rechaza, vas a ver el motivo en «Mis registros»."}),
+          el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>jornada(body)})));
+      }catch(x){ unspin(b); errorFichada(body, tipo, x, geo); } }},
+    el("h2",{text:`Fichaje manual de ${tipo}`}),
+    el("p",{class:"lead",text:"Se registra la hora del servidor de este momento y queda pendiente de aprobación de un jefe."}),
+    el("label",{class:"f"},"Motivo (obligatorio)",m), b, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
+  setTimeout(()=>m.focus(),60);
+}
+/* Paso de la foto (si la configuración la exige): la cámara se abre con un toque propio de la persona. */
+function pasoFoto(body, tipo, geo, v){
+  vigilarF(body);
+  body.textContent="";
+  const b = el("button",{class:"btn fichar-btn "+tipo+" foto-btn",type:"button"}, el("span",{text:"📸"}), el("span",{text:"Sacar la foto"}));
+  b.onclick = async ()=>{ spinBtn(b,"Abriendo la cámara…"); const foto = await elegirFoto(true); if (!foto){ unspin(b); return toast("Necesitás sacarte la foto para fichar."); } confirmarFichada(body, tipo, geo, foto); };
+  body.append(el("div",{class:"card fichar"}, el("div",{class:"bigok",text:"✅"}), el("h2",{text:`Ubicación validada en ${v.sucursal}`}),
+    el("p",{class:"lead",text:`Ahora sacate la foto para registrar tu ${tipo}.`}), b,
+    el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
+}
+function confirmarFichada(body, tipo, geo, foto){
+  body.textContent="";
+  const b = el("button",{class:"btn fichar-btn "+tipo,type:"button",text:"Confirmar "+tipo});
+  const otra = el("button",{class:"btn",type:"button",text:"Sacar otra foto",onclick:async()=>{ spinBtn(otra,"Abriendo la cámara…"); const f2 = await elegirFoto(true); unspin(otra); if (f2) confirmarFichada(body, tipo, geo, f2); }});
+  body.append(el("div",{class:"card fichar"}, el("h2",{text:"Confirmá tu "+tipo}), el("img",{src:foto,alt:"Tu foto",class:"selfie"}), b, otra,
+    el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
+  b.onclick = ()=>{ spinBtn(b,"Registrando…"); enviarFichada(body, tipo, geo, foto, b); };
+}
+async function enviarFichada(body, tipo, geo, foto, boton){
+  geo.ua = navigator.userAgent.slice(0,120);
+  try{
+    const r = await api("registrarFichada", F.token, tipo, foto, geo);
+    body.textContent="";
+    body.append(el("div",{class:"card fichar done "+tipo},
+      el("div",{class:"bigok",text:"✅"}), el("h2",{text:(tipo==="entrada"?"Entrada":"Salida")+" registrada"}),
+      el("div",{class:"big mono",text:r.hora.slice(0,5)}), el("p",{class:"lead",text:fmtF(r.fecha)+" · hora del servidor · "+r.sucursal}),
+      r.precisionBaja ? el("p",{class:"notice warn",text:"El GPS tenía poca precisión: el registro queda «para revisar» por un jefe."}) : el("p",{class:"lead",text:"📍 Ubicación validada en tu sucursal"+(r.fotoGuardada?" · 📷 foto guardada":"")}),
+      tipo==="salida" || r.minutosHoy ? el("p",{class:"lead",text:"⏱️ Hoy llevás "+horas(r.minutosHoy||0)}) : null,
+      el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
+    setTimeout(()=>{ if (F.token && body.querySelector(".fichar.done")){ finFichada(); body.textContent=""; vFichar(body); } }, 20000);
+  }catch(e){ if (boton) unspin(boton); errorFichada(body, tipo, e, geo); }
+}
+function errorFichada(body, tipo, e, geo){
+  const msg = String(e && e.message || "");
+  const dup = /^DUP:(\w+):(.+)$/.exec(msg);
+  if (dup){ body.textContent="";
+    body.append(el("div",{class:"card notice warn",text: dup[1]==="entrada" ? `Ya tenés una entrada registrada a las ${dup[2].slice(0,5)}. Ahora te toca fichar la salida.` : `Ya registraste la salida a las ${dup[2].slice(0,5)}. Para volver a fichar, primero fichá una nueva entrada.`}));
+    return setTimeout(()=>jornada(body),2800); }
+  if (/^GEO:/.test(msg)){ let v={motivo:"no_disponible"}; try{ v = JSON.parse(msg.slice(4)); }catch(x){} return pantallaRechazo(body, tipo, v, geo); }
+  if (/^RAPIDO:/.test(msg)) return toast(msg.slice(7));
+  if (/^ABIERTA:/.test(msg)) return jornada(body);
+  if (esAuth(e)){ toast("La sesión venció. Volvé a identificarte."); body.textContent=""; return vFichar(body); }
+  toast("No se registró: "+msgErr(e));
+}
+async function misRegistros(body){
+  vigilarF(body);
+  body.textContent=""; let L=[], Sol=[];
+  try{ [L, Sol] = await Promise.all([api("misIngresos", F.token), api("misSolicitudes", F.token)]); }catch(e){ return toast(msgErr(e)); }
+  const tb = el("tbody");
+  L.forEach(x=>tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(x.fecha)}), el("td",{text:x.tipo==="salida"?"Salida":"Entrada"}),
+    el("td",{class:"mono",text:(x.horaCorregida? x.horaCorregida+" (corr.)" : (x.hora||"").slice(0,5))}),
+    el("td",{},el("span",{class:"pill "+(x.estado==="valido"?"ok":x.estado==="revisar"?"warn":""),text:x.estado})), el("td",{text:x.modo==="manual"?"Manual":x.modo==="correccion"?"Corrección":"Automático"}))));
+  if (!L.length) tb.append(el("tr",{},el("td",{colspan:"5",class:"empty",text:"Todavía no tenés fichajes."})));
+  const ts = el("tbody");
+  Sol.forEach(c=>ts.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:(c.clase==="manual"?"Fichaje manual · ":"Corrección · ")+(c.tipo==="salida"?"salida":"entrada")}),
+    el("td",{class:"mono",text:c.hora}), el("td",{}, el("span",{class:"pill "+(c.estado==="aprobada"?"ok":c.estado==="rechazada"?"bad":"warn"),text:c.estado})), el("td",{text:c.comentario?("Motivo del rechazo: "+c.comentario):c.motivo}))));
+  if (!Sol.length) ts.append(el("tr",{},el("td",{colspan:"5",class:"empty",text:"Sin solicitudes."})));
+  const f = el("input",{type:"date",value:hoy(),max:hoy()}), t = el("select",{}, el("option",{value:"entrada",text:"Entrada"}), el("option",{value:"salida",text:"Salida"}));
+  const h = el("input",{type:"time",value:"09:00"}), m = el("input",{type:"text",maxlength:"300",placeholder:"Motivo (ej.: me olvidé de fichar)"});
+  const b = el("button",{class:"btn primary",type:"submit",text:"Enviar solicitud"});
+  body.append(el("div",{class:"card"}, el("h2",{text:"Mis últimos fichajes"}),
+      el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Tipo","Hora","Estado","Modo"].map(x=>el("th",{text:x})))), tb))),
+    el("div",{class:"card"}, el("h2",{text:"Mis solicitudes"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Pedido","Hora","Estado","Detalle"].map(x=>el("th",{text:x})))), ts))),
+    el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b,"Enviando…");
+        try{ await api("solicitarCorreccion", F.token, {fecha:f.value, tipo:t.value, horaPropuesta:h.value, motivo:m.value}); toast("✅ Solicitud enviada. La revisa un jefe."); misRegistros(body); }
+        catch(x){ unspin(b); toast(msgErr(x)); } }},
+      el("h2",{text:"Pedir una corrección"}), el("p",{class:"lead",text:"Tu registro original no se modifica: un jefe aprueba o rechaza el cambio y queda constancia."}),
+      el("div",{class:"grid2"}, el("label",{class:"f"},"Fecha",f), el("label",{class:"f"},"Tipo",t), el("label",{class:"f"},"Hora correcta",h)), el("label",{class:"f"},"Motivo",m),
+      el("div",{class:"row"}, b, el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)}))));
+}
+/* "Mis horas": solo las propias, por mes, con días, semanas, total, promedio y diferencia con lo esperado (si está cargado). */
+async function misHoras(body, mes){
+  vigilarF(body);
+  mes = mes || hoy().slice(0,7);
+  body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Calculando tus horas…"));
+  const fin = (()=>{ const [y,m]=mes.split("-").map(Number); return fechaLocal(new Date(y, m, 0)); })();
+  let r; try{ r = await api("resumenHoras", F.token, {desde: mes+"-01", hasta: fin}); }catch(e){ body.textContent=""; toast(msgErr(e)); return jornada(body); }
+  body.textContent="";
+  const e = r.empleados[0];
+  const sel = el("select",{"aria-label":"Mes"}, ...[0,1,2,3].map(i=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i); const k=fechaLocal(d).slice(0,7); return el("option",{value:k,selected:k===mes,text:d.toLocaleDateString("es-AR",{month:"long",year:"numeric"})}); }));
+  sel.onchange = ()=>misHoras(body, sel.value);
+  body.append(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"⏱️ Mis horas"}), el("span",{class:"spacer"}), sel),
+    e ? tablaHorasEmpleado(e, r, false) : el("p",{class:"empty",text:"Sin datos en el período."}),
+    el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)}))));
+}
+/** Bloque de horas de una persona: totales, semanas y detalle por día (lo usan "Mis horas" y la vista de jefes). */
+function tablaHorasEmpleado(e, r, jefe, onCorregir){
+  const box = el("div",{class:"grid"});
+  const kpi = (k,v,cls) => el("div",{class:"hk "+(cls||"")}, el("span",{class:"k",text:k}), el("b",{text:v}));
+  box.append(el("div",{class:"hkpis"}, kpi("Total", hm(e.total)+" h"), kpi("Días trabajados", String(e.diasTrabajados)), kpi("Promedio diario", e.promedio==null?"–":hm(e.promedio)+" h"),
+    e.esperado!=null ? kpi("Esperado", hm(e.esperado)+" h") : null, e.diferencia!=null ? kpi("Diferencia", difTxt(e.diferencia)+" h", e.diferencia<0?"neg":"pos") : null));
+  const avisos = [];
+  if (e.incompletos) avisos.push(`${e.incompletos} día(s) incompleto(s): no se suman hasta que se corrijan.`);
+  if (e.sinFichaje) avisos.push(`${e.sinFichaje} día(s) de apertura sin fichaje (para revisar, no es una conclusión).`);
+  if (e.vacaciones) avisos.push(`${e.vacaciones} día(s) de vacaciones y ${e.feriados} feriado(s): no cuentan como ausencia.`);
+  else if (e.feriados) avisos.push(`${e.feriados} feriado(s): no cuentan como ausencia.`);
+  if (avisos.length) box.append(el("ul",{class:"hint lista-avisos"}, avisos.map(a=>el("li",{text:a}))));
+  if (e.diferencia!=null) box.append(el("p",{class:"hint",text:`Esperado: ${e.horasEsperadas.horas} h por ${e.horasEsperadas.tipo==="semana"?"semana":"día de apertura"} (sin vacaciones ni feriados). La diferencia es informativa: no calcula pagos ni horas extra.`}));
+  if (r.redondeo>1) box.append(el("p",{class:"hint",text:`Horas por día redondeadas a ${r.redondeo} minutos.`}));
+  if (e.semanas.length){ const tw = el("tbody"); e.semanas.forEach(w=>tw.append(el("tr",{}, el("td",{class:"mono",text:"Semana del "+fmtF(w.semana).slice(0,5)}), el("td",{class:"n",text:hm(w.minutos)}), el("td",{class:"n",text:w.esperado==null?"–":hm(w.esperado)}), el("td",{class:"n",text:w.esperado==null?"–":difTxt(w.minutos-w.esperado)}))));
+    box.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, el("th",{text:"Semana"}), el("th",{class:"n",text:"Horas"}), el("th",{class:"n",text:"Esperado"}), el("th",{class:"n",text:"Diferencia"}))), tw))); }
+  const td = el("tbody");
+  e.dias.slice().reverse().forEach(x=>td.append(el("tr",{}, el("td",{class:"mono",text:fmtF(x.fecha).slice(0,5)+" "+x.dia}),
+    el("td",{}, el("span",{class:"pill "+(estadoDiaCls[x.estado]||""),text:estadoDiaTxt[x.estado]||x.estado}), x.feriado && x.estado!=="feriado" ? el("span",{class:"pill fer-l",text:"🎉"}) : null, jefe && x.revisar ? el("span",{class:"pill warn",text:"revisar"}) : null, x.manual ? el("span",{class:"pill",text:"manual"}) : null),
+    el("td",{class:"mono",text: x.estado==="feriado" ? x.feriado : paresTxt(x.pares)}), el("td",{class:"n",text:x.minutos==null?(x.minutosParciales&&x.estado==="en_curso"?hm(x.minutosParciales)+"…":"–"):hm(x.minutos)}),
+    jefe ? el("td",{}, x.estado==="incompleto" && onCorregir ? el("button",{class:"btn sm",type:"button",text:"Corregir",onclick:()=>onCorregir(e, x)}) : null) : null)));
+  if (!e.dias.length) td.append(el("tr",{},el("td",{colspan:jefe?"5":"4",class:"empty",text:"Sin días en el período."})));
+  box.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Día","Estado","Entradas y salidas","Horas"].concat(jefe?[""]:[]).map((x,i)=>el("th",{class:i===3?"n":null,text:x})))), td)));
+  return box;
+}
 /* ===================== Registro de ingresos (vista administrativa) ===================== */
-const GEO_TXT = {dentro:"En el showroom",fuera:"Fuera del radio",sin_permiso:"Sin permiso de ubicación",no_disponible:"Ubicación no disponible",tiempo_agotado:"Ubicación no disponible",no_configurado:"No requerida",sin_referencia:"Registrada (sin referencia)",no_aplica:"No aplica (corrección)"};
+const GEO_TXT = {dentro:"En la sucursal",fuera:"Fuera del radio",precision:"GPS poco preciso",sucursal_incompleta:"Sucursal sin ubicación",sin_permiso:"Sin permiso de ubicación",no_disponible:"Ubicación no disponible",tiempo_agotado:"Ubicación no disponible",no_configurado:"No requerida",sin_referencia:"Registrada (sin referencia)",no_aplica:"No aplica (corrección)"};
 const EST_CLS = {valido:"ok",revisar:"warn",corregido:"",anulado:"bad"};
-function vIngresos(main){
+function vFichadas(main){
   const lunes = (()=>{ const d=new Date(); d.setDate(d.getDate()-((d.getDay()+6)%7)); return fechaLocal(d); })();
   const de = el("input",{type:"date",value:lunes}), ha = el("input",{type:"date",value:hoy()});
   const emp = el("select",{}, el("option",{value:"",text:"Todo el personal"})), est = el("select",{}, el("option",{value:"",text:"Todos los estados"}), ...["valido","revisar","corregido","anulado"].map(x=>el("option",{value:x,text:x})));
@@ -743,45 +979,49 @@ function vIngresos(main){
     const pend = D.correcciones.filter(c=>c.estado==="pendiente");
     if (pend.length) al.append(el("div",{class:"notice warn",text:`✋ ${pend.length} solicitud(es) de corrección pendientes de aprobación.`}));
     if (D.pendientes.length) al.append(el("div",{class:"notice",text:`🔎 ${D.pendientes.length} día(s)-persona de apertura sin entrada registrada. Es una alerta para revisar, no una falta.`}));
+    if ((D.deVacaciones||[]).length) al.append(el("div",{class:"notice ok",text:`🏖️ ${D.deVacaciones.length} día(s)-persona de vacaciones aprobadas en el período: no cuentan como falta ni como fichada pendiente.`}));
     if (D.sinSalida.length) al.append(el("div",{class:"notice",text:`🔎 ${D.sinSalida.length} jornada(s) con entrada y sin salida.`}));
-    const dup = L.filter(x=>x.duplicado).length; if (dup) al.append(el("div",{class:"notice bad",text:`⚠️ ${dup} registro(s) duplicados para revisar.`}));
+    const dup = L.filter(x=>x.duplicado).length; if (dup) al.append(el("div",{class:"notice bad",text:`⚠️ ${dup} registro(s) con la secuencia entrada/salida rota (dos entradas seguidas o salida sin entrada): revisar.`}));
+    const pb = L.filter(x=>x.precisionBaja && x.estado==="revisar").length; if (pb) al.append(el("div",{class:"notice warn",text:`📡 ${pb} fichaje(s) con precisión baja del GPS, marcados para revisar (la ubicación del celular puede alterarse).`}));
     if (al.children.length) body.append(al);
     // Jornadas
     const J = D.jornadas.filter(j=>(!emp.value||j.uid===emp.value)&&(!t||(j.nombre+" "+j.legajo).toLowerCase().includes(t)));
-    const tj = el("tbody"); J.forEach(j=>tj.append(el("tr",{}, el("td",{class:"mono",text:fmtF(j.fecha)}), el("td",{text:j.nombre}), el("td",{class:"mono",text:(j.entrada||"—").slice(0,5)}),
-      el("td",{class:"mono",text:(j.salida||"—").slice(0,5)}), el("td",{class:"n",text:horas(j.minutos)}), el("td",{}, j.sinSalida?el("span",{class:"pill warn",text:"Sin salida"}):null))));
+    const tj = el("tbody"); J.forEach(j=>tj.append(el("tr",{}, el("td",{class:"mono",text:fmtF(j.fecha)}), el("td",{text:j.nombre}), el("td",{text:j.sucursal||""}), el("td",{class:"mono",text:paresTxt(j.pares)}),
+      el("td",{class:"n",text:horas(j.minutos)}), el("td",{}, j.incompleto?el("span",{class:"pill warn",text:j.sinSalida?"Sin salida":"Incompleto"}):j.enCurso?el("span",{class:"pill",text:"En curso"}):null))));
     if (!J.length) tj.append(el("tr",{},el("td",{colspan:"6",class:"empty",text:"Sin jornadas en el período."})));
-    body.append(el("div",{class:"card"}, el("h2",{text:"Jornadas"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Entrada","Salida","Horas","Revisión"].map((x,i)=>el("th",{class:i===4?"n":null,text:x})))), tj))));
+    body.append(el("div",{class:"card"}, el("h2",{text:"Jornadas"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Sucursal","Entradas y salidas","Horas","Revisión"].map((x,i)=>el("th",{class:i===4?"n":null,text:x})))), tj))));
     // Detalle de fichadas
     const tb = el("tbody");
     L.forEach(x=>{ const abierto = S.openRow===x.id, tog=()=>{ S.openRow=abierto?null:x.id; pintar(); };
       tb.append(el("tr",{class:"clk"+(abierto?" sel":""),tabindex:"0",onclick:tog,onkeydown:e=>{if(e.key==="Enter")tog();}},
-        el("td",{class:"mono",text:fmtF(x.fecha)}), el("td",{text:x.nombre+(x.usuarioInactivo?" (baja)":"")}), el("td",{text:x.tipo==="salida"?"Salida":"Entrada"}),
+        el("td",{class:"mono",text:fmtF(x.fecha)}), el("td",{text:x.nombre+(x.usuarioInactivo?" (baja)":"")}), el("td",{text:x.sucursal||""}), el("td",{text:(x.tipo==="salida"?"Salida":"Entrada")+(x.modo==="manual"?" (manual)":"")}),
         el("td",{class:"mono",text:x.horaCorregida? x.horaCorregida+" ✎" : (x.hora||"").slice(0,8)}),
         el("td",{},el("span",{class:"pill "+(EST_CLS[x.estado]||""),text:x.estado})), el("td",{text:x.tieneFoto?"📷":x.fotoPurgada?"(vencida)":"—"}),
-        el("td",{text:GEO_TXT[x.geoResultado]||x.geoResultado||""}), el("td",{text:x.observacion||""})));
+        el("td",{text:(GEO_TXT[x.geoResultado]||x.geoResultado||"")+(x.distancia!=null?" · "+x.distancia+" m":"")+(x.precisionBaja?" · 📡 baja":"")}), el("td",{text:x.observacion||""})));
 
     });
-    if (!L.length) tb.append(el("tr",{},el("td",{colspan:"8",class:"empty",text:"Sin fichadas con estos filtros."})));
+    if (!L.length) tb.append(el("tr",{},el("td",{colspan:"9",class:"empty",text:"Sin fichadas con estos filtros."})));
     const selI = L.find(x=>x.id===S.openRow);
     const detI = selI ? el("div",{class:"card detcard"}, el("div",{class:"row"}, el("h3",{style:"margin:0",text:`Detalle · ${selI.nombre} · ${selI.tipo} ${fmtF(selI.fecha)}`}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Cerrar detalle",onclick:()=>{S.openRow=null;pintar();}})), detalleIngreso(selI, cargar)) : null;
     body.append(el("div",{class:"card"}, el("h2",{text:"Fichadas"}), el("p",{class:"lead",text:"Tocá una fila para ver la evidencia y revisarla. La hora es la del servidor; las correcciones conservan el registro original."}),
-      el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Hora","Estado","Evidencia","Validación","Observaciones"].map(x=>el("th",{text:x})))), tb))));
+      el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Sucursal","Tipo","Hora","Estado","Evidencia","Validación","Observaciones"].map(x=>el("th",{text:x})))), tb))));
     if (detI){ body.append(detI); setTimeout(()=>detI.scrollIntoView({behavior:"smooth",block:"start"}),30); }
     // Correcciones
     const tc = el("tbody");
     D.correcciones.slice().sort((a,b)=>(a.estado==="pendiente"?0:1)-(b.estado==="pendiente"?0:1)||b.creado.localeCompare(a.creado)).forEach(c=>{
       const acc = c.estado==="pendiente" ? el("span",{class:"row"},
         el("button",{class:"btn sm",type:"button",text:"✔ Aprobar",onclick:async()=>{ try{ await apiS("resolverCorreccion",c.id,true,""); toast("Corrección aprobada"); cargar(); }catch(e){ toast(msgErr(e)); } }}),
-        el("button",{class:"btn sm danger",type:"button",text:"✖ Rechazar",onclick:async()=>{ try{ await apiS("resolverCorreccion",c.id,false,""); toast("Corrección rechazada"); cargar(); }catch(e){ toast(msgErr(e)); } }})) : el("span",{text:(c.resueltoPor||"")});
-      tc.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:c.nombre}), el("td",{text:c.tipo||"entrada"}), el("td",{class:"mono",text:(c.horaOriginal||"sin registro").slice(0,5)+" → "+c.horaPropuesta}),
+        el("button",{class:"btn sm danger",type:"button",text:"✖ Rechazar",onclick:()=>rechazarSolicitud(c, cargar)})) : el("span",{text:(c.resueltoPor||"")+(c.comentario?" · "+c.comentario:"")});
+      tc.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:c.nombre}), el("td",{text:(c.clase==="manual"?"Manual · ":"")+(c.tipo||"entrada")}), el("td",{class:"mono",text: c.clase==="manual" ? (c.horaSolicitada||c.horaPropuesta||"").slice(0,5)+" (hora del pedido)" : (c.horaOriginal||"sin registro").slice(0,5)+" → "+c.horaPropuesta}),
         el("td",{text:c.motivo}), el("td",{},el("span",{class:"pill "+(c.estado==="aprobada"?"ok":c.estado==="rechazada"?"bad":"warn"),text:c.estado})), el("td",{},acc)));
     });
     if (!D.correcciones.length) tc.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin solicitudes de corrección."})));
-    body.append(el("div",{class:"card"}, el("h2",{text:"Solicitudes de corrección"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Cambio","Motivo","Estado",""].map(x=>el("th",{text:x})))), tc))));
-    if (D.pendientes.length){ const tp=el("tbody"); D.pendientes.forEach(p=>tp.append(el("tr",{}, el("td",{class:"mono",text:fmtF(p.fecha)}), el("td",{text:p.nombre}),
+    body.append(el("div",{class:"card"}, el("h2",{text:"Solicitudes (correcciones y fichajes manuales)"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Cambio","Motivo","Estado",""].map(x=>el("th",{text:x})))), tc))));
+    if (D.pendientes.length){ const tp=el("tbody"); D.pendientes.forEach(p=>tp.append(el("tr",{}, el("td",{class:"mono"}, fmtF(p.fecha), p.feriado?el("span",{class:"pill",text:"🎉 "+p.feriado}):null), el("td",{text:p.nombre}),
         el("td",{}, el("button",{class:"btn sm",type:"button",text:"Derivar a RR. HH.",onclick:()=>derivar({uid:p.uid,fecha:p.fecha}, p.nombre)})))));
-      body.append(el("div",{class:"card"}, el("h2",{text:"Días de apertura sin entrada (para revisar)"}), el("p",{class:"lead",text:"Puede haber motivos válidos (franco, licencia, olvido). Si corresponde, derivalo a RR. HH."}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado",""].map(x=>el("th",{text:x})))), tp)))); }
+      body.append(el("div",{class:"card"}, el("h2",{text:"Días de apertura sin entrada (para revisar)"}), el("p",{class:"lead",text:"Puede haber motivos válidos (franco, licencia, olvido). Si corresponde, derivalo a RR. HH. Los días cerrados (feriado confirmado o excepción) y las vacaciones aprobadas no aparecen acá."}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado",""].map(x=>el("th",{text:x})))), tp)))); }
+    if ((D.deVacaciones||[]).length){ const tv=el("tbody"); D.deVacaciones.forEach(p=>tv.append(el("tr",{}, el("td",{class:"mono",text:fmtF(p.fecha)}), el("td",{text:p.nombre}), el("td",{},el("span",{class:"pill ok",text:"🏖️ De vacaciones"})))));
+      body.append(el("div",{class:"card"}, el("h2",{text:"De vacaciones (aprobadas)"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Estado"].map(x=>el("th",{text:x})))), tv)))); }
   };
   [emp,est].forEach(x=>x.onchange=pintar); q.oninput=pintar; [de,ha].forEach(x=>x.onchange=cargar);
   const bx = el("button",{class:"btn xl",type:"button",text:"⬇️ Excel"});
@@ -796,13 +1036,18 @@ function detalleIngreso(x, recargar){
   const box = el("div",{class:"dl"});
   box.append(el("div",{class:"row"}, x.tieneFoto ? miniFoto("fotoIngreso", x.id, `${x.nombre} · ${x.tipo} ${fmtF(x.fecha)} ${x.hora}`) : el("span",{class:"lead",text: x.fotoPurgada?"La foto se eliminó por la política de retención.":"Sin foto."}),
     el("div",{class:"grid",style:"flex:1;min-width:220px"},
-      el("span",{text:`Ubicación: ${GEO_TXT[x.geoResultado]||x.geoResultado}${x.distancia!=null?" · a "+x.distancia+" m":""}`}),
-      x.horaCorregida ? el("span",{text:`Hora original: ${x.hora||"sin registro"} · corregida: ${x.horaCorregida}`}) : null,
+      el("span",{text:`Ubicación: ${GEO_TXT[x.geoResultado]||x.geoResultado}${x.distancia!=null?" · a "+x.distancia+" m de "+(x.sucursal||"la sucursal"):""}${x.precision!=null?" · precisión ±"+x.precision+" m":""}`}),
+      x.latitud!=null ? el("span",{class:"mono hint",text:`Lat ${x.latitud} · Long ${x.longitud} (solo jefes)`}) : null,
+      el("span",{text:"Modo: "+(x.modo==="manual"?"manual":x.modo==="correccion"?"por corrección":"automático")}),
+      x.horaCorregida ? el("span",{text:`Hora original: ${x.hora||"sin registro"} · vigente: ${x.horaCorregida}`}) : null,
+      (x.correcciones||[]).length ? el("ul",{class:"hint lista-avisos"}, x.correcciones.map(c=>el("li",{text:`${new Date(c.ts).toLocaleString("es-AR")} · ${c.por}: ${c.de||"(sin registro)"} → ${c.a} · ${c.motivo}`}))) : null,
       x.revisadoPor ? el("span",{class:"hint",text:"Revisado por "+x.revisadoPor}) : null,
       el("p",{class:"hint",text:"La foto, la hora y la ubicación son datos de apoyo: por sí solos no prueban identidad ni presencia."}))));
   box.append(el("div",{class:"grid2"}, el("label",{class:"f"},"Observación",obs), el("label",{class:"f"},"Estado",est)),
     el("div",{class:"row"}, el("button",{class:"btn sm primary",type:"button",text:"Guardar revisión",onclick:async e=>{ e.stopPropagation(); try{ await apiS("observarIngreso", x.id, obs.value, est.value); toast("Revisión guardada"); recargar(); }catch(err){ toast(msgErr(err)); } }}),
+      x.estado!=="anulado" ? el("button",{class:"btn sm",type:"button",text:"✎ Corregir hora",onclick:e=>{ e.stopPropagation(); corregirHora(x, recargar); }}) : null,
       el("button",{class:"btn sm",type:"button",text:"Derivar a RR. HH.",onclick:e=>{ e.stopPropagation(); derivar({ingresoId:x.id}, x.nombre); }})));
+  box.append(el("p",{class:"hint",text:"Para anular, elegí «anulado» y escribí el motivo en la observación (es obligatorio). Nada se borra: queda el registro original y quién lo cambió."}));
   return box;
 }
 function derivar(ref, nombre){
@@ -816,11 +1061,156 @@ async function xlsxIngresos(r){
   const wb = new ExcelJS.Workbook(); wb.creator="Hey Blackk";
   const hoja = (nombre, cab, filas) => { const ws = wb.addWorksheet(nombre, {views:[{state:"frozen",ySplit:1}]}); ws.addRow(cab); ws.getRow(1).font={bold:true,color:{argb:"FFFFFFFF"}}; ws.getRow(1).fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF111113"}};
     filas.forEach(f=>ws.addRow(f.map(v=>typeof v==="string" && /^[=+\-@]/.test(v) ? "'"+v : v))); ws.columns.forEach(c=>c.width=18); };
-  hoja("Jornadas", ["Fecha","Empleado","Usuario","Entrada","Salida","Horas","Sin salida"], r.jornadas.map(j=>[fmtF(j.fecha),j.nombre,j.legajo,j.entrada,j.salida,j.minutos==null?"":horas(j.minutos),j.sinSalida?"Sí":""]));
-  hoja("Fichadas", ["Fecha","Empleado","Usuario","Tipo","Hora","Hora corregida","Estado","Ubicación","Distancia (m)","Foto","Observación","Revisado por"], r.lista.map(x=>[fmtF(x.fecha),x.nombre,x.legajo,x.tipo,x.hora,x.horaCorregida,x.estado,GEO_TXT[x.geoResultado]||x.geoResultado,x.distancia??"",x.tieneFoto?"Sí":"No",x.observacion,x.revisadoPor]));
+  hoja("Jornadas", ["Fecha","Empleado","Usuario","Sucursal","Entradas y salidas","Horas","Revisión"], r.jornadas.map(j=>[fmtF(j.fecha),j.nombre,j.legajo,j.sucursal||"",paresTxt(j.pares),j.minutos==null?"":horas(j.minutos),j.incompleto?"Incompleto":""]));
+  hoja("Fichadas", ["Fecha","Empleado","Usuario","Sucursal","Tipo","Modo","Hora","Hora corregida","Estado","Ubicación","Distancia (m)","Precisión (m)","Latitud","Longitud","Foto","Observación","Revisado por"], r.lista.map(x=>[fmtF(x.fecha),x.nombre,x.legajo,x.sucursal||"",x.tipo,x.modo||"",x.hora,x.horaCorregida,x.estado,GEO_TXT[x.geoResultado]||x.geoResultado,x.distancia??"",x.precision??"",x.latitud??"",x.longitud??"",x.tieneFoto?"Sí":"No",x.observacion,x.revisadoPor]));
   hoja("Correcciones", ["Fecha","Empleado","Tipo","Hora original","Hora propuesta","Motivo","Estado","Resuelto por"], r.correcciones.map(c=>[fmtF(c.fecha),c.nombre,c.tipo||"entrada",c.horaOriginal,c.horaPropuesta,c.motivo,c.estado,c.resueltoPor||""]));
   hoja("Sin entrada (revisar)", ["Fecha","Empleado","Usuario"], r.pendientes.map(p=>[fmtF(p.fecha),p.nombre,p.legajo]));
   return wb.xlsx.writeBuffer();
+}
+/* ===================== 3.4 · Fichaje y horas (sección de jefes) =====================
+   Hoy por sucursal · Pendientes (fichajes manuales y correcciones) · Horas (filtros y exportación a la planilla) · Fichadas · Sucursales.
+   Todo se valida en el servidor; acá solo se muestra. La ubicación (lat/long) llega solo a esta sección. */
+function vIngresos(main){
+  tabs(main, [["hoy","📍 Hoy"],["pendientes","✋ Pendientes"],["horas","⏱️ Horas"],["fichadas","🧾 Fichadas"],["sucursales","🏬 Sucursales"]], "hoy", (id, body)=>
+    ({hoy:vHoyFich, pendientes:vPendientesFich, horas:vHorasJefes, fichadas:vFichadas, sucursales:vSucursales})[id](body));
+}
+const EST_HOY = {adentro:["Adentro","ok"], salio:["Salió",""], falta:["Sin fichaje","bad"], vacaciones:["De vacaciones","ok"], feriado:["Feriado","fer-l"], no_abre:["No abre hoy",""], manual_pendiente:["Manual pendiente","warn"], revisar:["Revisar secuencia","warn"]};
+async function vHoyFich(body){
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando el día…"));
+  let P; try{ P = await apiS("panelFichajesHoy"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const pend = P.manualesPendientes + P.correccionesPendientes;
+  body.append(el("div",{class:"row"}, el("span",{class:"lead",style:"margin:0",text:"Hoy, "+fmtF(P.fecha)}), el("span",{class:"spacer"}),
+    pend ? el("button",{class:"btn sm danger",type:"button",text:`✋ ${pend} pendiente${pend>1?"s":""}`,onclick:()=>{ location.hash="#/ingresos/pendientes"; }}) : null,
+    el("button",{class:"btn sm",type:"button",text:"↻ Actualizar",onclick:()=>{ body.textContent=""; vHoyFich(body); }})));
+  P.sucursales.forEach(s=>{
+    const card = el("div",{class:"card suc-hoy"});
+    card.append(el("div",{class:"row"}, el("h2",{style:"margin:0",text:"🏬 "+s.nombre}), el("span",{class:"pill "+(s.feriado?"fer-l":s.abre?"ok":""),text:s.feriado?"Feriado: "+s.feriado:s.abre?"Abre hoy":"No abre hoy"}), el("span",{class:"spacer"}),
+      el("span",{class:"hint",text:s.direccion||""})));
+    if (s.incompleta.length) card.append(el("div",{class:"notice bad"}, `⚠️ Faltan datos de la sucursal (${s.incompleta.join(", ")}): nadie de ${s.nombre} puede fichar con ubicación hasta completarlos. `,
+      el("button",{class:"btn sm",type:"button",text:"Completar",onclick:()=>{ location.hash="#/ingresos/sucursales"; }})));
+    s.avisos.forEach(a=>card.append(el("p",{class:"hint",text:"ℹ️ "+a})));
+    card.append(el("div",{class:"hkpis"}, ...[["Adentro",s.adentro],["Salieron",s.salieron],["Sin fichaje",s.faltan],["De vacaciones",s.deVacaciones]].map(([k,v])=>el("div",{class:"hk"+(k==="Sin fichaje"&&v?" neg":"")}, el("span",{class:"k",text:k}), el("b",{text:String(v)})))));
+    const tb = el("tbody");
+    s.personas.forEach(p=>{ const [txt,cls] = EST_HOY[p.estado]||[p.estado,""];
+      tb.append(el("tr",{}, el("td",{text:p.nombre}), el("td",{}, el("span",{class:"pill "+cls,text: p.estado==="adentro" ? `Adentro desde ${p.pares.length?p.pares[p.pares.length-1].entrada:"?"}` : p.estado==="salio" ? `Salió ${p.ultima}` : txt}),
+          p.revisar ? el("span",{class:"pill warn",text:"📡 revisar"}) : null, p.manualesPendientes ? el("span",{class:"pill warn",text:"✋ manual"}) : null),
+        el("td",{class:"mono",text:paresTxt(p.pares)||"—"}), el("td",{class:"n",text:p.minutos?hm(p.minutos):"–"}),
+        el("td",{}, p.abiertaAnterior ? el("span",{class:"pill warn",text:`Entrada abierta del ${fmtF(p.abiertaAnterior.fecha).slice(0,5)}`}) : null))); });
+    if (!s.personas.length) tb.append(el("tr",{},el("td",{colspan:"5",class:"empty",text:"Sin personal que fiche en esta sucursal."})));
+    card.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Persona","Estado","Entradas y salidas","Horas hoy",""].map((x,i)=>el("th",{class:i===3?"n":null,text:x})))), tb)));
+    body.append(card);
+  });
+  body.append(el("p",{class:"hint",text:"«Sin fichaje» es una alerta para revisar, no una conclusión sobre la persona. Vacaciones aprobadas y feriados no cuentan como ausencia."}));
+}
+/* Rechazo con motivo obligatorio (la persona lo ve). Sirve para fichajes manuales y correcciones. */
+function rechazarSolicitud(c, recargar){
+  const mo = el("textarea",{maxlength:"300",placeholder:"Motivo del rechazo (lo va a ver la persona)","aria-label":"Motivo del rechazo"}), ok = el("button",{class:"btn danger",type:"button",text:"Rechazar"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:`Rechazar · ${c.nombre}`}), el("p",{class:"lead",text:`${c.clase==="manual"?"Fichaje manual":"Corrección"} de ${c.tipo||"entrada"} del ${fmtF(c.fecha)}.`}), mo,
+    el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ if (mo.value.trim().length<3) return toast("Escribí el motivo del rechazo."); spinBtn(ok,"Guardando…");
+    try{ await apiS("resolverCorreccion", c.id, false, mo.value); m.cerrar(); toast("Solicitud rechazada"); recargar(); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+  setTimeout(()=>mo.focus(),60);
+}
+/* Corrección de un jefe sobre un fichaje existente: hora + motivo obligatorio. Se conserva el original. */
+function corregirHora(x, recargar){
+  const h = el("input",{type:"time",value:(x.horaCorregida||x.hora||"09:00").slice(0,5),"aria-label":"Hora correcta"}), mo = el("input",{type:"text",maxlength:"300",placeholder:"Motivo (obligatorio)","aria-label":"Motivo"});
+  const ok = el("button",{class:"btn primary",type:"button",text:"Guardar corrección"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:`Corregir ${x.tipo} · ${x.nombre}`}), el("p",{class:"lead",text:`${fmtF(x.fecha)} · registrada ${x.hora||"sin hora"}${x.horaCorregida?" · vigente "+x.horaCorregida:""}. Se conserva la hora original y queda quién y cuándo la corrigió.`}),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Hora correcta",h), el("label",{class:"f"},"Motivo",mo)), el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ if (mo.value.trim().length<5) return toast("Escribí el motivo de la corrección."); spinBtn(ok,"Guardando…");
+    try{ await apiS("corregirFichaje", x.id, h.value, mo.value); m.cerrar(); toast("✅ Corrección guardada"); recargar(); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+}
+/* Carga de un fichaje faltante (p. ej. la salida de un día incompleto). */
+function cargarFaltante(e, d, recargar){
+  const ultima = (d.pares||[]).slice(-1)[0]||{}, tipo = el("select",{"aria-label":"Tipo"}, el("option",{value:"salida",text:"Salida",selected:!!ultima.entrada&&!ultima.salida}), el("option",{value:"entrada",text:"Entrada",selected:!ultima.entrada}));
+  const h = el("input",{type:"time",value:"18:00","aria-label":"Hora"}), mo = el("input",{type:"text",maxlength:"300",placeholder:"Motivo (obligatorio)","aria-label":"Motivo"});
+  const ok = el("button",{class:"btn primary",type:"button",text:"Cargar fichaje"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:`Completar el ${fmtF(d.fecha)} · ${e.nombre}`}), el("p",{class:"lead",text:`Registrado: ${paresTxt(d.pares)}. Cargá lo que falta; queda como fichaje manual hecho por vos, con el motivo.`}),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Tipo",tipo), el("label",{class:"f"},"Hora",h)), el("label",{class:"f"},"Motivo",mo), el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ if (mo.value.trim().length<5) return toast("Escribí el motivo."); spinBtn(ok,"Guardando…");
+    try{ await apiS("cargarFichajeJefe", e.uid, d.fecha, tipo.value, h.value, mo.value); m.cerrar(); toast("✅ Fichaje cargado"); recargar(); }catch(x){ unspin(ok); toast(msgErr(x)); } };
+}
+async function vPendientesFich(body){
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando pendientes…"));
+  let D; try{ D = await apiS("listarIngresos", diasAtras(60), hoy()); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const recargar = ()=>{ body.textContent=""; vPendientesFich(body); };
+  const pend = D.correcciones.filter(c=>c.estado==="pendiente").sort((a,b)=>a.creado.localeCompare(b.creado));
+  const man = pend.filter(c=>c.clase==="manual"), cor = pend.filter(c=>c.clase!=="manual");
+  const GEOM = {fuera:"fuera del radio", precision:"GPS poco preciso", sin_permiso:"sin permiso de ubicación", no_disponible:"sin ubicación", tiempo_agotado:"sin ubicación", sucursal_incompleta:"sucursal sin ubicación cargada", dentro:"dentro del radio"};
+  const tarjeta = c => el("div",{class:"persona"},
+    el("div",{class:"pinfo"}, el("b",{text:`${c.nombre} · ${c.clase==="manual"?"fichaje manual":"corrección"} de ${c.tipo||"entrada"}`}),
+      el("span",{class:"mono",text: c.clase==="manual" ? `${fmtF(c.fecha)} ${String(c.horaSolicitada||c.horaPropuesta).slice(0,5)} (hora del servidor al pedirlo) · ${c.sucursal||""}` : `${fmtF(c.fecha)} · ${(c.horaOriginal||"sin registro").slice(0,5)} → ${c.horaPropuesta}`}),
+      el("span",{text:"Motivo: "+c.motivo}),
+      c.clase==="manual" ? el("span",{class:"hint",text:`Ubicación del intento: ${GEOM[c.geoMotivo]||c.geoMotivo||"—"}${c.distancia!=null?" · a "+c.distancia+" m":""}${c.precision!=null?" · ±"+c.precision+" m":""}${c.geo?" · lat "+c.geo.lat+", long "+c.geo.lng:""}`}) : null,
+      el("span",{class:"hint",text:"Pedido el "+new Date(c.creado).toLocaleString("es-AR")})),
+    el("div",{class:"row"}, el("button",{class:"btn sm primary",type:"button",text:"✔ Aprobar",onclick:async e=>{ const b=e.currentTarget; spinBtn(b); try{ await apiS("resolverCorreccion", c.id, true, ""); toast("✅ Aprobado"); recargar(); }catch(x){ unspin(b); toast(msgErr(x)); } }}),
+      el("button",{class:"btn sm danger",type:"button",text:"✖ Rechazar",onclick:()=>rechazarSolicitud(c, recargar)})));
+  body.append(el("div",{class:"card"}, el("h2",{text:`✋ Fichajes manuales pendientes (${man.length})`}),
+    el("p",{class:"lead",text:"Se piden cuando la ubicación no valida. Al aprobar, queda registrado con la hora del servidor del momento del pedido."}),
+    man.length ? el("div",{class:"plist"}, man.map(tarjeta)) : el("div",{class:"empty",text:"Sin fichajes manuales pendientes."})));
+  body.append(el("div",{class:"card"}, el("h2",{text:`✎ Correcciones pendientes (${cor.length})`}),
+    cor.length ? el("div",{class:"plist"}, cor.map(tarjeta)) : el("div",{class:"empty",text:"Sin correcciones pendientes."})));
+  if (D.incompletos && D.incompletos.length) body.append(el("div",{class:"card"}, el("h2",{text:`Días incompletos (últimos 60 días): ${D.incompletos.length}`}),
+    el("p",{class:"lead",text:"Entrada sin salida u orden roto: no se suman a las horas hasta corregirlos. Se completan desde la pestaña Horas."}),
+    el("ul",{class:"lista-avisos"}, D.incompletos.slice(0,30).map(j=>el("li",{text:`${fmtF(j.fecha)} · ${j.nombre} · ${paresTxt(j.pares)}`})))));
+}
+async function vHorasJefes(body){
+  const de = el("input",{type:"date",value:hoy().slice(0,8)+"01"}), ha = el("input",{type:"date",value:hoy(),max:hoy()});
+  const su = el("select",{}, el("option",{value:"",text:"Todas las sucursales"})), em = el("select",{}, el("option",{value:"",text:"Todo el personal"}));
+  const res = el("div",{class:"stack"});
+  let R = null, cargados = false;
+  const cargar = async ()=>{ res.textContent=""; res.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Calculando horas…"));
+    try{ R = await apiS("resumenHoras", {desde:de.value, hasta:ha.value, sucursal:su.value||null, uid:em.value||null}); }catch(e){ res.textContent=""; return res.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    if (!cargados){ cargados=true; R.sucursales.forEach(n=>su.append(el("option",{value:n,text:n}))); R.empleados.forEach(x=>em.append(el("option",{value:x.uid,text:x.nombre+" · "+x.sucursal}))); }
+    pintar(); };
+  const pintar = ()=>{ res.textContent="";
+    if (!R.empleados.length) return res.append(el("div",{class:"card empty",text:"Sin personal que fiche con estos filtros."}));
+    // Resumen general
+    const tb = el("tbody");
+    R.empleados.forEach(x=>tb.append(el("tr",{}, el("td",{text:x.nombre}), el("td",{text:x.sucursal}), el("td",{class:"n",text:String(x.diasTrabajados)}), el("td",{class:"n",text:hm(x.total)}),
+      el("td",{class:"n",text:x.promedio==null?"–":hm(x.promedio)}), el("td",{class:"n",text:x.esperado==null?"–":hm(x.esperado)}), el("td",{class:"n "+(x.diferencia<0?"neg":""),text:difTxt(x.diferencia)}),
+      el("td",{}, x.incompletos?el("span",{class:"pill warn",text:x.incompletos+" incompl."}):null, x.sinFichaje?el("span",{class:"pill bad",text:x.sinFichaje+" sin fichaje"}):null, x.revisar?el("span",{class:"pill warn",text:x.revisar+" revisar"}):null))));
+    res.append(el("div",{class:"card"}, el("h2",{text:`Resumen del ${fmtF(R.desde)} al ${fmtF(R.hasta)}`}),
+      el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Persona","Sucursal","Días","Total","Promedio","Esperado","Diferencia","Revisar"].map((x,i)=>el("th",{class:i>=2&&i<=6?"n":null,text:x})))), tb)),
+      el("p",{class:"hint",text:"Vacaciones aprobadas y feriados no cuentan como ausencia. La diferencia con lo esperado es informativa: no calcula pagos ni horas extra legales."+(R.redondeo>1?` Redondeo: ${R.redondeo} min por día.`:"")})));
+    R.empleados.forEach(x=>res.append(el("details",{class:"card"}, el("summary",{}, el("b",{text:x.nombre}), ` · ${x.sucursal} · ${hm(x.total)} h`), tablaHorasEmpleado(x, R, true, (e,d)=>cargarFaltante(e, d, cargar)))));
+  };
+  const bx = el("button",{class:"btn primary",type:"button",text:"⬆️ Exportar a la planilla (hoja «Horas»)"});
+  bx.onclick = async ()=>{ spinBtn(bx,"Exportando…"); try{ const r = await apiS("exportarHoras", {desde:de.value, hasta:ha.value, sucursal:su.value||null, uid:em.value||null});
+      modal(el("div",{class:"grid"}, el("h2",{text:"✅ Exportado a la hoja «Horas»"}), el("p",{class:"lead",text:`${r.empleados} persona(s) · ${r.filas} filas. La hoja se reemplaza en cada exportación (queda registrado en el historial).`}),
+        /^https:\/\/docs\.google\.com\//.test(r.url) ? el("a",{class:"btn primary",href:r.url,target:"_blank",rel:"noopener",text:"Abrir la planilla"}) : null));
+    }catch(e){ toast(msgErr(e)); } finally{ unspin(bx); } };
+  [de,ha,su,em].forEach(x=>x.onchange=cargar);
+  body.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Sucursal",su), el("label",{class:"f"},"Empleado",em)),
+    el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}), bx)), res);
+  cargar();
+}
+async function vSucursales(body){
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando sucursales…"));
+  let L; try{ L = await apiS("listarSucursales"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  body.append(el("div",{class:"card notice",text:"📄 Estos datos están en la hoja «Sucursales» de la planilla: podés editarlos acá o directamente en la hoja (latitud, longitud, radio en metros, días de apertura como «mié, jue, vie, sáb» o «lun a sáb», y Activa Sí/No). Si falta un dato, nadie de esa sucursal puede fichar con ubicación y la app lo avisa."}));
+  const form = (s) => {
+    const n = el("input",{type:"text",maxlength:"40",value:s?s.nombre:"",placeholder:"Nombre (ej.: Lima)","aria-label":"Nombre"}), di = el("input",{type:"text",maxlength:"120",value:s?s.direccion:"",placeholder:"Dirección","aria-label":"Dirección"});
+    const la = el("input",{type:"text",inputmode:"decimal",value:s&&s.lat!=null?String(s.lat):"",placeholder:"-34.6210674","aria-label":"Latitud"}), lo = el("input",{type:"text",inputmode:"decimal",value:s&&s.lng!=null?String(s.lng):"",placeholder:"-58.3817634","aria-label":"Longitud"});
+    const ra = el("input",{type:"number",min:"10",max:"2000",value:s&&s.radio!=null?s.radio:100,"aria-label":"Radio en metros"}), dd = el("input",{type:"text",maxlength:"60",value:s&&s.diasPropios?s.diasTxt:"",placeholder:"mié, jue, vie, sáb (vacío = los generales)","aria-label":"Días de apertura"});
+    const ac = el("input",{type:"checkbox",checked:!s||s.activa});
+    const b = el("button",{class:"btn primary",type:"button",text:s?"Guardar cambios":"➕ Agregar sucursal"});
+    b.onclick = async ()=>{ spinBtn(b,"Guardando…"); try{ await apiS("guardarSucursal", {fila:s?s.fila:null, nombre:n.value, direccion:di.value, lat:la.value, lng:lo.value, radio:ra.value, dias:dd.value, activa:ac.checked}); toast("✅ Sucursal guardada"); body.textContent=""; vSucursales(body); }catch(e){ unspin(b); toast(msgErr(e)); } };
+    const aqui = el("button",{class:"btn",type:"button",text:"📡 Usar mi ubicación actual",onclick:async e=>{ const bt=e.currentTarget; spinBtn(bt,"Ubicando…"); const g = await ubicacion(); unspin(bt);
+      if (g.error) return toast("No se pudo obtener la ubicación ("+g.error.replace("_"," ")+")."); la.value=g.lat.toFixed(7); lo.value=g.lng.toFixed(7); toast(`Ubicación tomada (precisión ±${Math.round(g.acc)} m). Revisá y tocá Guardar.`); }});
+    return el("div",{class:"grid"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Nombre",n), el("label",{class:"f"},"Dirección",di), el("label",{class:"f"},"Latitud",la), el("label",{class:"f"},"Longitud",lo),
+        el("label",{class:"f"},"Radio (metros)",ra), el("label",{class:"f"},"Días de apertura",dd)), el("label",{class:"chk"},ac," Activa"),
+      el("div",{class:"row"}, aqui, b), el("p",{class:"hint",text:"Para tomar la ubicación con el teléfono, parate adentro del local. Editar sucursales pide tu PIN y queda en el historial."}));
+  };
+  L.forEach(s=>body.append(el("details",{class:"card",open:s.incompleta.length>0},
+    el("summary",{}, el("b",{text:"🏬 "+s.nombre}), " ", s.incompleta.length ? el("span",{class:"pill bad",text:"Incompleta"}) : el("span",{class:"pill ok",text:"Completa"}), !s.activa ? el("span",{class:"pill",text:"Inactiva"}) : null,
+      el("span",{class:"hint",text:` · radio ${s.radio??"?"} m · ${s.diasTxt} · ${s.personas} persona(s)`})),
+    s.incompleta.length ? el("div",{class:"notice bad",text:"Falta: "+s.incompleta.join(", ")+". Hasta completarlo, nadie de esta sucursal puede fichar con ubicación."}) : null,
+    ...s.avisos.map(a=>el("p",{class:"hint",text:"ℹ️ "+a})), form(s))));
+  body.append(el("details",{class:"card"}, el("summary",{}, el("b",{text:"➕ Agregar una sucursal"})), form(null)));
 }
 /* ===================== Auditoría (se conserva el flujo existente; fotos por punto y acciones correctivas) ===================== */
 const MAX_FOTOS = 12;
@@ -1295,12 +1685,18 @@ async function vKPI(main){
   body.append(el("div",{class:"card row"}, el("span",{text:"Fuente: "+C.fuente}), el("span",{class:"spacer"}),
     el("span",{class:"hint",text: act ? "Última lectura de la planilla: "+new Date(act).toLocaleString("es-AR") : "Todavía no se leyó la planilla."}),
     tiene("cierre") ? el("button",{class:"btn sm",type:"button",text:"↻ Sincronizar",onclick:async e=>{ spinBtn(e.target,"Leyendo…"); try{ await apiS("sincronizarCierre"); main.textContent=""; route(); }catch(x){ unspin(e.target); toast(msgErr(x)); } }}) : null));
+  // ----- 3.3: resumen hablado (arriba del tablero) y feriados
+  body.append(barraAudio(K.audio));
+  const fb = bannerFeriados(K.feriados, {confirmar: tiene("cierre"), alConfirmar: ()=>{ main.textContent=""; route(); }});
+  if (!fb.hidden) body.append(fb);
   if (C.sinDatos){ body.append(el("div",{class:"card empty",text:"No hay cierres cargados todavía. Cuando la planilla tenga ventas, los indicadores se calculan solos."})); return; }
 
   // ----- Panel ejecutivo
   const ej = el("div",{class:"card exec"}, el("h2",{text:"🧭 Qué está pasando y qué decisiones tomar"}));
   (C.resumen||[]).forEach(r=>ej.append(el("div",{class:"qa"}, el("b",{text:r.pregunta}), el("span",{text:r.respuesta}))));
   body.append(ej);
+  // ----- 3.3: ¿mes bajo? y acciones comerciales para Palermo
+  body.append(cardAccionesComerciales(C));
   if ((C.recomendaciones||[]).length){
     const rc = el("div",{class:"recs"});
     C.recomendaciones.forEach((r,i)=>rc.append(el("details",{class:"rec p"+r.prioridad,open:i<2},
@@ -1323,13 +1719,14 @@ async function vKPI(main){
     ultDia ? kpiC("💵 Último cierre", moneyK(ultDia.total), fmtF(ultDia.fecha), null, def("venta_dia"), act) : null,
     ultSem ? kpiC("📅 Última semana con ventas", moneyK(ultSem.total), `Semana del ${fmtF(ultSem.semana)} · ${ultSem.dias} días${ultSem.deltaPct!=null?" · "+sign(ultSem.deltaPct)+" vs. anterior":""}`, vCls(ultSem.deltaPct), def("venta_semana"), act) : null,
     ref ? kpiC("🗓️ "+cap(ref.nombre), moneyK(ref.total), `${ref.dias} días con cierre${prev?" · total "+sign(prev.deltaTotalPct)+" vs. "+mesNom(prev.mes)+" (ver promedio por día)":""}`, null, def("venta_mes"), act, ()=>detalleMes(ref, C)) : null,
-    ref ? kpiC("📊 Promedio por día", moneyK(ref.promDia), prev?`${sign(prev.deltaPromPct)} vs. ${moneyK(prev.promDia)} en ${mesNom(prev.mes)}`:"Sin mes anterior para comparar", vCls(prev&&prev.deltaPromPct), def("prom_dia"), act) : null,
+    ref ? kpiC("📊 Promedio por día", moneyK(ref.promDia), (prev?`${sign(prev.deltaPromPct)} vs. ${moneyK(prev.promDia)} en ${mesNom(prev.mes)}`:"Sin mes anterior para comparar") + (ref.diasCerrados&&ref.diasCerrados.length?` · ${ref.diasCerrados.length} día(s) cerrado(s) descontado(s)`:""), vCls(prev&&prev.deltaPromPct), def("prom_dia"), act) : null,
     anio ? kpiC("📆 Año "+anio.anio, moneyK(anio.total), `${anio.dias} días con cierre · desde ${fmtF(anio.desde)}`, null, def("venta_anio"), act) : null,
     P && !P.bloqueada ? kpiC("🔮 Proyección "+(actual?actual.nombre:""), moneyK(P.medio), `Estimación: ${moneyK(P.minimo)} a ${moneyK(P.maximo)} · incertidumbre ${P.incertidumbre}`, "warn", def("proyeccion"), act) :
       P ? kpiC("🔮 Proyección del mes", "No disponible", "Faltan cierres de días ya pasados. Ver «¿Cómo cerraría el mes?».", null, def("proyeccion"), act) : null,
     P && P.objetivo ? kpiC("🎯 Objetivo del mes", P.avancePct!=null?P.avancePct+"%":"–", `Objetivo ${moneyK(P.objetivo)}${P.necesarioPorDia?" · faltan "+moneyK(P.necesarioPorDia)+" por día":""}`, P.avancePct>=100?"ok":"warn", def("objetivo"), act) :
       tiene("config") ? kpiC("🎯 Objetivo del mes", "Sin cargar", "Cargalo en Configuración → Objetivos", null, def("objetivo"), act, ()=>ir("config")) : null));
   if (P && !P.bloqueada) body.append(el("div",{class:"card"}, el("h3",{text:"🔮 Supuestos de la proyección (no es venta real)"}), el("ul",{class:"action"}, P.supuestos.map(s=>el("li",{text:s})))));
+  if (prev && prev.notaFeriados) body.append(el("div",{class:"notice",text:"📅 "+prev.notaFeriados}));
 
   // ----- Evolución mensual
   const promTodos = conDatos.length ? conDatos.reduce((a,m)=>a+m.total,0)/conDatos.length : null;
@@ -1397,13 +1794,253 @@ function mixBar(m, ant){
 }
 async function detalleMes(m){
   let r; try{ r = await apiS("getCierre", m.mes+"-01", m.mes+"-31"); }catch(e){ return toast(msgErr(e)); }
-  const tb = el("tbody"); r.cierres.forEach(c=>tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{class:"n",text:money(c.tarjetas)}), el("td",{class:"n",text:money(c.transferencia)}), el("td",{class:"n",text:money(c.efectivo)}), el("td",{class:"n"},el("b",{text:money(c.total)})))));
-  const mm = modal(el("div",{class:"grid"}, el("h2",{text:"Cierres de "+m.nombre}), el("p",{class:"lead",text:`${m.dias} días con cierre · ${m.diasSinCierre.length} días de apertura sin cierre${m.diasSinCierre.length?": "+m.diasSinCierre.map(fmtF).join(", "):""}`}),
+  const tb = el("tbody"); r.cierres.forEach(c=>tb.append(el("tr",{class:c.total===0?"encero":null}, el("td",{class:"mono"}, fmtF(c.fecha), c.feriado?el("span",{class:"pill",title:c.feriado,text:"🎉 feriado"}):null, c.noHabitual?el("span",{class:"pill warn",text:"venta en día no habitual"}):null, c.total===0?el("span",{class:"pill",text:"sin ventas"}):null),
+    el("td",{class:"n",text:money(c.tarjetas)}), el("td",{class:"n",text:money(c.transferencia)}), el("td",{class:"n",text:money(c.efectivo)}), el("td",{class:"n"},el("b",{text:money(c.total)})))));
+  const cerr = (m.diasCerrados||[]).map(x=>`${fmtF(x.fecha)} (${x.motivo})`).join(", ");
+  const mm = modal(el("div",{class:"grid"}, el("h2",{text:"Cierres de "+m.nombre}), el("p",{class:"lead",text:`${m.dias} días con cierre · ${m.diasOperativos} días de apertura efectivos · ${m.diasSinCierre.length} sin cierre${m.diasSinCierre.length?": "+m.diasSinCierre.map(fmtF).join(", "):""}${cerr?" · cerrados: "+cerr:""}${(m.feriadosSinConfirmar||[]).length?" · feriados a confirmar: "+m.feriadosSinConfirmar.map(x=>fmtF(x.fecha)).join(", "):""}`}),
     el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Tarjetas","Transferencia","Efectivo","Total"].map((x,i)=>el("th",{class:i?"n":null,text:x})))), tb)),
     el("button",{class:"btn",type:"button",text:"Cerrar",onclick:()=>mm.cerrar()})));
 }
+/* 3.3 · ¿Mes bajo? → acciones comerciales (qué hacer · por qué · esfuerzo · plazo · cómo medir). Si no es bajo: "Sin alertas: el mes viene en línea". */
+function cardAccionesComerciales(C){
+  const mb = C.mesBajo, A = C.accionesComerciales||[];
+  const card = el("div",{class:"card acciones-com"}, el("h2",{text:"🛍️ Acciones comerciales para Palermo"}));
+  if (!mb || mb.esBajo==null){ card.append(el("p",{class:"lead",text:(mb&&mb.mensaje)||"Sin datos suficientes para evaluar el mes."}), mb&&mb.aclaracion?el("p",{class:"hint",text:mb.aclaracion}):null); return card; }
+  card.append(el("div",{class:"notice "+(mb.esBajo?"warn":"ok"),text:(mb.esBajo?"📉 ":"✅ ")+mb.mensaje}));
+  if (mb.aclaracion) card.append(el("p",{class:"hint",text:mb.aclaracion}));
+  const comps = (mb.comparaciones||[]).map(c=>el("span",{class:"pill "+(c.bajo?"bad":"ok"),text:`${sign(c.deltaPromPct)} vs. ${c.contra}${c.deltaProyPct!=null?" · proyección "+sign(c.deltaProyPct):""}`}));
+  if (comps.length) card.append(el("div",{class:"row"}, ...comps));
+  card.append(el("p",{class:"hint",text:`Criterio: promedio por día de apertura (o su proyección) por debajo del mes anterior o del promedio del año en más del ${mb.umbralPct}% (umbral configurable en Configuración). Contexto: showroom con poco tráfico; el sábado concentra cerca de la mitad de la venta y el miércoles es el día más flojo. Se priorizan acciones que atraen gente antes que bajar precios.`}));
+  if (!A.length) return card;
+  const ESF = {bajo:"ok",medio:"warn",alto:"bad"};
+  const ol = el("div",{class:"recs"});
+  A.forEach((a,i)=>ol.append(el("details",{class:"rec p"+a.prioridad,open:i<3},
+    el("summary",{}, el("span",{class:"pill "+(a.prioridad===1?"bad":a.prioridad===2?"warn":""),text:"Prioridad "+a.prioridad}), " ", el("b",{text:a.titulo})),
+    el("dl",{}, el("dt",{text:"Qué hacer"}), el("dd",{text:a.queHacer}), el("dt",{text:"Por qué (dato de la app)"}), el("dd",{text:a.porQue}),
+      el("dt",{text:"Esfuerzo · plazo"}), el("dd",{}, el("span",{class:"pill "+ESF[a.esfuerzo],text:"esfuerzo "+a.esfuerzo}), " ", el("span",{class:"pill",text:a.plazo})),
+      el("dt",{text:"Cómo medir si funcionó"}), el("dd",{text:a.medicion})))));
+  card.append(ol);
+  return card;
+}
+/* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
+   El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
+const VOZ_KEY = "hb3_voz";
+const VOZ = {
+  soporta(){ return typeof speechSynthesis !== "undefined" && typeof SpeechSynthesisUtterance !== "undefined"; },
+  velocidad(){ const v = lsGet(VOZ_KEY); return ["lenta","normal","rapida"].includes(v) ? v : "normal"; },
+  setVelocidad(v){ lsSet(VOZ_KEY, v); },
+  rate(){ return {lenta:0.85, normal:1, rapida:1.2}[this.velocidad()]; },
+  voces(){ try{ return speechSynthesis.getVoices()||[]; }catch(e){ return []; } },
+  /* es-AR primero; si no hay, es-419 / es-US / es-MX / es-ES; dentro del idioma, la voz de mejor calidad (natural/neural/Google). */
+  mejorVoz(){
+    const vs = this.voces(); if (!vs.length) return null;
+    const norm = l => String(l||"").replace("_","-").toLowerCase();
+    for (const l of ["es-ar","es-419","es-us","es-mx","es-es"]){
+      const c = vs.filter(v=>norm(v.lang)===l);
+      if (c.length) return c.find(v=>/natural|neural|premium|enhanced|google/i.test(v.name)) || c[0];
+    }
+    const es = vs.filter(v=>/^es/i.test(v.lang)); return es.find(v=>/natural|neural|google/i.test(v.name)) || es[0] || null;
+  },
+  activa:null, onEstado:null,
+  hablar(texto, onFin){
+    if (!this.soporta()) return false;
+    this.detener();
+    const voz = this.mejorVoz(), rate = this.rate();
+    const partes = String(texto).match(/[^.!?]+[.!?]+["»]?\s*|[^.!?]+$/g) || [String(texto)];   // por oraciones: algunos navegadores cortan los textos largos
+    const ses = { onFin, i:0 }; this.activa = ses;
+    const siguiente = () => {
+      if (this.activa !== ses) return;
+      if (ses.i >= partes.length){ this.activa=null; if (this.onEstado) this.onEstado(false); if (onFin) onFin(); return; }
+      const u = new SpeechSynthesisUtterance(partes[ses.i++]);
+      u.lang = voz ? voz.lang : "es-AR"; if (voz) u.voice = voz; u.rate = rate; u.pitch = 1;
+      u.onend = siguiente; u.onerror = e => { if (e && (e.error==="interrupted"||e.error==="canceled")) return; siguiente(); };
+      try{ speechSynthesis.speak(u); }catch(e){ siguiente(); }
+    };
+    if (this.onEstado) this.onEstado(true);
+    siguiente();
+    return true;
+  },
+  detener(){ this.activa=null; try{ speechSynthesis.cancel(); }catch(e){} if (this.onEstado) this.onEstado(false); }
+};
+try{ if (VOZ.soporta()){ speechSynthesis.getVoices(); speechSynthesis.addEventListener("voiceschanged", ()=>{}); } }catch(e){}
+addEventListener("pagehide", ()=>VOZ.detener());
+
+/* Barra de audio arriba del tablero: 4 botones, Detener y velocidad (se recuerda). Muestra en pantalla el mismo texto que se lee. */
+function barraAudio(A){
+  const box = el("section",{class:"card audio","aria-label":"Resumen hablado"});
+  if (!A) return box;
+  const titulo = el("b",{text:""}), txt = el("p",{class:"audio-txt",hidden:true}), estado = el("span",{class:"hint estado",text:""});
+  const sel = el("select",{"aria-label":"Velocidad de lectura"}, ...[["lenta","Lenta"],["normal","Normal"],["rapida","Rápida"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.velocidad()===v})));
+  sel.onchange = ()=>{ VOZ.setVelocidad(sel.value); toast("Velocidad de lectura: "+sel.selectedOptions[0].text); };
+  const leer = (k, t) => { titulo.textContent = t; txt.textContent = A[k]; txt.hidden=false;
+    if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible para leerlo."; return; }
+    VOZ.hablar(A[k]); };
+  VOZ.onEstado = on => { box.classList.toggle("hablando", on); estado.textContent = on ? "🔊 Leyendo… tocá Detener para cortar." : ""; };
+  const B = [["general","🔊 Escuchar resumen"],["comercial","🔊 Escuchar KPIs comerciales"],["auditoria","🔊 Escuchar KPIs de auditoría"],["acciones","🔊 Escuchar acciones para Palermo"]]
+    .map(([k,t])=>el("button",{class:"btn"+(k==="general"?" primary":""),type:"button",text:t,"data-audio":k,onclick:()=>leer(k, t.replace("🔊 Escuchar ",""))}));
+  box.append(...[el("h3",{},icono("audio",20)," Resumen hablado"),
+    el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Velocidad",sel)),
+    !VOZ.soporta() ? el("div",{class:"notice warn",text:"Tu navegador no tiene síntesis de voz. Al tocar un botón, el texto se muestra igual."}) : null,
+    estado, el("div",{class:"audio-panel"}, titulo, txt)].filter(Boolean));
+  return box;
+}
+/* ===================== 3.3 · Vacaciones (todo dentro de la app, sin mails) =====================
+   Personal: mismo usuario + PIN de la fichada. Jefes: módulo "Vacaciones" (permiso propio). El servidor valida dueño y permiso siempre. */
+const EST_VAC = {pendiente:["Pendiente","warn"], aprobada:["Aprobada","ok"], rechazada:["Rechazada","bad"], cancelada:["Cancelada",""]};
+const pillVac = e => { const [t,c] = EST_VAC[e]||[e,""]; return el("span",{class:"pill "+c,text:t}); };
+const MESC = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const sumarD = (f,n) => { const d=new Date(f+"T12:00:00Z"); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); };
+const diasEntre = (a,b) => Math.round((new Date(b+"T12:00:00Z")-new Date(a+"T12:00:00Z"))/86400000)+1;
+const dowD = f => new Date(f+"T12:00:00Z").getUTCDay();
+const rangoVac = (a,b) => a===b ? fmtF(a) : `${fmtF(a)} al ${fmtF(b)}`;
+
+/* Calendario mensual accesible (botones). opts: {mes:'YYYY-MM', feriados:[{fecha,nombre}], periodos:[{desde,hasta,nombre,estado,mio}], sel:{desde,hasta}, min, onSel(fecha), diasOperativos, soloLectura} */
+function calendarioMes(o){
+  const [y,m] = o.mes.split("-").map(Number), primero = o.mes+"-01", nDias = new Date(Date.UTC(y,m,0)).getUTCDate();
+  const fer = {}; (o.feriados||[]).forEach(f=>{ fer[f.fecha]=f.nombre; });
+  const grid = el("div",{class:"cal",role:"group","aria-label":"Calendario de "+MESC[m-1]+" "+y});
+  ["L","M","M","J","V","S","D"].forEach(d=>grid.append(el("span",{class:"cal-h","aria-hidden":"true",text:d})));
+  const off = (dowD(primero)+6)%7; for (let i=0;i<off;i++) grid.append(el("span",{class:"cal-v"}));
+  for (let d=1; d<=nDias; d++){
+    const f = o.mes+"-"+String(d).padStart(2,"0"), dw = dowD(f);
+    const per = (o.periodos||[]).filter(p=>p.desde<=f && p.hasta>=f);
+    const enSel = o.sel && o.sel.desde && f>=o.sel.desde && f<=(o.sel.hasta||o.sel.desde);
+    const cls = ["cal-d"]; if (fer[f]) cls.push("fer"); if (o.diasOperativos && !o.diasOperativos.includes(dw)) cls.push("noabre"); if (f===hoy()) cls.push("hoy");
+    if (enSel) cls.push("sel"); if (per.some(p=>p.mio)) cls.push("mio"); per.forEach(p=>{ if (p.estado) cls.push("p-"+p.estado); });
+    const deshab = o.soloLectura || (o.min && f<o.min);
+    const tit = [fer[f]?"Feriado: "+fer[f]:"", ...per.map(p=>(p.nombre?p.nombre+": ":"")+(EST_VAC[p.estado]?EST_VAC[p.estado][0]:p.estado||""))].filter(Boolean).join(" · ");
+    const b = el(deshab?"span":"button",{class:cls.join(" "),type:deshab?null:"button",title:tit||null,"aria-label":`${d} de ${MESC[m-1]}${tit?" · "+tit:""}`,"data-f":f,onclick:deshab?null:()=>o.onSel&&o.onSel(f)}, el("span",{class:"n",text:d}),
+      per.length ? el("span",{class:"dots"}, per.slice(0,3).map(p=>el("i",{class:"dot "+(p.estado||"")}))) : null);
+    grid.append(b);
+  }
+  return el("div",{class:"calmes"}, el("div",{class:"cal-t",text:cap(MESC[m-1])+" "+y}), grid);
+}
+/* Varios meses con navegación. */
+function calendarioVac(o){
+  let ini = o.mes || hoy().slice(0,7);
+  const wrap = el("div",{class:"calwrap"});
+  const pintar = ()=>{ wrap.textContent="";
+    const [y,m] = ini.split("-").map(Number);
+    const nav = el("div",{class:"row calnav"}, el("button",{class:"btn sm",type:"button","aria-label":"Mes anterior",text:"‹",onclick:()=>{ ini = new Date(Date.UTC(y,m-2,1)).toISOString().slice(0,7); pintar(); }}),
+      el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button","aria-label":"Mes siguiente",text:"›",onclick:()=>{ ini = new Date(Date.UTC(y,m,1)).toISOString().slice(0,7); pintar(); }}));
+    wrap.append(nav);
+    const meses = el("div",{class:"calmeses"});
+    for (let i=0;i<(o.meses||2);i++){ const d=new Date(Date.UTC(y,m-1+i,1)); meses.append(calendarioMes(Object.assign({}, o, {mes:d.toISOString().slice(0,7)}))); }
+    wrap.append(meses, el("div",{class:"row leyenda"}, el("span",{class:"pill"},el("i",{class:"dot aprobada"})," aprobadas"), el("span",{class:"pill"},el("i",{class:"dot pendiente"})," pendientes"), el("span",{class:"pill fer-l",text:"feriado"}), o.diasOperativos?el("span",{class:"pill noabre-l",text:"no abre"}):null)); };
+  pintar(); wrap.repintar = pintar;
+  return wrap;
+}
+
+/* ----- Personal: mis vacaciones (misma identificación que la fichada) ----- */
+function loginEmpleado(body, texto, onOk){
+  const u = el("input",{type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",placeholder:"Tu usuario",maxlength:"20","aria-label":"Usuario"});
+  const p = el("input",{type:"password",inputmode:"numeric",autocomplete:"current-password",maxlength:"6",placeholder:"Tu PIN","aria-label":"PIN"});
+  const err = el("div",{class:"notice bad",hidden:true}), b = el("button",{class:"btn primary big-btn",type:"submit",text:"Continuar"});
+  body.append(el("form",{class:"card lockcard",onsubmit:async e=>{ e.preventDefault(); err.hidden=true; spinBtn(b,"Verificando…");
+      try{ const r = await api("login", u.value.trim(), p.value); p.value=""; F.token=r.token; F.nombre=r.user.nombre; onOk(r); }
+      catch(x){ unspin(b); err.textContent=msgErr(x); err.hidden=false; p.value=""; } }},
+    el("div",{class:"lockicon",text:"🏖️"}), el("h2",{text:"Identificate"}), el("p",{class:"lead",text:texto}), el("div",{class:"grid"}, u, p, err, b)));
+  setTimeout(()=>u.focus(),60);
+}
+function vVacacionesEmp(body){
+  if (F.token) return vacEmp(body);
+  loginEmpleado(body, "Usá el mismo usuario y PIN con el que fichás. Solo vos ves tus solicitudes.", ()=>{ body.textContent=""; vacEmp(body); });
+}
+async function vacEmp(body){
+  clearTimeout(F.t); F.t = setTimeout(()=>{ finFichada(); body.textContent=""; vVacacionesEmp(body); toast("Sesión cerrada por inactividad"); }, 5*60*1000);
+  body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
+  let M; try{ M = await api("misVacaciones", F.token); }catch(e){ body.textContent=""; if (esAuth(e)){ F.token=null; return vVacacionesEmp(body); } return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  // Novedades: solicitudes resueltas que todavía no vi
+  if (M.novedades.length){
+    const bl = el("button",{class:"btn sm",type:"button",text:"Marcar como leído",onclick:async e=>{ spinBtn(e.currentTarget); try{ await api("vacacionesVistas", F.token, M.novedades.map(v=>v.id)); vacEmp(body); }catch(x){ unspin(e.currentTarget); toast(msgErr(x)); } }});
+    body.append(el("div",{class:"card novedades"}, el("h2",{text:"📬 Novedades"}), el("ul",{class:"action"}, M.novedades.map(v=>el("li",{}, el("span",{text:v.estado==="aprobada"?"✅":"❌"}), el("span",{}, `Tu solicitud del ${rangoVac(v.desde,v.hasta)} fue `, pillVac(v.estado), v.motivo?` · Motivo: ${v.motivo}`:"")))), bl));
+  }
+  // Pedir vacaciones
+  const sel = {desde:null, hasta:null};
+  const res = el("p",{class:"lead sel-txt",text:"Tocá el primer día y después el último."});
+  const com = el("input",{type:"text",maxlength:"300",placeholder:"Comentario para tu jefe (opcional)"});
+  const bS = el("button",{class:"btn primary big-btn",type:"submit",text:"Solicitar vacaciones",disabled:true});
+  const periodos = M.equipo.map(e=>({desde:e.desde,hasta:e.hasta,nombre:e.nombre,estado:"aprobada"})).concat(M.mias.filter(v=>v.estado==="pendiente"||v.estado==="aprobada").map(v=>({desde:v.desde,hasta:v.hasta,nombre:"Vos",estado:v.estado,mio:true})));
+  const cuenta = ()=>{ if (!sel.desde) return; const h = sel.hasta||sel.desde; const n = diasEntre(sel.desde,h);
+    let habiles = 0; for (let f=sel.desde; f<=h; f=sumarD(f,1)) if (M.diasOperativos.includes(dowD(f)) && !M.feriados.some(x=>x.fecha===f)) habiles++;
+    res.textContent = `Del ${rangoVac(sel.desde,h)} · ${n} día${n===1?"":"s"} corrido${n===1?"":"s"}` + (M.modoDias==="apertura" ? ` (${habiles} día${habiles===1?"":"s"} de apertura: así se cuentan)` : ` · ${habiles} de apertura`) + (n>M.maxDias?` · supera el máximo de ${M.maxDias}`:"");
+    bS.disabled = !sel.hasta || n>M.maxDias; };
+  const cal = calendarioVac({mes:hoy().slice(0,7), meses:2, feriados:M.feriados, periodos, sel, min:hoy(), diasOperativos:M.diasOperativos,
+    onSel:f=>{ if (!sel.desde || sel.hasta){ sel.desde=f; sel.hasta=null; } else if (f<sel.desde){ sel.desde=f; } else { sel.hasta=f; } cuenta(); cal.repintar(); }});
+  body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(bS,"Enviando…");
+      try{ await api("solicitarVacaciones", F.token, sel.desde, sel.hasta||sel.desde, com.value); toast("✅ Solicitud enviada. La revisa un jefe."); vacEmp(body); }
+      catch(x){ unspin(bS); toast(msgErr(x)); if (esAuth(x)){ F.token=null; body.textContent=""; vVacacionesEmp(body); } } }},
+    el("h2",{text:`Pedir vacaciones · ${M.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:"Elegí el primer y el último día en el calendario. Las fechas pasadas no se pueden pedir. Los puntos muestran vacaciones del equipo ya aprobadas (solo nombre y fechas)."}),
+    cal, res, el("label",{class:"f"},"Comentario",com), bS));
+  // Mis solicitudes
+  const lista = el("div",{class:"vlist"});
+  M.mias.forEach(v=>{
+    const puedeCancelar = v.estado==="pendiente" || (v.estado==="aprobada" && v.desde>M.hoy);
+    lista.append(el("div",{class:"vitem "+v.estado}, el("div",{class:"vinfo"}, el("b",{text:rangoVac(v.desde,v.hasta)}), el("span",{text:`${v.dias} día${v.dias===1?"":"s"} ${v.modoDias==="apertura"?"de apertura":"corridos"} · pedida el ${new Date(v.solicitado).toLocaleDateString("es-AR")}`}),
+        v.comentario ? el("span",{class:"hint",text:"Tu comentario: "+v.comentario}) : null,
+        v.estado==="rechazada" && v.motivo ? el("span",{class:"motivo",text:"Motivo del rechazo: "+v.motivo}) : null,
+        v.decididoPor && v.estado!=="cancelada" ? el("span",{class:"hint",text:`Resuelta por ${v.decididoPor} el ${new Date(v.decidido).toLocaleDateString("es-AR")}`}) : null),
+      el("div",{class:"row"}, pillVac(v.estado), puedeCancelar ? el("button",{class:"btn sm",type:"button",text:"Cancelar",onclick:async e=>{ if (!(await confirmar(`¿Cancelar la solicitud del ${rangoVac(v.desde,v.hasta)}?`,"Sí, cancelar",true))) return; try{ await api("cancelarVacaciones", F.token, v.id); toast("Solicitud cancelada"); vacEmp(body); }catch(x){ toast(msgErr(x)); } }}) : null)));
+  });
+  if (!M.mias.length) lista.append(el("div",{class:"empty",text:"Todavía no pediste vacaciones."}));
+  body.append(el("div",{class:"card"}, el("h2",{text:"Mis vacaciones"}), lista));
+  if (M.equipo.length) body.append(el("div",{class:"card"}, el("h3",{text:"Equipo de vacaciones (aprobadas)"}), el("ul",{class:"action"}, M.equipo.map(e=>el("li",{}, el("span",{text:"🏖️"}), el("span",{text:`${e.nombre}: ${rangoVac(e.desde,e.hasta)}`}))))));
+  body.append(el("div",{class:"row"}, el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Terminar",onclick:()=>{ finFichada(); body.textContent=""; vVacacionesEmp(body); }})));
+}
+
+/* ----- Jefes: solicitudes de vacaciones ----- */
+async function vVacaciones(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando solicitudes…"));
+  let D; try{ D = await apiS("listarVacaciones"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  body.textContent="";
+  const recargar = ()=>{ main.textContent=""; route(); };
+  const pend = D.lista.filter(v=>v.estado==="pendiente"), resto = D.lista.filter(v=>v.estado!=="pendiente");
+  // Pendientes
+  const lp = el("div",{class:"vlist"});
+  pend.forEach(v=>{
+    const cob = v.cobertura||{otras:[],feriados:[]};
+    const avisos = [];
+    if (cob.otras.length) avisos.push(`👥 En esas fechas ya tienen vacaciones aprobadas: ${cob.otras.map(o=>`${o.nombre} (${rangoVac(o.desde,o.hasta)})`).join(", ")}.`);
+    if (cob.feriados.length) avisos.push(`🎉 Feriados en el período: ${cob.feriados.map(f=>`${fmtF(f.fecha).slice(0,5)} ${f.nombre}`).join(", ")}${cob.finDeSemanaLargo?" (fin de semana largo)":""}.`);
+    const decidir = async (aprobar)=>{
+      const mot = el("textarea",{maxlength:"300",placeholder: aprobar ? "Comentario (opcional)" : "Motivo del rechazo (obligatorio)"});
+      const ok = el("button",{class:"btn "+(aprobar?"primary":"danger"),type:"button",text: aprobar ? "Aprobar" : "Rechazar"});
+      const m = modal(el("div",{class:"grid"}, el("h2",{text:(aprobar?"Aprobar":"Rechazar")+" vacaciones · "+v.nombre}), el("p",{class:"lead",text:`${rangoVac(v.desde,v.hasta)} · ${v.dias} día${v.dias===1?"":"s"}${v.comentario?" · «"+v.comentario+"»":""}`}),
+        avisos.length ? el("div",{class:"notice warn"}, el("b",{text:"Aviso de cobertura (informativo, no bloquea): "}), ...avisos.map(a=>el("div",{text:a}))) : el("div",{class:"notice ok",text:"Sin superposiciones ni feriados en el período."}),
+        aprobar ? el("p",{class:"hint",text:"Mientras esté de vacaciones, la persona no cuenta como falta ni como fichada pendiente."}) : null,
+        el("label",{class:"f"}, aprobar ? "Comentario" : "Motivo", mot), el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>m.cerrar()}))));
+      ok.onclick = async ()=>{ if (!aprobar && !mot.value.trim()) return toast("Indicá el motivo del rechazo."); spinBtn(ok); try{ await apiS("resolverVacaciones", v.id, aprobar, mot.value); m.cerrar(); toast(aprobar?"✅ Vacaciones aprobadas":"Solicitud rechazada"); recargar(); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+    };
+    lp.append(el("div",{class:"vitem pendiente"+(v.demorada?" demorada":"")}, el("div",{class:"vinfo"},
+        el("b",{text:`${v.nombre} · ${rangoVac(v.desde,v.hasta)}`}), el("span",{text:`${v.dias} día${v.dias===1?"":"s"} ${v.modoDias==="apertura"?"de apertura":"corridos"} · pedida hace ${v.diasEsperando} día${v.diasEsperando===1?"":"s"}`}),
+        v.comentario ? el("span",{class:"hint",text:"Comentario: "+v.comentario}) : null,
+        v.demorada ? el("span",{class:"pill bad",text:"⏰ Más de 3 días sin respuesta"}) : null,
+        ...avisos.map(a=>el("span",{class:"hint",text:a}))),
+      el("div",{class:"row"}, el("button",{class:"btn sm primary",type:"button",text:"✔ Aprobar",onclick:()=>decidir(true)}), el("button",{class:"btn sm danger",type:"button",text:"✖ Rechazar",onclick:()=>decidir(false)}))));
+  });
+  if (!pend.length) lp.append(el("div",{class:"empty",text:"No hay solicitudes pendientes."}));
+  body.append(el("div",{class:"card"}, el("h2",{}, "Solicitudes de vacaciones ", pend.length ? el("span",{class:"pill bad",text:pend.length+" pendiente"+(pend.length===1?"":"s")}) : null),
+    el("p",{class:"lead",text:"Primero las pendientes (las más antiguas arriba). Antes de aprobar se muestra la cobertura del equipo y los feriados del período: es informativo, no bloquea."}), lp));
+  // Calendario del equipo
+  const periodos = D.lista.filter(v=>v.estado==="aprobada"||v.estado==="pendiente").map(v=>({desde:v.desde,hasta:v.hasta,nombre:v.nombre,estado:v.estado}));
+  body.append(el("div",{class:"card"}, el("h2",{text:"Calendario del equipo"}), el("p",{class:"hint",text:"Verde: aprobadas · amarillo: pendientes · feriados marcados."}),
+    calendarioVac({mes:hoy().slice(0,7), meses:2, feriados:D.feriados, periodos, soloLectura:true, diasOperativos:D.diasOperativos})));
+  // Historial de decisiones (inmutable: cada decisión también queda en el Historial de la app)
+  const fe = el("select",{}, el("option",{value:"",text:"Todas"}), ...["aprobada","rechazada","cancelada"].map(x=>el("option",{value:x,text:EST_VAC[x][0]})));
+  const th = el("tbody");
+  const pintarH = ()=>{ th.textContent=""; const L = resto.filter(v=>!fe.value||v.estado===fe.value);
+    L.forEach(v=>th.append(el("tr",{}, el("td",{text:v.nombre}), el("td",{class:"mono",text:rangoVac(v.desde,v.hasta)}), el("td",{class:"n",text:v.dias}), el("td",{},pillVac(v.estado)), el("td",{text:v.decididoPor||""}), el("td",{class:"mono",text:v.decidido?new Date(v.decidido).toLocaleString("es-AR"):""}), el("td",{text:v.motivo||v.comentario||""}))));
+    if (!L.length) th.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin decisiones registradas."}))); };
+  fe.onchange = pintarH; pintarH();
+  body.append(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"Historial de decisiones"}), el("span",{class:"spacer"}), el("label",{class:"f inline"},"Estado",fe)),
+    el("p",{class:"hint",text:"Quién decidió, cuándo, qué y por qué. No se puede editar ni borrar; cada decisión queda además en el Historial protegido de la app."}),
+    el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Persona","Fechas","Días","Estado","Decidió","Cuándo","Motivo / comentario"].map(x=>el("th",{text:x})))), th))));
+}
 /* ===================== Cierre diario ===================== */
-const ALERTA_TXT = {cierre_pendiente:"Cierre pendiente", falta_ingreso:"Ventas sin ingreso registrado", ingresos_sin_cierre:"Ingresos sin cierre", ingreso_duplicado:"Ingreso duplicado", empleado_inactivo:"Ingreso posterior a una baja"};
+const ALERTA_TXT = {cierre_pendiente:"Cierre pendiente", falta_ingreso:"Ventas sin ingreso registrado", ingresos_sin_cierre:"Ingresos sin cierre", ingreso_duplicado:"Ingreso duplicado", empleado_inactivo:"Ingreso posterior a una baja",
+  feriado_confirmar:"Feriado: confirmar si abrió", cierre_en_cero:"Cargado en $ 0 (sin ventas)"};
 function vCierre(main){
   const ini = hoy().slice(0,8)+"01";
   const de = el("input",{type:"date",value:ini}), ha = el("input",{type:"date",value:hoy()}), body = el("div",{class:"stack"});
@@ -1415,21 +2052,25 @@ function vCierre(main){
       !s ? el("p",{class:"lead",text:"Todavía no se leyó la planilla."}) : el("div",{class:"grid"},
         el("div",{class:"notice "+(s.ok?(s.errores&&s.errores.length?"warn":"ok"):"bad"),text: s.ok ? `Última lectura: ${new Date(s.ts).toLocaleString("es-AR")} · ${s.dias} días con cierre · ${s.nuevos} nuevos · ${s.cambiados} con cambios` : "Error: "+s.error}),
         s.archivo ? el("span",{class:"hint",text:`Archivo: ${s.archivo} · modificado ${new Date(s.modificado).toLocaleString("es-AR")}`}) : null,
-        s.errores && s.errores.length ? el("details",{}, el("summary",{text:`⚠️ ${s.errores.length} observación(es) en la planilla`}), el("ul",{}, s.errores.map(x=>el("li",{text:x})))) : null),
+        s.errores && s.errores.length ? el("details",{}, el("summary",{text:`⚠️ ${s.errores.length} observación(es) en la planilla (para corregir)`}), el("ul",{}, s.errores.map(x=>el("li",{text:x})))) : null,
+        s.avisos && s.avisos.length ? el("details",{}, el("summary",{text:`ℹ️ ${s.avisos.length} aviso(s) informativo(s) (se importa igual)`}), el("ul",{}, s.avisos.map(x=>el("li",{text:x})))) : null),
       el("p",{class:"hint",text:"La app no modifica tu planilla: la lee, calcula el total del día (tarjetas + transferencia + efectivo) y guarda una copia de los importes en su propia base."}),
       el("button",{class:"btn primary",type:"button",text:"↻ Sincronizar ahora",onclick:async e=>{ spinBtn(e.target,"Leyendo planilla…"); try{ await apiS("sincronizarCierre"); cargar(); toast("Planilla leída"); }catch(x){ unspin(e.target); toast(msgErr(x)); } }})));
     const tb = el("tbody"); let tot={t:0,tr:0,e:0,x:0};
     r.cierres.forEach(c=>{ tot.t+=c.tarjetas; tot.tr+=c.transferencia; tot.e+=c.efectivo; tot.x+=c.total;
-      tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:["dom","lun","mar","mié","jue","vie","sáb"][new Date(c.fecha+"T12:00:00").getDay()]}),
-        el("td",{class:"n",text:money(c.tarjetas)}), el("td",{class:"n",text:money(c.transferencia)}), el("td",{class:"n",text:money(c.efectivo)}), el("td",{class:"n"},el("b",{text:money(c.total)})),
-        el("td",{class:"hint",text:c.anterior?`Cambió (antes ${money(c.anterior.total)})`:""}))); });
+      const notas = el("td",{class:"hint"}); if (c.anterior) notas.append(`Cambió (antes ${money(c.anterior.total)}) `);
+      if (c.feriado) notas.append(el("span",{class:"pill",title:c.feriado,text:"🎉 "+c.feriado})); if (c.noHabitual) notas.append(el("span",{class:"pill warn",text:"venta en día no habitual"})); if (c.total===0) notas.append(el("span",{class:"pill",text:"sin ventas"}));
+      tb.append(el("tr",{class:c.total===0?"encero":null}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:["dom","lun","mar","mié","jue","vie","sáb"][new Date(c.fecha+"T12:00:00").getDay()]}),
+        el("td",{class:"n",text:money(c.tarjetas)}), el("td",{class:"n",text:money(c.transferencia)}), el("td",{class:"n",text:money(c.efectivo)}), el("td",{class:"n"},el("b",{text:money(c.total)})), notas)); });
     if (!r.cierres.length) tb.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin cierres en el período."})));
     else tb.append(el("tr",{class:"tot"}, el("td",{text:"Total"}), el("td",{}), el("td",{class:"n",text:money(tot.t)}), el("td",{class:"n",text:money(tot.tr)}), el("td",{class:"n",text:money(tot.e)}), el("td",{class:"n"},el("b",{text:money(tot.x)})), el("td",{})));
     body.append(el("div",{class:"card"}, el("h2",{text:"Cierres por fecha"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Día","Tarjetas","Transferencia","Efectivo","Total","Notas"].map((x,i)=>el("th",{class:i>=2&&i<=5?"n":null,text:x})))), tb))));
     const al = r.alertas||[];
+    const confirmarF = (fecha, est) => async e => { const b=e.currentTarget; spinBtn(b); try{ await apiS("confirmarFeriado", fecha, est); toast(est==="cerrado"?"Marcado: estuvo cerrado":"Marcado: abrió (cierre pendiente de carga)"); cargar(); }catch(x){ unspin(b); toast(msgErr(x)); } };
     body.append(el("div",{class:"card"}, el("h3",{text:"🔎 Alertas para revisión"}),
-      el("p",{class:"hint",text:"Un cierre de ventas no demuestra quién estuvo presente. Estas diferencias son para revisar, no conclusiones de incumplimiento."}),
-      al.length ? el("ul",{class:"action"}, al.map(a=>el("li",{}, el("span",{class:"mono",text:fmtF(a.fecha)}), el("span",{}, el("b",{text:(ALERTA_TXT[a.tipo]||a.tipo)+": "}), a.detalle)))) : el("p",{class:"lead",text:"Sin alertas en el período."})));
+      el("p",{class:"hint",text:"Un cierre de ventas no demuestra quién estuvo presente. Estas diferencias son para revisar, no conclusiones de incumplimiento. Quien está de vacaciones aprobadas no figura como falta."}),
+      al.length ? el("ul",{class:"action"}, al.map(a=>el("li",{class:a.tipo}, el("span",{class:"mono",text:fmtF(a.fecha)}), el("span",{}, el("b",{text:(ALERTA_TXT[a.tipo]||a.tipo)+": "}), a.detalle,
+        a.tipo==="feriado_confirmar" ? el("span",{class:"row",style:"margin-top:6px"}, el("button",{class:"btn sm",type:"button",text:"Estuvo cerrado",onclick:confirmarF(a.fecha,"cerrado")}), el("button",{class:"btn sm primary",type:"button",text:"Abrió",onclick:confirmarF(a.fecha,"abierto")})) : null)))) : el("p",{class:"lead",text:"Sin alertas en el período."})));
   };
   [de,ha].forEach(x=>x.onchange=cargar);
   main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha))), body);
@@ -1496,7 +2137,8 @@ function vOtros(main){
   }
   main.append(el("div",{class:"card"}, el("h2",{text:"🔒 Privacidad y uso de fotos"}),
     el("ul",{class:"action"}, el("li",{text:"La foto de la fichada se usa solo para validar el registro de asistencia. La ven únicamente responsables autorizados y se borra automáticamente pasado el plazo de conservación (90 días)."}),
-      el("li",{text:"La ubicación se toma solo al fichar y únicamente si das permiso en el teléfono. Si no das permiso, el registro queda «para revisar»; no se rechaza."}),
+      el("li",{text:"La ubicación se toma una sola vez, en el momento de fichar, para validar que estés en tu sucursal. No hay seguimiento. Sin ubicación (o lejos del local) el fichaje no se registra y podés pedir un fichaje manual, que aprueba un jefe."}),
+      el("li",{text:"La distancia y la hora las calcula el servidor (no se toma la hora del celular). Tu ubicación solo la ven los jefes."}),
       el("li",{text:"La app no usa reconocimiento facial. Una foto, por sí sola, no prueba identidad, hora ni ubicación: es un dato de apoyo."}),
       el("li",{text:"Cada persona solo puede ver sus propios registros. Toda acción queda en un historial protegido."}))));
 }
@@ -1506,24 +2148,30 @@ async function vConfig(main){
   const body = el("div",{class:"stack"}); main.append(body);
   let c; try{ c = await apiS("getConfig"); }catch(e){ return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
   const guardar = async (datos, b)=>{ spinBtn(b,"Guardando…"); try{ c = Object.assign(c, await apiS("setConfig", datos)); toast("✅ Configuración guardada"); }catch(e){ toast(msgErr(e)); } finally{ unspin(b); } };
-  // Ubicación del showroom
-  const lat = el("input",{type:"number",step:"any",value:c.local?c.local.lat:"",placeholder:"Latitud"}), lng = el("input",{type:"number",step:"any",value:c.local?c.local.lng:"",placeholder:"Longitud"}), rad = el("input",{type:"number",min:"30",max:"2000",value:c.local?c.local.radio:c.radioDef});
-  const bU = el("button",{class:"btn primary",type:"button",text:"Guardar ubicación"});
-  bU.onclick = ()=> lat.value&&lng.value ? guardar({local:{lat:Number(lat.value),lng:Number(lng.value),radio:Number(rad.value)}}, bU) : guardar({local:null}, bU);
-  body.append(el("div",{class:"card"}, el("h2",{text:"📍 Ubicación del showroom"}),
-    el("p",{class:"lead",text:"Parate en el showroom y tocá «Usar mi ubicación actual». Las fichadas a más distancia que el radio quedan «para revisar» (no se rechazan)."}),
-    el("div",{class:"grid2"}, el("label",{class:"f"},"Latitud",lat), el("label",{class:"f"},"Longitud",lng), el("label",{class:"f"},"Radio (metros)",rad)),
-    el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"📡 Usar mi ubicación actual",onclick:async e=>{ spinBtn(e.target,"Ubicando…"); const g = await ubicacion(); unspin(e.target);
-      if (g.error) return toast("No se pudo obtener la ubicación: "+g.error.replace("_"," ")); lat.value=g.lat.toFixed(6); lng.value=g.lng.toFixed(6); toast(`Ubicación tomada (precisión ±${Math.round(g.acc)} m). Tocá Guardar.`); }}), bU,
-      el("button",{class:"btn",type:"button",text:"Quitar ubicación",onclick:e=>{ lat.value=""; lng.value=""; guardar({local:null}, e.target); }}))));
+  // 3.4 · Fichaje: las ubicaciones están por sucursal (pestaña Sucursales del módulo Fichaje y horas, o la hoja «Sucursales»)
+  const red = el("select",{"aria-label":"Redondeo"}, ...[[1,"Al minuto"],[5,"A 5 minutos"],[10,"A 10 minutos"],[15,"A 15 minutos"]].map(([v,t])=>el("option",{value:v,text:t,selected:Number(c.redondeoMin||1)===v})));
+  const gpm = el("input",{type:"number",min:"20",max:"500",value:c.precisionMax||100}), gpr = el("input",{type:"number",min:"5",max:"500",value:c.precisionRevisar||50});
+  const au = el("textarea",{maxlength:"600"}); au.value = c.avisoUbicacion||"";
+  const bU = el("button",{class:"btn primary",type:"button",text:"Guardar"});
+  bU.onclick = ()=>guardar({redondeoMin:Number(red.value), precisionMax:Number(gpm.value), precisionRevisar:Number(gpr.value), avisoUbicacion:au.value}, bU);
+  const inc = (c.sucursales||[]).filter(x=>x.activa && x.incompleta.length);
+  body.append(el("div",{class:"card"}, el("h2",{text:"📍 Fichaje: sucursales, precisión y horas"}),
+    el("p",{class:"lead",text:`Sucursales: ${(c.sucursales||[]).map(x=>x.nombre+(x.incompleta.length?" (incompleta)":"")).join(", ")||"—"}. Se editan en Fichaje y horas → Sucursales, o directamente en la hoja «Sucursales» de la planilla.`}),
+    inc.length ? el("div",{class:"notice bad",text:"⚠️ Sucursales con datos faltantes: "+inc.map(x=>x.nombre+" ("+x.incompleta.join(", ")+")").join(" · ")+". Nadie de esas sucursales puede fichar con ubicación hasta completarlas."}) : null,
+    el("div",{class:"row"}, el("a",{class:"btn",href:"#/ingresos/sucursales",text:"🏬 Ir a Sucursales"})),
+    el("div",{class:"grid2"}, el("label",{class:"f"},"Redondeo de horas por día",red), el("label",{class:"f"},"Precisión máxima del GPS (m) para fichar",gpm), el("label",{class:"f"},"Precisión a partir de la cual queda «para revisar» (m)",gpr)),
+    el("label",{class:"f"},"Aviso de ubicación (se muestra la primera vez que alguien ficha)",au), bU));
   // Fichada y retención
   const dias = [1,2,3,4,5,6,0].map(d=>{ const x=el("input",{type:"checkbox",value:d,checked:c.diasOperativos.includes(d)}); return el("label",{class:"chk"},x," "+["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"][d]); });
-  const fo = el("input",{type:"checkbox",checked:c.fotoIngresoObligatoria}), ri = el("input",{type:"number",min:"7",max:"3650",value:c.retencionIngresosDias}), ra = el("input",{type:"number",min:"1",max:"120",value:c.retencionAuditoriasMeses});
+  const fo = el("input",{type:"checkbox",checked:c.fotoIngresoObligatoria}), ub = el("input",{type:"checkbox",checked:c.ubicacionObligatoria!==false}), ri = el("input",{type:"number",min:"7",max:"3650",value:c.retencionIngresosDias}), ra = el("input",{type:"number",min:"1",max:"120",value:c.retencionAuditoriasMeses});
+  const vd = el("select",{}, el("option",{value:"corridos",text:"Días corridos",selected:c.vacacionesDias!=="apertura"}), el("option",{value:"apertura",text:"Solo días de apertura (sin feriados)",selected:c.vacacionesDias==="apertura"}));
   const av = el("textarea",{maxlength:"600"}); av.value=c.avisoFotos;
   const bF = el("button",{class:"btn primary",type:"button",text:"Guardar"});
-  bF.onclick = ()=>guardar({diasOperativos:dias.map(l=>l.querySelector("input")).filter(x=>x.checked).map(x=>Number(x.value)), fotoIngresoObligatoria:fo.checked, retencionIngresosDias:Number(ri.value), retencionAuditoriasMeses:Number(ra.value), avisoFotos:av.value}, bF);
-  body.append(el("div",{class:"card"}, el("h2",{text:"🕘 Fichada, fotos y conservación"}), el("h3",{text:"Días de apertura"}), el("div",{class:"chkgrid"},dias),
+  bF.onclick = ()=>guardar({diasOperativos:dias.map(l=>l.querySelector("input")).filter(x=>x.checked).map(x=>Number(x.value)), fotoIngresoObligatoria:fo.checked, ubicacionObligatoria:ub.checked, vacacionesDias:vd.value, retencionIngresosDias:Number(ri.value), retencionAuditoriasMeses:Number(ra.value), avisoFotos:av.value}, bF);
+  body.append(el("div",{class:"card"}, el("h2",{text:"🕘 Fichada, fotos y conservación"}), el("h3",{text:"Días de apertura generales (los usa cada sucursal que no tenga los suyos)"}), el("div",{class:"chkgrid"},dias),
     el("label",{class:"chk"},fo," Foto obligatoria al fichar"),
+    el("label",{class:"chk"},ub," Ubicación obligatoria al fichar (sin ubicación o fuera del radio, la fichada se rechaza y se ofrece el fichaje manual)"),
+    el("label",{class:"f"},"Cómo se cuentan los días de vacaciones",vd),
     el("div",{class:"grid2"}, el("label",{class:"f"},"Conservar fotos de fichada (días)",ri), el("label",{class:"f"},"Conservar fotos de auditoría (meses)",ra)),
     el("label",{class:"f"},"Aviso al personal sobre el uso de fotos",av),
     el("p",{class:"hint",text:`Al vencer el plazo las fotos van a la papelera de Drive. Los registros (fecha, hora, estado) se conservan. Última limpieza automática: ${c.ultimaPurga?fmtF(c.ultimaPurga):"todavía no"}.`}), bF));
@@ -1531,13 +2179,15 @@ async function vConfig(main){
   const meses = (()=>{ const out=[], d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-2); for(let i=0;i<8;i++){ out.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")); d.setMonth(d.getMonth()+1); } return out; })();
   const obj = meses.map(m=>{ const x=el("input",{type:"number",min:"0",step:"1000",value:(c.objetivos||{})[m]||"",placeholder:"Sin objetivo","data-m":m}); return el("label",{class:"f"},cap(mesNom(m)),x); });
   const ac = c.alertasCom||{};
-  const a1=el("input",{type:"number",min:"1",max:"90",value:ac.caidaPct}), a2=el("input",{type:"number",min:"1",max:"60",value:ac.mixPp}), a3=el("input",{type:"number",min:"2",max:"15",value:ac.minDias}), a4=el("input",{type:"number",min:"26",max:"90",value:ac.concentracionPct});
+  const a1=el("input",{type:"number",min:"1",max:"90",value:ac.caidaPct}), a2=el("input",{type:"number",min:"1",max:"60",value:ac.mixPp}), a3=el("input",{type:"number",min:"2",max:"15",value:ac.minDias}), a4=el("input",{type:"number",min:"26",max:"90",value:ac.concentracionPct}), a5=el("input",{type:"number",min:"1",max:"90",value:ac.mesBajoPct==null?10:ac.mesBajoPct});
   const bO = el("button",{class:"btn primary",type:"button",text:"Guardar objetivos y alertas"});
   bO.onclick = ()=>{ const o = Object.assign({}, c.objetivos||{}); obj.forEach(l=>{ const x=l.querySelector("input"); if (x.value) o[x.dataset.m]=Number(x.value); else delete o[x.dataset.m]; });
-    guardar({objetivos:o, alertasCom:{caidaPct:a1.value,mixPp:a2.value,minDias:a3.value,concentracionPct:a4.value}}, bO); };
+    guardar({objetivos:o, alertasCom:{caidaPct:a1.value,mixPp:a2.value,minDias:a3.value,concentracionPct:a4.value,mesBajoPct:a5.value}}, bO); };
   body.append(el("div",{class:"card"}, el("h2",{text:"🎯 Objetivos de venta y alertas comerciales"}), el("h3",{text:"Objetivo mensual de facturación ($)"}), el("div",{class:"grid2"},obj),
     el("h3",{style:"margin-top:12px",text:"Umbrales de alertas"}), el("div",{class:"grid2"}, el("label",{class:"f"},"Caída de venta que alerta (%)",a1), el("label",{class:"f"},"Cambio de mix que alerta (puntos)",a2),
-      el("label",{class:"f"},"Mínimo de días con cierre para comparar",a3), el("label",{class:"f"},"Concentración en un día que alerta (%)",a4)), bO));
+      el("label",{class:"f"},"Mínimo de días con cierre para comparar",a3), el("label",{class:"f"},"Concentración en un día que alerta (%)",a4), el("label",{class:"f"},"Mes bajo: % por debajo del mes anterior o del año",a5)), bO));
+  // 3.3 · Feriados y excepciones
+  body.append(cardFeriadosConfig(c.feriados, nuevo=>{ c.feriados=nuevo; main.textContent=""; route(); }));
   // Integración Drive
   const fid = el("input",{type:"text",value:c.cierreFileId,maxlength:"100"}), bD = el("button",{class:"btn primary",type:"button",text:"Guardar"});
   bD.onclick = ()=>guardar({cierreFileId:fid.value.trim()}, bD);
@@ -1556,6 +2206,29 @@ async function vConfig(main){
     el("label",{class:"f"},"✅ Mensaje Excelente",t1), el("label",{class:"f"},"⚠️ Mensaje Advertencia",t2), el("label",{class:"f"},"❌ Mensaje Reclamo",t3), bP));
   body.append(el("div",{class:"card"}, el("h2",{text:"👥 Usuarios, roles y permisos"}), el("p",{class:"lead",text:"Se administran en Empleados → Personal: alta, baja, PIN, rol y permisos por módulo."}),
     el("button",{class:"btn",type:"button",text:"Ir a Personal",onclick:()=>ir("empleados")})));
+}
+
+/* 3.3 · Configuración → Feriados de Argentina y excepciones del calendario (feriados de CABA, inventario, eventos = local cerrado). */
+function cardFeriadosConfig(F, alCambiar){
+  const card = el("div",{class:"card"}, el("h2",{text:"📅 Feriados y excepciones"}));
+  if (!F){ card.append(el("p",{class:"lead",text:"Sin datos de feriados."})); return card; }
+  const sy = F.sync;
+  const estado = !sy ? "Todavía no se descargaron los feriados." : sy.ok ? `✅ Conectado: ${sy.nombreFuente||sy.fuente} · última actualización ${new Date(sy.ts).toLocaleString("es-AR")} · ${sy.total} feriados de ${sy.anios.join(" y ")}` :
+    `⚠️ No pude actualizar los feriados, usando la última lista guardada${sy.ultimaOk?" (del "+new Date(sy.ultimaOk).toLocaleDateString("es-AR")+")":""}. Fuentes probadas: ${(sy.intentos||[]).map(i=>i.fuente+(i.ok?" ✓":" ✗")).join(", ")}.`;
+  const bA = el("button",{class:"btn",type:"button",text:"↻ Actualizar feriados ahora",onclick:async e=>{ spinBtn(e.currentTarget,"Consultando…"); try{ const r = await apiS("actualizarFeriados"); toast(r.sync&&r.sync.ok?"Feriados actualizados":"No se pudo actualizar: se mantiene la lista guardada"); alCambiar(r); }catch(x){ unspin(e.currentTarget); toast(msgErr(x)); } }});
+  card.append(el("div",{class:"notice "+(!sy?"":sy.ok?"ok":"warn"),text:estado}), el("p",{class:"hint",text:"Fuentes públicas y gratuitas, en orden: ArgentinaDatos → Nager.Date → nolaborables.com.ar. Se actualizan solas una vez por semana (activador) y también si pasaron más de 7 días."}), bA);
+  const prox = (F.lista||[]).filter(f=>f.fecha>=hoy() && f.origen==="api").slice(0,8);
+  card.append(el("h3",{text:"Próximos feriados nacionales"}), prox.length ? el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Día","Feriado","Tipo","Palermo"].map(x=>el("th",{text:x})))),
+    el("tbody",{}, prox.map(f=>el("tr",{}, el("td",{class:"mono",text:fmtF(f.fecha)}), el("td",{text:f.dia+(f.abre?" (abre)":"")}), el("td",{text:f.nombre}), el("td",{text:f.tipo}), el("td",{text:f.palermo?(f.palermo==="cerrado"?"Estuvo cerrado":"Abrió"):(f.abre?"a confirmar después del día":"—")})))))) : el("p",{class:"lead",text:"Sin feriados cargados."}));
+  // Excepciones
+  const fe = el("input",{type:"date"}), mo = el("input",{type:"text",maxlength:"80",placeholder:"Motivo (feriado de CABA, inventario, evento…)"}), bE = el("button",{class:"btn primary",type:"button",text:"➕ Agregar excepción"});
+  bE.onclick = async ()=>{ if (!fe.value||!mo.value.trim()) return toast("Completá fecha y motivo."); spinBtn(bE); try{ const r = await apiS("agregarExcepcion", fe.value, mo.value); toast("Excepción agregada: ese día cuenta como cerrado"); alCambiar(r); }catch(x){ unspin(bE); toast(msgErr(x)); } };
+  const te = el("tbody"); (F.excepciones||[]).forEach(x=>te.append(el("tr",{}, el("td",{class:"mono",text:fmtF(x.fecha)}), el("td",{text:x.dia}), el("td",{text:x.nombre}), el("td",{text:x.confirmadoPor||""}),
+    el("td",{}, el("button",{class:"btn sm danger",type:"button",text:"Quitar",onclick:async e=>{ if (!(await confirmar(`¿Quitar la excepción del ${fmtF(x.fecha)}?`,"Quitar",true))) return; try{ const r = await apiS("quitarExcepcion", x.fecha); toast("Excepción quitada"); alCambiar(r); }catch(err){ toast(msgErr(err)); } }})))));
+  if (!(F.excepciones||[]).length) te.append(el("tr",{},el("td",{colspan:"5",class:"empty",text:"Sin excepciones. Un día de excepción se trata como local cerrado: no es cierre pendiente ni cuenta en promedios ni proyección."})));
+  card.append(el("h3",{style:"margin-top:12px",text:"Excepciones (días cerrados que no son feriado nacional)"}), el("div",{class:"grid2"}, el("label",{class:"f"},"Fecha",fe), el("label",{class:"f"},"Motivo",mo)), bE,
+    el("div",{class:"tablewrap",style:"margin-top:10px"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Día","Motivo","Cargó",""].map(x=>el("th",{text:x})))), te)));
+  return card;
 }
 /* ---------- Arranque ---------- */
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);

@@ -2,7 +2,9 @@
  * Hey Blackk · Palermo — SERVIDOR v3 (Google Apps Script)
  *
  * Única fuente de datos: planilla "HeyBlackk · Auditorías Palermo" en el Drive de la cuenta dueña.
- * Hojas: Registro (auditorías, se conserva), Usuarios, Ingresos, Correcciones, Acciones, RRHH, Cierres, Historial.
+ * Hojas: Registro (auditorías, se conserva), Usuarios, Ingresos, Correcciones, Acciones, RRHH, Cierres, Historial,
+ *        Feriados (3.3: feriados nacionales leídos de una API pública + excepciones manuales), Vacaciones (3.3),
+ *        Sucursales (3.4: editable a mano por jefes) y Horas (3.4: exportación para liquidación de sueldos).
  *
  * Seguridad:
  *  - Usuario individual por persona (legajo + PIN de 6 dígitos). PIN con sal + pimienta (secreto del servidor),
@@ -18,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.2';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.4';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -32,12 +34,29 @@ const FALLAS_GLOBAL = 60, VENTANA_GLOBAL_SEG = 10 * 60;
 const MAX_FOTO_B64 = 2500000;
 const CIERRE_FILE_DEF = '1NuRUTwd9RwMWC5DdnDR0OS0_0XuPKMH1';
 
-const MODULOS = ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'historial', 'cierre', 'rrhh', 'otros', 'personal', 'config'];
+const MODULOS = ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'historial', 'cierre', 'rrhh', 'otros', 'personal', 'config', 'vacaciones'];
 const PERMS_ROL = {
   empleado: [],
-  responsable: ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'cierre', 'otros'],
+  responsable: ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'cierre', 'otros', 'vacaciones'],
   admin: MODULOS.slice()
 };
+/* 3.3 · Feriados: fuentes públicas y gratuitas (sin clave). Se prueban en orden; si una falla se pasa a la siguiente.
+   Tipos normalizados: feriado nacional · trasladable · puente turístico · día no laborable. */
+const FERIADOS_FUENTES = [
+  { id: 'argentinadatos', nombre: 'ArgentinaDatos (api.argentinadatos.com)', url: y => 'https://api.argentinadatos.com/v1/feriados/' + y,
+    parse: j => (Array.isArray(j) ? j : []).map(x => ({ fecha: fechaOk_(x.fecha), nombre: txt_(x.nombre, 80), tipo: tipoFeriado_(x.tipo, x.nombre) })) },
+  { id: 'nager', nombre: 'Nager.Date (date.nager.at)', url: y => 'https://date.nager.at/api/v3/PublicHolidays/' + y + '/AR',
+    parse: j => (Array.isArray(j) ? j : []).map(x => ({ fecha: fechaOk_(x.date), nombre: txt_(x.localName || x.name, 80), tipo: tipoFeriado_(x.types && x.types[0], x.localName || x.name) })) },
+  { id: 'nolaborables', nombre: 'nolaborables.com.ar', url: y => 'https://nolaborables.com.ar/api/v2/feriados/' + y,
+    parse: (j, y) => (Array.isArray(j) ? j : []).map(x => ({ fecha: fechaOk_(y + '-' + String(x.mes).padStart(2, '0') + '-' + String(x.dia).padStart(2, '0')), nombre: txt_(x.motivo || x.nombre, 80), tipo: tipoFeriado_(x.tipo, x.motivo) })) }
+];
+function tipoFeriado_(t, nombre) {
+  t = String(t || '').toLowerCase(); const n = String(nombre || '').toLowerCase();
+  if (/puente/.test(t) || /puente/.test(n)) return 'puente turístico';
+  if (/traslad/.test(t)) return 'trasladable';
+  if (/nolaborable|no laborable|optional|observance/.test(t) || /no laborable/.test(n)) return 'día no laborable';
+  return 'feriado nacional';
+}
 
 const PUNTOS = [
   ['etiqueta', 'Prendas con etiqueta', 'Prendas sin etiqueta'],
@@ -59,11 +78,17 @@ const CFG_DEF = {
   local: null,                            // {lat, lng, radio}
   radioDef: 150,
   fotoIngresoObligatoria: true,
+  ubicacionObligatoria: true,             // 3.3: sin ubicación del teléfono la fichada se rechaza (no queda ni "para revisar")
   retencionIngresosDias: 90,
   retencionAuditoriasMeses: 12,
   cierreFileId: CIERRE_FILE_DEF,
   objetivos: {},                          // {'2026-10': 15000000} — los carga un administrador
-  alertasCom: { caidaPct: 15, mixPp: 10, minDias: 4, concentracionPct: 45 },
+  alertasCom: { caidaPct: 15, mixPp: 10, minDias: 4, concentracionPct: 45, mesBajoPct: 10 },   // mesBajoPct (3.3): umbral para considerar "mes bajo"
+  vacacionesDias: 'corridos',
+  redondeoMin: 1,                         // 3.4: redondeo de las horas por día (1 = al minuto; 5, 10 o 15 minutos)
+  precisionMax: 100,                      // 3.4: precisión del GPS peor que esto (m) → no se ficha (se ofrece fichaje manual)
+  precisionRevisar: 50,                   // 3.4: precisión peor que esto (m) → se ficha pero queda "para revisar"
+  avisoUbicacion: 'Usamos la ubicación de tu teléfono una sola vez, en el momento en que tocás «Fichar», para validar que estés en tu sucursal. No hacemos seguimiento ni la guardamos en ningún otro momento, y solo la ven los jefes.',             // 3.3: cómo se cuentan los días de vacaciones: 'corridos' o 'apertura' (solo días en que Palermo abre, sin feriados)
   avisoFotos: 'La foto de ingreso se usa solo para validar el registro de asistencia al showroom. La ven únicamente los responsables autorizados y se elimina automáticamente a los 90 días.'
 };
 
@@ -74,13 +99,19 @@ const HEAD = ['ID', 'Fecha', 'Auditor', ...PUNTOS.map(p => p[1]), 'Promedio', 'R
 
 /* ---------- Tablas nuevas (columnas legibles + JSON completo al final) ---------- */
 const TABLAS = {
-  Usuarios: ['id', 'legajo', 'nombre', 'sector', 'rol', 'estado', 'registraIngreso', 'fechaIngreso', 'fechaBaja', 'actualizado'],
-  Ingresos: ['id', 'fecha', 'tipo', 'legajo', 'nombre', 'hora', 'estado', 'geoResultado', 'tieneFoto', 'horaCorregida', 'creado'],
-  Correcciones: ['id', 'ingresoId', 'tipo', 'legajo', 'nombre', 'fecha', 'horaPropuesta', 'motivo', 'estado', 'resueltoPor', 'resuelto', 'creado'],
+  // 3.4: columnas nuevas al final (antes de JSON): la migración las inserta sin mover los datos existentes.
+  Usuarios: ['id', 'legajo', 'nombre', 'sector', 'rol', 'estado', 'registraIngreso', 'fechaIngreso', 'fechaBaja', 'actualizado', 'sucursal', 'horasEsperadas'],
+  Ingresos: ['id', 'fecha', 'tipo', 'legajo', 'nombre', 'hora', 'estado', 'geoResultado', 'tieneFoto', 'horaCorregida', 'creado', 'sucursal', 'modo', 'latitud', 'longitud', 'precision', 'distancia'],
+  Correcciones: ['id', 'ingresoId', 'tipo', 'legajo', 'nombre', 'fecha', 'horaPropuesta', 'motivo', 'estado', 'resueltoPor', 'resuelto', 'creado', 'clase', 'sucursal'],
   Acciones: ['id', 'auditId', 'punto', 'descripcion', 'responsable', 'vence', 'estado', 'creado', 'cerrado'],
   RRHH: ['id', 'legajo', 'nombre', 'fecha', 'tipo', 'detalle', 'origen', 'estado', 'creadoPor', 'creado'],
   Cierres: ['fecha', 'tarjetas', 'transferencia', 'efectivo', 'total', 'hoja', 'columna', 'sincronizado'],
-  Historial: ['ts', 'usuario', 'accion', 'resultado', 'ref', 'detalle', 'hash']
+  Historial: ['ts', 'usuario', 'accion', 'resultado', 'ref', 'detalle', 'hash'],
+  // 3.3 · Feriados: origen 'api' (feriado nacional) o 'manual' (excepción: feriado de CABA, inventario, evento = local cerrado).
+  //       palermo: '' (sin confirmar) · 'cerrado' (estuvo cerrado) · 'abierto' (abrió; el cierre queda pendiente de carga).
+  Feriados: ['fecha', 'nombre', 'tipo', 'origen', 'palermo', 'confirmadoPor', 'actualizado'],
+  // 3.3 · Vacaciones: solo el usuario (legajo) y el id interno; sin PIN, sin mail. Nombres se resuelven desde Usuarios al leer.
+  Vacaciones: ['id', 'usuario', 'desde', 'hasta', 'dias', 'comentario', 'estado', 'solicitado', 'decididoPor', 'decidido', 'motivo']
 };
 
 /* =================== Instalación =================== */
@@ -95,7 +126,8 @@ function generarCodigoInstalacion() {
 /* =================== API =================== */
 function doGet() { return json_({ ok: true, app: 'heyblackk-palermo', v: VERSION, rev: REV }); }
 /* Llamadas sensibles a la latencia (fichada, arranque, fotos): la limpieza diaria de fotos no se cuelga de ellas. */
-const RAPIDAS_ = { estado: 1, inicio: 1, resumenHoy: 1, login: 1, logout: 1, yo: 1, reauth: 1, miJornada: 1, misIngresos: 1, registrarFichada: 1, registrarIngreso: 1, solicitarCorreccion: 1, getParams: 1, getAviso: 1, fotoIngreso: 1, getFoto: 1 };
+const RAPIDAS_ = { estado: 1, inicio: 1, resumenHoy: 1, login: 1, logout: 1, yo: 1, reauth: 1, miJornada: 1, misIngresos: 1, registrarFichada: 1, registrarIngreso: 1, solicitarCorreccion: 1, getParams: 1, getAviso: 1, fotoIngreso: 1, getFoto: 1,
+  misVacaciones: 1, solicitarVacaciones: 1, cancelarVacaciones: 1, vacacionesVistas: 1, verificarUbicacion: 1, solicitarFichajeManual: 1, misSolicitudes: 1 };
 function doPost(e) {
   SS_ = null; MEMO_ = {};   // cada pedido arranca sin datos memorizados
   let req;
@@ -108,7 +140,7 @@ function doPost(e) {
     return json_({ ok: true, data: out });
   } catch (err) {
     const m = String(err && err.message || err);
-    if (m === 'AUTH' || m === 'PERM' || m === 'ELEV' || m.indexOf('DUP:') === 0) return json_({ ok: false, error: m });
+    if (m === 'AUTH' || m === 'PERM' || m === 'ELEV' || /^(DUP|GEO|ABIERTA|RAPIDO):/.test(m)) return json_({ ok: false, error: m.slice(0, 600) });   // códigos que la app interpreta
     if (!/^[^\n]{1,200}$/.test(m) || /Exception|TypeError|ReferenceError|undefined|null/.test(m)) {
       try { log_(null, 'error_servidor', 'error', req.fn, m.slice(0, 300)); } catch (x) {}
       return json_({ ok: false, error: 'No se pudo completar la operación. Probá de nuevo.' });
@@ -123,6 +155,9 @@ const API = {
   getParams: () => params_(), getAviso: () => cfg_().avisoFotos,
   // Empleados / ingreso
   registrarIngreso: registrarIngreso, registrarFichada: registrarFichada, miJornada: miJornada, misIngresos: misIngresos, solicitarCorreccion: solicitarCorreccion,
+  // 3.4 · Fichaje con sucursales, fichaje manual, horas y panel de jefes
+  verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
+  panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
   reactivarEmpleado: reactivarEmpleado, resetPin: resetPin, cambiarRol: cambiarRol,
@@ -136,13 +171,18 @@ const API = {
   sincronizarCierre: sincronizarCierre, getCierre: getCierre, getKPIs: getKPIs,
   listarHistorial: listarHistorial, verificarHistorial: verificarHistorial,
   listarNovedades: listarNovedades, crearNovedad: crearNovedad, actualizarNovedad: actualizarNovedad,
-  getConfig: getConfig, setConfig: setConfig, setParams: setParams, cerrarSesionesDe: cerrarSesionesDe
+  getConfig: getConfig, setConfig: setConfig, setParams: setParams, cerrarSesionesDe: cerrarSesionesDe,
+  // 3.3 · Feriados (jefes confirman; administración agrega excepciones y fuerza la actualización)
+  getFeriados: getFeriados, confirmarFeriado: confirmarFeriado, agregarExcepcion: agregarExcepcion, quitarExcepcion: quitarExcepcion, actualizarFeriados: actualizarFeriados,
+  // 3.3 · Vacaciones (empleado: las suyas · jefes: resolver)
+  misVacaciones: misVacaciones, solicitarVacaciones: solicitarVacaciones, cancelarVacaciones: cancelarVacaciones, vacacionesVistas: vacacionesVistas,
+  listarVacaciones: listarVacaciones, resolverVacaciones: resolverVacaciones
 };
 
 /* =================== Almacenamiento =================== */
 /* Memoria de un solo pedido: la planilla abierta y las tablas ya leídas. Se vacía al entrar a doPost y al tomar el bloqueo,
    así cada sección crítica lee datos frescos. Evita abrir la planilla y releer la misma tabla varias veces por pedido. */
-let SS_ = null, MEMO_ = {};
+let SS_ = null, MEMO_ = {}, SCHEMA_OK = {};
 function ss_() {
   if (SS_) return SS_;
   const id = PROPS.getProperty('SS_ID');
@@ -168,8 +208,38 @@ function tabla_(nombre) {
     if (nombre === 'Historial' || nombre === 'Usuarios') {
       try { const p = sh.protect().setDescription('Solo el servidor de la app'); p.removeEditors(p.getEditors()); } catch (e) {}
     }
-  }
+    PROPS.setProperty('SCHEMA_' + nombre, TABLAS[nombre].join('|'));
+  } else if (!SCHEMA_OK[nombre]) { if (PROPS.getProperty('SCHEMA_' + nombre) !== TABLAS[nombre].join('|')) migrarColumnas_(nombre, sh); SCHEMA_OK[nombre] = 1; }
   return sh;
+}
+/** 3.4 · Migración de columnas: si una tabla existente tiene menos columnas visibles que las definidas, inserta las nuevas
+    ANTES de la columna JSON (los datos no se mueven de lugar relativo) y vuelve a escribir las filas con sus valores visibles.
+    Solo agrega columnas al final; si la hoja no coincide con lo esperado, no toca nada y frena las escrituras (para no desalinear). */
+function migrarColumnas_(nombre, sh) {
+  lock_(() => {
+    const firma = TABLAS[nombre].join('|');
+    if (PROPS.getProperty('SCHEMA_' + nombre) === firma) return;
+    const lc = sh.getLastColumn(), head = sh.getRange(1, 1, 1, lc).getValues()[0].map(String);
+    const jsonAt = head.lastIndexOf('JSON') + 1, actuales = head.slice(0, Math.max(0, jsonAt - 1));
+    const esPrefijo = jsonAt > 0 && actuales.join('|') === TABLAS[nombre].slice(0, actuales.length).join('|');
+    if (!esPrefijo) { try { log_(null, 'migracion_columnas', 'error', nombre, 'Encabezados inesperados: ' + head.join(',').slice(0, 300)); } catch (e) {} throw new Error('La hoja ' + nombre + ' tiene columnas cambiadas a mano. Avisá a administración (no se modificó nada).'); }
+    const faltan = TABLAS[nombre].slice(actuales.length);
+    if (faltan.length) {
+      sh.insertColumnsBefore(jsonAt, faltan.length);
+      sh.getRange(1, jsonAt, 1, faltan.length).setValues([faltan]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#111113');
+      try { sh.showColumns(jsonAt, faltan.length); sh.hideColumns(jsonAt + faltan.length); } catch (e) {}
+      const n = sh.getLastRow() - 1, nc = TABLAS[nombre].length + 1;
+      if (n > 0) {
+        const objs = sh.getRange(2, nc, n, 1).getValues().map(r => { try { return JSON.parse(r[0]); } catch (e) { return null; } });
+        if (nombre === 'Usuarios') objs.forEach(o => { if (o && !o.sucursal) o.sucursal = 'Palermo'; });   // el personal existente es de Palermo
+        const filas = objs.map((o, i) => o ? filaDe_(nombre, o) : sh.getRange(i + 2, 1, 1, nc).getValues()[0]);
+        sh.getRange(2, 1, n, nc).setValues(filas);
+      }
+    }
+    PROPS.setProperty('SCHEMA_' + nombre, firma);
+    delete MEMO_[nombre]; if (nombre === 'Usuarios') CACHE.remove('usuarios');
+    try { log_(null, 'migracion_columnas', 'ok', nombre, faltan.length ? 'Columnas agregadas: ' + faltan.join(', ') : 'Sin cambios'); } catch (e) {}
+  });
 }
 function filaDe_(nombre, o) {
   return TABLAS[nombre].map(k => {
@@ -185,8 +255,10 @@ function jsonCol_(nombre) {
   return sh.getRange(2, nc, n, 1).getValues().map(r => { try { return JSON.parse(r[0]); } catch (e) { return null; } });
 }
 function tAll_(nombre) {
-  if (!MEMO_[nombre]) MEMO_[nombre] = jsonCol_(nombre).filter(Boolean);
-  return MEMO_[nombre].slice();
+  if (MEMO_[nombre]) return MEMO_[nombre].slice();
+  const v = jsonCol_(nombre).filter(Boolean);   // (se lee antes de memorizar: una migración de columnas puede reiniciar MEMO_)
+  MEMO_[nombre] = v;
+  return v.slice();
 }
 function tAdd_(nombre, o) { tabla_(nombre).appendRow(filaDe_(nombre, o)); delete MEMO_[nombre]; return o; }
 /* Busca la fila por la clave dentro del JSON (no por la celda visible: Sheets convierte textos como 2026-06-03 en fechas). */
@@ -199,6 +271,13 @@ function tUpd_(nombre, key, val, o) {
     return true;
   }
   return false;
+}
+/** Reemplaza todas las filas de una tabla chica (Feriados). Se usa dentro de lock_. */
+function tReplace_(nombre, lista) {
+  delete MEMO_[nombre];
+  const sh = tabla_(nombre), n = sh.getLastRow() - 1, nc = TABLAS[nombre].length + 1;
+  if (n > 0) sh.deleteRows(2, n);
+  if (lista.length) sh.getRange(2, 1, lista.length, nc).setValues(lista.map(o => filaDe_(nombre, o)));
 }
 function carpeta_(prop, nombre) {
   const id = PROPS.getProperty(prop);
@@ -307,7 +386,8 @@ function permisos_(u) {
 function publico_(u) {
   return { id: u.id, legajo: u.legajo, nombre: u.nombre, sector: u.sector, rol: u.rol, estado: u.estado, registraIngreso: !!u.registraIngreso,
     fechaIngreso: u.fechaIngreso || '', fechaBaja: u.fechaBaja || '', bajaPor: u.bajaPor || '', motivoBaja: u.motivoBaja || '',
-    permisos: permisos_(u), permisosPersonalizados: Array.isArray(u.permisos), creado: u.creado || '', bloqueado: !!u.bloqueadoPin, largoPin: largoPin_(u.rol) };
+    permisos: permisos_(u), permisosPersonalizados: Array.isArray(u.permisos), creado: u.creado || '', bloqueado: !!u.bloqueadoPin, largoPin: largoPin_(u.rol),
+    sucursal: sucDe_(u), horasEsperadas: u.horasEsperadas || null };
 }
 function sesion_(token, perm, necesitaElev) {
   if (!token || !/^[0-9a-f-]{36}$/.test(String(token))) throw new Error('AUTH');
@@ -337,10 +417,23 @@ function resumenHoy(token) {
     const activos = usuarios_().filter(u => u.estado === 'activo'), fichan = activos.filter(u => u.registraIngreso);
     const delDia = tAll_('Ingresos').filter(x => x.fecha === hoy && vivo_(x));
     const ent = {}, sal = {}; delDia.forEach(x => { (tipoDe_(x) === 'salida' ? sal : ent)[x.uid] = 1; });
+    const vac = deVacaciones_(), calHoy = calendario_(cfg), sucs = sucursales_();
+    // 3.4: lo esperado se calcula por sucursal (sus días de apertura y feriados); quien está de vacaciones no se espera (no es falta).
+    const porSuc = sucs.filter(x => x.activa).map(x => {
+      const del = fichan.filter(u => normSuc_(sucDe_(u)) === normSuc_(x.nombre)), abre = x.dias.indexOf(dow_(hoy)) >= 0 && !feriadoSuc_(calHoy, x.nombre, hoy);
+      const espera = abre ? del.filter(u => !vac(u.id, hoy)) : [];
+      return { nombre: x.nombre, abre: abre, entradas: del.filter(u => ent[u.id]).length, esperadas: espera.length, incompleta: x.incompleta.length > 0 };
+    }).filter(x => x.esperadas || x.entradas || x.incompleta);
+    const enVac = fichan.filter(u => vac(u.id, hoy));
     out.personal = { activos: activos.length, fichan: fichan.length };
-    out.fichadas = { entradas: Object.keys(ent).length, salidas: Object.keys(sal).length, esperadas: fichan.length,
-      abre: cfg.diasOperativos.indexOf(new Date(hoy + 'T12:00:00Z').getUTCDay()) >= 0 };
-    if (ve('ingresos')) out.correccionesPendientes = tAll_('Correcciones').filter(c => c.estado === 'pendiente').length;
+    out.fichadas = { entradas: Object.keys(ent).length, salidas: Object.keys(sal).length, esperadas: porSuc.reduce((a, x) => a + x.esperadas, 0), deVacaciones: enVac.length,
+      abre: porSuc.some(x => x.abre), feriado: calHoy.feriado(hoy) ? calHoy.feriado(hoy).nombre : '', porSucursal: porSuc,
+      sucursalesIncompletas: sucs.filter(x => x.activa && x.incompleta.length).map(x => ({ nombre: x.nombre, faltan: x.incompleta })) };
+    if (ve('ingresos')) {
+      const pend = tAll_('Correcciones').filter(c => c.estado === 'pendiente');
+      out.correccionesPendientes = pend.filter(c => c.clase !== 'manual').length;
+      out.manualesPendientes = pend.filter(c => c.clase === 'manual').length;
+    }
   }
   if (ve('acciones')) {
     const acc = tAll_('Acciones').filter(a => a.estado === 'abierta' || a.estado === 'en_curso');
@@ -352,15 +445,26 @@ function resumenHoy(token) {
     out.auditoriasMes = l.filter(a => a.fecha.slice(0, 7) === hoy.slice(0, 7)).length;
   }
   if (ve('cierre') || ve('kpi')) {
-    const c = tAll_('Cierres').filter(x => x.total > 0).sort((a, b) => a.fecha.localeCompare(b.fecha)), u = c[c.length - 1];
+    // 3.3: un día cargado en $0 también es un cierre (sin ventas); solo los días sin fila son "sin cierre".
+    const c = tAll_('Cierres').filter(x => x.total >= 0).sort((a, b) => a.fecha.localeCompare(b.fecha)), u = c[c.length - 1];
     out.cierre = u ? { fecha: u.fecha, total: u.total } : null;
     const desde = new Date(hoy + 'T12:00:00Z'); desde.setUTCDate(desde.getUTCDate() - 14);
     const con = {}; c.forEach(x => { con[x.fecha] = 1; });
-    out.diasSinCierre = diasOperativosEntre_(desde.toISOString().slice(0, 10), hoy, cfg.diasOperativos).filter(d => d < hoy && !con[d]).length;
+    // 3.3: los feriados confirmados cerrados y las excepciones no cuentan; un feriado sin confirmar tampoco es "pendiente" (queda "a confirmar").
+    const cal = calendario_(cfg);
+    out.diasSinCierre = diasOperativosEntre_(desde.toISOString().slice(0, 10), hoy, cfg.diasOperativos).filter(d => d < hoy && !con[d] && !cal.cerrado(d) && !cal.sinConfirmar(d)).length;
     out.mes = { total: c.filter(x => x.fecha.slice(0, 7) === hoy.slice(0, 7)).reduce((a, x) => a + x.total, 0), objetivo: (cfg.objetivos || {})[hoy.slice(0, 7)] || null };
+    const fp = feriadosPanel_(cfg);
+    out.feriados = { proximos: fp.proximos, pendientes: fp.pendientes, sync: fp.sync ? { ok: fp.sync.ok, ts: fp.sync.ts, ultimaOk: fp.sync.ultimaOk || (fp.sync.ok ? fp.sync.ts : null), fuente: fp.sync.nombreFuente || fp.sync.fuente || null } : null };
   }
   if (ve('rrhh')) out.rrhh = { abiertas: tAll_('RRHH').filter(n => n.estado === 'abierta').length };
   if (ve('historial')) out.historialHoy = histRango_(hoy, hoy).length;
+  if (ve('vacaciones')) {
+    const pend = tAll_('Vacaciones').filter(v => v.estado === 'pendiente'), lim = Date.now() - 3 * 86400000;
+    out.vacaciones = { pendientes: pend.length, demoradas: pend.filter(v => new Date(v.solicitado).getTime() < lim).length };
+  }
+  // 3.4: contador rojo del menú = fichajes manuales + correcciones + vacaciones por resolver (solo lo que esta persona puede resolver).
+  out.pendientesTotal = (out.manualesPendientes || 0) + (out.correccionesPendientes || 0) + (out.vacaciones ? out.vacaciones.pendientes : 0);
   return out;
 }
 /** Arranque en una sola llamada: estado de la instalación y, si hay token guardado, la sesión (null si venció). */
@@ -484,13 +588,14 @@ function altaEmpleado(token, d) {
     if (usuarios_().some(u => u.legajo === legajo)) throw new Error('Ya existe una persona con ese usuario. Si volvió a trabajar, usá "Reactivar".');
     let rol = ['empleado', 'responsable', 'admin'].indexOf(d.rol) >= 0 ? d.rol : 'empleado';
     if (rol !== 'empleado' && s.user.rol !== 'admin') throw new Error('Solo un administrador puede dar de alta responsables o administradores.');
+    const suc = sucursalValida_(d.sucursal);
     const asignado = d.pin != null && String(d.pin) !== '';
     const pin = asignado ? pinValido_(d.pin, largoPin_(rol)) : pinAleatorio_(largoPin_(rol)), salt = Utilities.getUuid();
-    const u = { id: nuevoId_('U'), legajo: legajo, nombre: nombre, sector: txt_(d.sector, 40), rol: rol, estado: 'activo',
+    const u = { id: nuevoId_('U'), legajo: legajo, nombre: nombre, sector: txt_(d.sector, 40), rol: rol, estado: 'activo', sucursal: suc, horasEsperadas: horasEsperadas_(d.horasEsperadas),
       registraIngreso: d.registraIngreso !== false, fechaIngreso: fechaOk_(d.fechaIngreso) || hoy_(), salt: salt, pinHash: hashPin_(pin, salt),
       ver: 1, creado: new Date().toISOString(), creadoPor: s.user.nombre };
     guardarUsuario_(u, true);
-    log_(s, 'alta_empleado', 'ok', u.id, nombre + ' · ' + legajo + ' · ' + rol + (asignado ? ' · PIN asignado por jefe' : ' · PIN generado'));
+    log_(s, 'alta_empleado', 'ok', u.id, nombre + ' · ' + legajo + ' · ' + rol + ' · ' + suc + (asignado ? ' · PIN asignado por jefe' : ' · PIN generado'));
     return { user: publico_(u), pinInicial: asignado ? null : pin };
   });
 }
@@ -499,15 +604,32 @@ function editarEmpleado(token, uid, d) {
   d = d || {};
   return lock_(() => {
     const u = usuarios_().find(x => x.id === uid); if (!u) throw new Error('Empleado no encontrado.');
-    const antes = [u.nombre, u.sector, u.registraIngreso, u.fechaIngreso].join(' / ');
+    const resumen = x => [x.nombre, x.sector, x.registraIngreso, x.fechaIngreso, sucDe_(x), x.horasEsperadas ? x.horasEsperadas.horas + ' h/' + x.horasEsperadas.tipo : 'sin horas esperadas'].join(' / ');
+    const antes = resumen(u);
     if (d.nombre != null) u.nombre = txt_(d.nombre, 60) || u.nombre;
+    if (d.sucursal != null) u.sucursal = sucursalValida_(d.sucursal);
+    if (d.horasEsperadas !== undefined) u.horasEsperadas = horasEsperadas_(d.horasEsperadas);
     if (d.sector != null) u.sector = txt_(d.sector, 40);
     if (d.registraIngreso != null) u.registraIngreso = !!d.registraIngreso;
     if (d.fechaIngreso != null && fechaOk_(d.fechaIngreso)) u.fechaIngreso = d.fechaIngreso;
     guardarUsuario_(u);
-    log_(s, 'edicion_empleado', 'ok', u.id, antes + ' → ' + [u.nombre, u.sector, u.registraIngreso, u.fechaIngreso].join(' / '));
+    log_(s, 'edicion_empleado', 'ok', u.id, antes + ' → ' + resumen(u));
     return publico_(u);
   });
+}
+/** 3.4: la sucursal tiene que existir en la hoja Sucursales (por defecto, Palermo). Devuelve el nombre tal como está en la hoja. */
+function sucursalValida_(nombre) {
+  const n = txt_(nombre, 40) || 'Palermo', s = sucursales_().find(x => normSuc_(x.nombre) === normSuc_(n));
+  if (!s) throw new Error('La sucursal «' + n + '» no existe. Agregala primero en Fichaje → Sucursales (o en la hoja Sucursales).');
+  return s.nombre;
+}
+/** Horas esperadas por empleado (informativo): {tipo: 'dia' | 'semana', horas}. null = sin dato. */
+function horasEsperadas_(h) {
+  if (!h || typeof h !== 'object') return null;
+  const tipo = h.tipo === 'semana' ? 'semana' : 'dia', horas = Number(h.horas);
+  if (!isFinite(horas) || horas <= 0) return null;
+  if (horas > (tipo === 'dia' ? 16 : 80)) throw new Error(tipo === 'dia' ? 'Las horas esperadas por día no pueden superar 16.' : 'Las horas esperadas por semana no pueden superar 80.');
+  return { tipo: tipo, horas: Math.round(horas * 100) / 100 };
 }
 function bajaEmpleado(token, uid, fechaBaja, motivo) {
   const s = sesion_(token, 'personal', true);
@@ -576,61 +698,267 @@ function cambiarRol(token, uid, rol, permisos) {
   });
 }
 
-/* =================== Fichada de entrada y salida =================== */
+/* =================== 3.4 · Sucursales (hoja editable por jefes) =================== */
+/* La hoja "Sucursales" se edita a mano en la planilla (o desde la app): no tiene columna JSON, se lee celda por celda.
+   Si una sucursal tiene datos incompletos, nadie de esa sucursal puede fichar automáticamente: se avisa en pantalla. */
+const SUC_HEAD = ['Sucursal', 'Dirección', 'Latitud', 'Longitud', 'Radio (m)', 'Días de apertura', 'Activa', 'Actualizado'];
+const DIAS_CORTOS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+const SUC_LIMA = ['Lima', 'Lima 1111, Capital Federal, Buenos Aires', -34.6210674, -58.3817634, 100, '', 'Sí', ''];
+const normSuc_ = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+const diasTxt_ = arr => (arr || []).slice().sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map(d => DIAS_CORTOS[d]).join(', ');
+function hojaSucursales_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName('Sucursales');
+  if (sh) return sh;
+  sh = ss.insertSheet('Sucursales');
+  sh.getRange(1, 1, 1, SUC_HEAD.length).setValues([SUC_HEAD]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#111113');
+  sh.setFrozenRows(1);
+  // Semilla: Palermo con la ubicación que ya estaba configurada (si la había) y Lima con los datos indicados.
+  const c = cfg_(), l = c.local && isFinite(c.local.lat) ? c.local : null, ahora = Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm');
+  sh.getRange(2, 1, 2, SUC_HEAD.length).setValues([
+    ['Palermo', '', l ? l.lat : '', l ? l.lng : '', l ? (l.radio || c.radioDef) : '', diasTxt_(c.diasOperativos), 'Sí', ahora],
+    SUC_LIMA.slice(0, 7).concat([ahora])]);
+  return sh;
+}
+function num_(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : NaN;
+  let t = String(v == null ? '' : v).trim().replace(/\s/g, '').replace('−', '-');
+  if (!t) return null;
+  if (t.indexOf('.') < 0) t = t.replace(',', '.'); else t = t.replace(/,/g, '');
+  const n = Number(t);
+  return isFinite(n) ? n : NaN;
+}
+/** "mié, jue, vie, sáb" · "mié a sáb" · "miércoles-sábado" · "3,4,5,6" → [3,4,5,6]. Vacío → null. Texto no reconocido → {error}. */
+function parseDias_(s) {
+  const t = String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+  if (!t) return { lista: null };
+  const cod = w => { w = w.trim(); if (/^[0-6]$/.test(w)) return Number(w); const k = ['do', 'lu', 'ma', 'mi', 'ju', 'vi', 'sa'].indexOf(w.slice(0, 2)); return k; };
+  const out = {}; let error = false;
+  t.split(/\s*[,;\/]\s*|\s+y\s+/).filter(Boolean).forEach(parte => {
+    const r = parte.split(/\s*(?:-|\sa\s|\sal\s)\s*/);
+    if (r.length === 2) { const a = cod(r[0]), b = cod(r[1]); if (a < 0 || b < 0) { error = true; return; } for (let d = a, i = 0; i < 7; i++, d = (d + 1) % 7) { out[d] = 1; if (d === b) break; } }
+    else { const a = cod(parte); if (a < 0) error = true; else out[a] = 1; }
+  });
+  const lista = Object.keys(out).map(Number);
+  return error || !lista.length ? { lista: null, error: true } : { lista: lista };
+}
+/** Sucursales leídas de la hoja, con lo que les falta para validar el fichaje. */
+function sucursales_() {
+  if (MEMO_.__suc) return MEMO_.__suc;
+  const sh = hojaSucursales_(), n = sh.getLastRow() - 1, cfg = cfg_();
+  const filas = n > 0 ? sh.getRange(2, 1, n, SUC_HEAD.length).getValues() : [];
+  const out = [];
+  filas.forEach((r, i) => {
+    const nombre = txt_(r[0], 40); if (!nombre) return;
+    const lat = num_(r[2]), lng = num_(r[3]), radio = num_(r[4]), dias = parseDias_(r[5]);
+    const faltan = [], avisos = [];
+    if (lat == null || isNaN(lat) || Math.abs(lat) > 90) faltan.push('latitud');
+    if (lng == null || isNaN(lng) || Math.abs(lng) > 180) faltan.push('longitud');
+    if (radio == null || isNaN(radio) || radio < 10 || radio > 2000) faltan.push('radio (entre 10 y 2000 m)');
+    if (dias.error) avisos.push('Días de apertura no reconocidos ("' + txt_(r[5], 40) + '"): se usan los generales (' + diasTxt_(cfg.diasOperativos) + ').');
+    else if (!dias.lista) avisos.push('Sin días de apertura cargados: se usan los generales (' + diasTxt_(cfg.diasOperativos) + ').');
+    if (out.some(x => normSuc_(x.nombre) === normSuc_(nombre))) avisos.push('Nombre repetido en la hoja: se usa la primera fila.');
+    out.push({ fila: i + 2, nombre: nombre, direccion: txt_(r[1], 120), lat: faltan.indexOf('latitud') < 0 ? lat : null, lng: faltan.indexOf('longitud') < 0 ? lng : null,
+      radio: faltan.some(f => /^radio/.test(f)) ? null : Math.round(radio), dias: dias.lista || cfg.diasOperativos, diasPropios: !!dias.lista, diasTxt: diasTxt_(dias.lista || cfg.diasOperativos),
+      activa: !/^(no|n|false|0|inactiva)$/i.test(String(r[6] == null ? '' : r[6]).trim()), incompleta: faltan, avisos: avisos });
+  });
+  return (MEMO_.__suc = out);
+}
+/** Sucursal de una persona (los usuarios anteriores a 3.4 son de Palermo). */
+function sucursalDe_(u) {
+  const nombre = (u && u.sucursal) || 'Palermo';
+  const s = sucursales_().find(x => normSuc_(x.nombre) === normSuc_(nombre));
+  if (!s) return { nombre: nombre, noExiste: true, incompleta: ['la sucursal no está en la hoja Sucursales'], avisos: [], dias: cfg_().diasOperativos };
+  if (!s.activa) return Object.assign({}, s, { incompleta: s.incompleta.concat(['la sucursal está marcada como inactiva']) });
+  return s;
+}
+const sucDe_ = u => (u && u.sucursal) || 'Palermo';
+function listarSucursales(token) {
+  const s = sesion_(token);
+  if (!['ingresos', 'personal', 'config'].some(p => s.perms.indexOf(p) >= 0)) throw new Error('PERM');
+  const us = usuarios_().filter(u => u.estado === 'activo');
+  return sucursales_().map(x => Object.assign({}, x, { personas: us.filter(u => normSuc_(sucDe_(u)) === normSuc_(x.nombre)).length }));
+}
+/** Alta o edición de una sucursal desde la app (jefes, con PIN reciente). La hoja se puede seguir editando a mano. */
+function guardarSucursal(token, d) {
+  const s = sesion_(token, 'ingresos', true);
+  d = d || {};
+  return lock_(() => {
+    MEMO_ = {};
+    const sh = hojaSucursales_(), L = sucursales_();
+    const nombre = txt_(d.nombre, 40), lat = num_(d.lat), lng = num_(d.lng), radio = num_(d.radio);
+    if (!nombre) throw new Error('Falta el nombre de la sucursal.');
+    if (lat == null || isNaN(lat) || Math.abs(lat) > 90 || lng == null || isNaN(lng) || Math.abs(lng) > 180) throw new Error('Latitud y longitud tienen que ser números válidos (ej.: -34.6210674 y -58.3817634).');
+    if (radio == null || isNaN(radio) || radio < 10 || radio > 2000) throw new Error('El radio tiene que estar entre 10 y 2000 metros.');
+    const dias = parseDias_(d.dias);
+    if (dias.error) throw new Error('No reconozco los días de apertura. Escribilos así: «mié, jue, vie, sáb» o «lun a sáb».');
+    const previo = d.fila ? L.find(x => x.fila === Number(d.fila)) : null;
+    if (d.fila && !previo) throw new Error('La sucursal ya no está en esa fila de la hoja. Actualizá la lista.');
+    if (L.some(x => normSuc_(x.nombre) === normSuc_(nombre) && (!previo || x.fila !== previo.fila))) throw new Error('Ya existe una sucursal con ese nombre.');
+    if (previo && normSuc_(previo.nombre) !== normSuc_(nombre) && usuarios_().some(u => u.estado === 'activo' && normSuc_(sucDe_(u)) === normSuc_(previo.nombre)))
+      throw new Error('No se puede renombrar: hay personal asignado a «' + previo.nombre + '». Reasignalo primero.');
+    const fila = [celda_(nombre), celda_(txt_(d.direccion, 120)), Math.round(lat * 1e7) / 1e7, Math.round(lng * 1e7) / 1e7, Math.round(radio),
+      dias.lista ? diasTxt_(dias.lista) : '', d.activa === false ? 'No' : 'Sí', Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm')];
+    if (previo) sh.getRange(previo.fila, 1, 1, fila.length).setValues([fila]); else sh.appendRow(fila);
+    MEMO_ = {};
+    log_(s, previo ? 'edicion_sucursal' : 'alta_sucursal', 'ok', nombre,
+      (previo ? [previo.nombre, previo.lat, previo.lng, previo.radio, previo.diasTxt, previo.activa ? 'activa' : 'inactiva'].join(' / ') + ' → ' : '') + [nombre, fila[2], fila[3], fila[4], fila[5] || 'días generales', fila[6]].join(' / '));
+    return listarSucursales(token);
+  });
+}
+
+/* =================== 3.4 · Fichaje (entrada y salida, varios pares por día) =================== */
 const tipoDe_ = x => x.tipo === 'salida' ? 'salida' : 'entrada';   // registros previos a v3.1 = entrada
 const vivo_ = x => x.estado !== 'anulado';
+const horaEf_ = x => String(x.horaCorregida || x.hora || '').slice(0, 8);
+const minDe_ = h => { const p = String(h || '').split(':').map(Number); return p[0] * 60 + (p[1] || 0) + (p[2] || 0) / 60; };
+const ordenEv_ = (a, b) => (a.fecha + ' ' + horaEf_(a)).localeCompare(b.fecha + ' ' + horaEf_(b)) || String(a.creado || '').localeCompare(String(b.creado || ''));
+/** Pares entrada→salida de una persona en un día. Un día con entrada sin salida (o con la secuencia rota) es "incompleto" y no se suma. */
+function pares_(recs, fecha, hoy) {
+  const L = recs.slice().sort(ordenEv_), pares = [];
+  let abierta = null, incoherente = false, min = 0;
+  L.forEach(x => {
+    const h = horaEf_(x).slice(0, 5);
+    if (tipoDe_(x) === 'entrada') { if (abierta) { incoherente = true; pares.push({ entrada: abierta, salida: null }); } abierta = h; }
+    else if (!abierta) { incoherente = true; pares.push({ entrada: null, salida: h }); }
+    else { const m = Math.round(minDe_(h) - minDe_(abierta)); if (m < 0) incoherente = true; else min += m; pares.push({ entrada: abierta, salida: h, minutos: Math.max(0, m) }); abierta = null; }
+  });
+  const enCurso = !!abierta && fecha === hoy && !incoherente;
+  if (abierta) pares.push({ entrada: abierta, salida: null, enCurso: enCurso });
+  return { pares: pares, minutos: min, incoherente: incoherente, abierta: abierta, enCurso: enCurso, incompleto: incoherente || (!!abierta && fecha < hoy) };
+}
+/** Eventos de la persona: fichajes vigentes + fichajes manuales pendientes (cuentan para la secuencia mientras se resuelven). */
+function eventos_(uid) {
+  const ing = tAll_('Ingresos').filter(x => x.uid === uid && vivo_(x));
+  const man = tAll_('Correcciones').filter(c => c.uid === uid && c.clase === 'manual' && c.estado === 'pendiente')
+    .map(c => ({ id: c.id, tipo: c.tipo, fecha: c.fecha, hora: c.horaSolicitada || c.horaPropuesta, creado: c.creado, ts: c.creado, pendiente: true }));
+  return ing.concat(man).sort(ordenEv_);
+}
+/** Entrada abierta del último día anterior con actividad (sin salida y sin una corrección de salida pendiente). */
+function abiertaAnterior_(uid, ev, hoy) {
+  const ant = ev.filter(x => x.fecha < hoy);
+  if (!ant.length) return null;
+  const f = ant[ant.length - 1].fecha, P = pares_(ant.filter(x => x.fecha === f), f, hoy);
+  if (!P.abierta) return null;
+  const pedida = tAll_('Correcciones').some(c => c.uid === uid && c.fecha === f && (c.tipo || 'entrada') === 'salida' && c.estado === 'pendiente');
+  return pedida ? null : { fecha: f, hora: P.abierta };
+}
+/** Reglas de secuencia: sin dos entradas seguidas, sin salida sin entrada, sin entrada abierta de otro día, sin doble toque. */
+function secuencia_(u, tipo, hoy, ahora) {
+  const ev = eventos_(u.id), ab = abiertaAnterior_(u.id, ev, hoy);
+  if (ab) throw new Error('ABIERTA:' + ab.fecha + ':' + ab.hora);
+  const delDia = ev.filter(x => x.fecha === hoy), ult = delDia[delDia.length - 1] || null;
+  const dup = () => { if (ahora) { contar_('dup_' + hoy.slice(0, 7)); try { log_({ user: u }, tipo + '_duplicada_bloqueada', 'alerta', ult.id, 'Intento a las ' + hora_(ahora)); } catch (e) {} } return new Error('DUP:' + tipo + ':' + horaEf_(ult)); };
+  if (tipo === 'entrada' && ult && tipoDe_(ult) === 'entrada') throw dup();
+  if (tipo === 'salida' && ult && tipoDe_(ult) === 'salida') throw dup();
+  if (tipo === 'salida' && !ult) throw new Error('Primero tenés que fichar la entrada de hoy. Si te olvidaste, pedí una corrección.');
+  if (ult && ahora && ahora.getTime() - new Date(ult.ts || ult.creado).getTime() < 20000) throw new Error('RAPIDO:Ya registramos tu ' + tipoDe_(ult) + ' hace unos segundos. Esperá un momento antes de volver a tocar.');
+  return { ult: ult, delDia: delDia };
+}
+/** Validación de ubicación SIEMPRE en el servidor (Haversine contra la sucursal de la persona). */
+function validarGeo_(geo, suc, cfg) {
+  const out = { ok: false, motivo: '', distancia: null, precision: null, radio: suc.radio || null, sucursal: suc.nombre, g: null };
+  if (suc.incompleta && suc.incompleta.length) { out.motivo = 'sucursal_incompleta'; out.faltan = suc.incompleta; return out; }
+  if (!geo || typeof geo !== 'object' || geo.lat == null || geo.lng == null || !isFinite(geo.lat) || !isFinite(geo.lng) || Math.abs(geo.lat) > 90 || Math.abs(geo.lng) > 180) {
+    out.motivo = geo && ['sin_permiso', 'no_disponible', 'tiempo_agotado'].indexOf(geo.error) >= 0 ? geo.error : 'no_disponible'; return out;
+  }
+  const g = { lat: Math.round(Number(geo.lat) * 1e7) / 1e7, lng: Math.round(Number(geo.lng) * 1e7) / 1e7, acc: geo.acc == null || !isFinite(geo.acc) ? null : Math.min(99999, Math.round(Number(geo.acc))) };
+  out.g = g; out.precision = g.acc;
+  out.distancia = distancia_({ lat: suc.lat, lng: suc.lng }, g);
+  const pMax = Number(cfg.precisionMax) || 100;
+  if (g.acc == null || g.acc > pMax) { out.motivo = 'precision'; out.precisionMax = pMax; return out; }
+  if (out.distancia > suc.radio) { out.motivo = 'fuera'; return out; }
+  out.ok = true;
+  // Precisión baja (pero aceptable) o un valor sospechoso (0 m): se registra y queda para revisar. La ubicación del celular puede alterarse.
+  out.precisionBaja = g.acc > (Number(cfg.precisionRevisar) || 50) || g.acc <= 0;
+  return out;
+}
+function errGeo_(v) {
+  return new Error('GEO:' + JSON.stringify({ motivo: v.motivo, distancia: v.distancia, precision: v.precision, radio: v.radio, sucursal: v.sucursal, faltan: v.faltan || null, precisionMax: v.precisionMax || null }));
+}
+/** Chequeo previo (antes de abrir la cámara): ¿con esta ubicación se puede fichar? No guarda la ubicación. */
+function verificarUbicacion(token, tipo, geo) {
+  const s = sesion_(token), u = s.user, cfg = cfg_();
+  if (!u.registraIngreso) throw new Error('Tu usuario no está habilitado para fichar. Consultá con un responsable.');
+  secuencia_(u, tipo === 'salida' ? 'salida' : 'entrada', hoy_(), null);
+  const v = validarGeo_(geo, sucursalDe_(u), cfg);
+  return { ok: v.ok, motivo: v.motivo, distancia: v.distancia, precision: v.precision, radio: v.radio, sucursal: v.sucursal, faltan: v.faltan || null, precisionMax: v.precisionMax || null };
+}
 function registrarIngreso(token, foto, geo) { return registrarFichada(token, 'entrada', foto, geo); }
 function registrarFichada(token, tipo, foto, geo) {
   const s = sesion_(token);
   const u = s.user, cfg = cfg_();
   tipo = tipo === 'salida' ? 'salida' : 'entrada';
   if (!u.registraIngreso) throw new Error('Tu usuario no está habilitado para fichar. Consultá con un responsable.');
-  const ahora = new Date(), fecha = hoy_();
+  const suc = sucursalDe_(u), v = validarGeo_(geo, suc, cfg);
+  if (!v.ok && (cfg.ubicacionObligatoria !== false || v.motivo === 'sucursal_incompleta')) {
+    try { log_(s, 'fichada_rechazada_ubicacion', 'rechazada', suc.nombre, tipo + ' · ' + v.motivo + (v.distancia != null ? ' · a ' + v.distancia + ' m' : '') + (v.precision != null ? ' · ±' + v.precision + ' m' : '')); } catch (e) {}
+    throw errGeo_(v);
+  }
   const f = foto ? dataUrlFoto_(foto) : null;
   if (cfg.fotoIngresoObligatoria && !f) throw new Error('Falta la foto o el archivo no es una imagen válida. Tomá la foto de nuevo.');
-  let geoRes = 'no_configurado', dist = null, g = null;
-  if (geo && typeof geo === 'object' && isFinite(geo.lat) && isFinite(geo.lng) && geo.lat !== null && Math.abs(geo.lat) <= 90 && Math.abs(geo.lng) <= 180) {
-    g = { lat: Math.round(Number(geo.lat) * 1e5) / 1e5, lng: Math.round(Number(geo.lng) * 1e5) / 1e5, acc: Math.min(99999, Math.round(Number(geo.acc) || 0)) };
-    if (cfg.local && isFinite(cfg.local.lat)) {
-      dist = distancia_(cfg.local, g);
-      geoRes = dist <= (cfg.local.radio || cfg.radioDef) + Math.min(g.acc, 100) ? 'dentro' : 'fuera';
-    } else geoRes = 'sin_referencia';
-  } else if (geo && geo.error) geoRes = ['sin_permiso', 'no_disponible', 'tiempo_agotado'].indexOf(geo.error) >= 0 ? geo.error : 'no_disponible';
-  else if (cfg.local) geoRes = 'no_disponible';
-  const estadoIng = (f || !cfg.fotoIngresoObligatoria) && (geoRes === 'dentro' || geoRes === 'no_configurado' || geoRes === 'sin_referencia') ? 'valido' : 'revisar';
-
   return lock_(() => {
-    const delDia = tAll_('Ingresos').filter(x => x.uid === u.id && x.fecha === fecha && vivo_(x));
-    const previo = delDia.find(x => tipoDe_(x) === tipo);
-    if (previo) { contar_('dup_' + fecha.slice(0, 7)); log_(s, tipo + '_duplicada_bloqueada', 'alerta', previo.id, 'Intento a las ' + hora_(ahora)); throw new Error('DUP:' + tipo + ':' + (previo.horaCorregida || previo.hora)); }
-    const entrada = delDia.find(x => tipoDe_(x) === 'entrada');
-    if (tipo === 'salida' && !entrada) throw new Error('Primero tenés que fichar la entrada de hoy. Si te olvidaste, pedí una corrección.');
+    const ahora = new Date(), fecha = hoy_();
+    const sq = secuencia_(u, tipo, fecha, ahora);
+    if (sq.ult == null && tipo === 'salida') throw new Error('Primero tenés que fichar la entrada de hoy.');
     let fotoId = null;
-    if (f) fotoId = fotosIng_().createFile(Utilities.newBlob(f.bytes, f.tipo, fecha + '_' + u.legajo + '_' + tipo + '.' + f.ext)).getId();
-    const rec = { id: nuevoId_(tipo === 'salida' ? 'O' : 'I'), tipo: tipo, uid: u.id, legajo: u.legajo, nombre: u.nombre, fecha: fecha, hora: hora_(ahora), ts: ahora.toISOString(),
-      estado: estadoIng, geoResultado: geoRes, geo: g, distancia: dist, foto: fotoId, tieneFoto: !!fotoId, creado: ahora.toISOString(),
-      dispositivo: txt_((geo && geo.ua) || '', 120) };
-    if (tipo === 'salida') { rec.entradaId = entrada.id; rec.minutos = minutosEntre_(entrada.horaCorregida || entrada.hora, rec.hora); }
+    if (f) fotoId = fotosIng_().createFile(Utilities.newBlob(f.bytes, f.tipo, fecha + '_' + u.legajo + '_' + tipo + '_' + hora_(ahora).replace(/:/g, '') + '.' + f.ext)).getId();
+    const g = v.g;
+    const estadoIng = v.ok ? (v.precisionBaja ? 'revisar' : 'valido') : 'revisar';
+    const rec = { id: nuevoId_(tipo === 'salida' ? 'O' : 'I'), tipo: tipo, uid: u.id, legajo: u.legajo, nombre: u.nombre, sucursal: suc.nombre, fecha: fecha, hora: hora_(ahora), ts: ahora.toISOString(),
+      estado: estadoIng, geoResultado: v.ok ? 'dentro' : (v.motivo || 'no_disponible'), geo: g, latitud: g ? g.lat : '', longitud: g ? g.lng : '', precision: g ? g.acc : '', distancia: v.distancia,
+      precisionBaja: !!v.precisionBaja, modo: 'automatico', foto: fotoId, tieneFoto: !!fotoId, creado: ahora.toISOString(), dispositivo: txt_((geo && geo.ua) || '', 120) };
+    if (tipo === 'salida') { const e = sq.ult; rec.entradaId = e.id; rec.minutos = e.pendiente ? null : minutosEntre_(horaEf_(e), rec.hora); }
     try { tAdd_('Ingresos', rec); }
     catch (e) { if (fotoId) try { DriveApp.getFileById(fotoId).setTrashed(true); } catch (x) {} throw e; }
-    log_(s, 'registro_' + tipo, estadoIng, rec.id, rec.fecha + ' ' + rec.hora + ' · ubicación: ' + geoRes + (rec.minutos != null ? ' · ' + rec.minutos + ' min' : ''));
-    return { id: rec.id, tipo: tipo, fecha: rec.fecha, hora: rec.hora, estado: rec.estado, geoResultado: geoRes, distancia: dist, minutos: rec.minutos == null ? null : rec.minutos, fotoGuardada: !!fotoId };
+    log_(s, 'registro_' + tipo, estadoIng, rec.id, rec.fecha + ' ' + rec.hora + ' · ' + suc.nombre + ' · a ' + v.distancia + ' m (±' + (g ? g.acc : '?') + ' m)' + (v.precisionBaja ? ' · precisión baja: revisar' : '') + (rec.minutos != null ? ' · ' + rec.minutos + ' min' : ''));
+    const P = pares_(tAll_('Ingresos').filter(x => x.uid === u.id && x.fecha === fecha && vivo_(x)), fecha, fecha);
+    return { id: rec.id, tipo: tipo, fecha: rec.fecha, hora: rec.hora, estado: rec.estado, geoResultado: rec.geoResultado, distancia: v.distancia, precision: g ? g.acc : null,
+      precisionBaja: !!v.precisionBaja, sucursal: suc.nombre, minutos: rec.minutos == null ? null : rec.minutos, minutosHoy: P.minutos, fotoGuardada: !!fotoId };
+  });
+}
+/** Fichaje manual: cuando la ubicación no valida. Queda pendiente con la hora del servidor; un jefe lo aprueba o rechaza. */
+function solicitarFichajeManual(token, tipo, motivo, geo) {
+  const s = sesion_(token), u = s.user, cfg = cfg_();
+  tipo = tipo === 'salida' ? 'salida' : 'entrada';
+  motivo = txt_(motivo, 300);
+  if (!u.registraIngreso) throw new Error('Tu usuario no está habilitado para fichar. Consultá con un responsable.');
+  if (motivo.length < 5) throw new Error('Contá brevemente el motivo (por ejemplo: «el GPS marca lejos, estoy en el local»).');
+  const suc = sucursalDe_(u), v = validarGeo_(geo, suc, cfg);
+  return lock_(() => {
+    const ahora = new Date(), fecha = hoy_();
+    secuencia_(u, tipo, fecha, null);
+    const g = v.g;
+    const c = { id: nuevoId_('M'), clase: 'manual', tipo: tipo, uid: u.id, legajo: u.legajo, nombre: u.nombre, sucursal: suc.nombre, ingresoId: '', horaOriginal: '',
+      fecha: fecha, horaPropuesta: hora_(ahora).slice(0, 5), horaSolicitada: hora_(ahora), motivo: motivo, estado: 'pendiente', creado: ahora.toISOString(),
+      geoMotivo: v.ok ? 'dentro' : v.motivo, geo: g, distancia: v.distancia, precision: g ? g.acc : null };
+    tAdd_('Correcciones', c);
+    log_(s, 'solicitud_fichaje_manual', 'pendiente', c.id, tipo + ' ' + fecha + ' ' + c.horaSolicitada + ' · ' + suc.nombre + ' · ' + c.geoMotivo + (v.distancia != null ? ' · a ' + v.distancia + ' m' : ''));
+    return { id: c.id, tipo: tipo, fecha: fecha, hora: c.horaSolicitada, sucursal: suc.nombre };
   });
 }
 function minutosEntre_(h1, h2) {
-  const m = h => { const p = String(h || '').split(':').map(Number); return p[0] * 60 + p[1] + (p[2] || 0) / 60; };
   if (!h1 || !h2) return null;
-  const d = Math.round(m(h2) - m(h1));
+  const d = Math.round(minDe_(h2) - minDe_(h1));
   return d >= 0 ? d : null;
 }
-/** Estado de hoy del propio empleado: qué fichó y qué le toca. Solo sus datos. */
+/** Estado de hoy del propio empleado: qué fichó y qué le toca. Solo sus datos (sin coordenadas). */
 function miJornada(token) { return jornadaDe_(sesion_(token).user); }
 function jornadaDe_(u) {
-  const delDia = tAll_('Ingresos').filter(x => x.uid === u.id && x.fecha === hoy_() && vivo_(x));
-  const e = delDia.find(x => tipoDe_(x) === 'entrada'), o = delDia.find(x => tipoDe_(x) === 'salida');
-  return { fecha: hoy_(), nombre: u.nombre, habilitado: !!u.registraIngreso, aviso: cfg_().avisoFotos,
-    entrada: e ? { hora: e.horaCorregida || e.hora, estado: e.estado } : null, salida: o ? { hora: o.horaCorregida || o.hora, estado: o.estado, minutos: o.minutos } : null,
-    siguiente: !e ? 'entrada' : !o ? 'salida' : null };
+  const hoy = hoy_(), cfg = cfg_(), ev = eventos_(u.id), delDia = ev.filter(x => x.fecha === hoy);
+  const vivos = delDia.filter(x => !x.pendiente), P = pares_(vivos, hoy, hoy), ult = delDia[delDia.length - 1] || null;
+  const ab = abiertaAnterior_(u.id, ev, hoy), suc = sucursalDe_(u);
+  const nov = tAll_('Vacaciones').filter(v => v.uid === u.id && (v.estado === 'aprobada' || v.estado === 'rechazada') && !v.visto).length;
+  const e = vivos.filter(x => tipoDe_(x) === 'entrada')[0], o = vivos.filter(x => tipoDe_(x) === 'salida').slice(-1)[0];
+  const texto = !ult ? 'Sin fichar' : (tipoDe_(ult) === 'entrada' ? 'Entrada registrada a las ' : 'Salida registrada a las ') + horaEf_(ult).slice(0, 5) + (ult.pendiente ? ' (manual, pendiente de aprobación)' : '');
+  return { fecha: hoy, nombre: u.nombre, habilitado: !!u.registraIngreso, aviso: cfg.avisoFotos, avisoUbicacion: cfg.avisoUbicacion, fotoObligatoria: !!cfg.fotoIngresoObligatoria,
+    sucursal: { nombre: suc.nombre, incompleta: suc.incompleta || [], direccion: suc.direccion || '' },
+    estado: { texto: texto, tipo: ult ? tipoDe_(ult) : null, hora: ult ? horaEf_(ult).slice(0, 5) : null, pendiente: !!(ult && ult.pendiente) },
+    pares: P.pares, minutosHoy: P.minutos, abiertaAnterior: ab,
+    siguiente: ab ? null : (ult && tipoDe_(ult) === 'entrada' ? 'salida' : 'entrada'),
+    manualesPendientes: delDia.filter(x => x.pendiente).map(x => ({ tipo: x.tipo, hora: String(x.hora).slice(0, 5) })),
+    entrada: e ? { hora: horaEf_(e).slice(0, 5), estado: e.estado } : null, salida: o ? { hora: horaEf_(o).slice(0, 5), estado: o.estado, minutos: P.minutos } : null,
+    vacacionesNovedades: nov };
 }
 /* Contadores livianos por mes (p. ej. intentos de fichar dos veces) para no recorrer todo el historial al calcular KPIs. */
 function contar_(k) {
@@ -641,12 +969,20 @@ function contados_(pref, desde, hasta) {
   const d = desde.slice(0, 7), h = hasta.slice(0, 7);
   return Object.keys(c).filter(k => k.indexOf(pref + '_') === 0 && k.slice(pref.length + 1) >= d && k.slice(pref.length + 1) <= h).reduce((a, k) => a + Number(c[k] || 0), 0);
 }
+/** Últimos registros del propio empleado: sin latitud, longitud ni distancia (la ubicación solo la ven los jefes). */
 function misIngresos(token) {
   const s = sesion_(token);
   const corr = tAll_('Correcciones').filter(c => c.uid === s.user.id);
-  return tAll_('Ingresos').filter(x => x.uid === s.user.id).slice(-30).reverse().map(x => ({
-    id: x.id, tipo: tipoDe_(x), fecha: x.fecha, hora: x.hora, horaCorregida: x.horaCorregida || '', estado: x.estado, geoResultado: x.geoResultado,
+  const ing = tAll_('Ingresos').filter(x => x.uid === s.user.id).slice(-40).reverse().map(x => ({
+    id: x.id, tipo: tipoDe_(x), fecha: x.fecha, hora: x.hora, horaCorregida: x.horaCorregida || '', estado: x.estado, modo: x.modo || (x.origen === 'correccion' ? 'correccion' : 'automatico'),
     correccion: (corr.find(c => c.ingresoId === x.id) || {}).estado || '' }));
+  return ing;
+}
+/** Solicitudes propias (fichajes manuales y correcciones): pendientes y las últimas resueltas, con el motivo del jefe si rechazó. */
+function misSolicitudes(token) {
+  const s = sesion_(token);
+  return tAll_('Correcciones').filter(c => c.uid === s.user.id).slice(-20).reverse().map(c => ({ id: c.id, clase: c.clase || 'correccion', tipo: c.tipo || 'entrada', fecha: c.fecha,
+    hora: String(c.horaSolicitada || c.horaPropuesta || '').slice(0, 5), motivo: c.motivo, estado: c.estado, comentario: c.estado === 'rechazada' ? (c.comentario || '') : '', resuelto: c.resuelto || '' }));
 }
 function solicitarCorreccion(token, d) {
   const s = sesion_(token);
@@ -654,21 +990,201 @@ function solicitarCorreccion(token, d) {
   const fecha = fechaOk_(d.fecha), hp = horaOk_(d.horaPropuesta), motivo = txt_(d.motivo, 300), tipo = d.tipo === 'salida' ? 'salida' : 'entrada';
   if (!fecha || !hp || !motivo) throw new Error('Completá fecha, hora y motivo.');
   if (fecha > hoy_()) throw new Error('No se pueden pedir correcciones de días futuros.');
+  if (fecha === hoy_() && hp > hora_().slice(0, 5)) throw new Error('La hora no puede ser posterior a la hora actual.');
   return lock_(() => {
     let ing = null;
     if (d.ingresoId) { ing = tAll_('Ingresos').find(x => x.id === d.ingresoId); if (!ing || ing.uid !== s.user.id) throw new Error('Registro no encontrado.'); }
-    else ing = tAll_('Ingresos').find(x => x.uid === s.user.id && x.fecha === fecha && vivo_(x) && tipoDe_(x) === tipo) || null;
     const t = ing ? tipoDe_(ing) : tipo;
-    if (tAll_('Correcciones').some(c => c.uid === s.user.id && c.fecha === fecha && (c.tipo || 'entrada') === t && c.estado === 'pendiente')) throw new Error('Ya tenés una solicitud pendiente para esa ' + t + '.');
-    const c = { id: nuevoId_('C'), tipo: t, uid: s.user.id, legajo: s.user.legajo, nombre: s.user.nombre, ingresoId: ing ? ing.id : '', horaOriginal: ing ? ing.hora : '',
+    if (tAll_('Correcciones').some(c => c.uid === s.user.id && c.fecha === fecha && (c.tipo || 'entrada') === t && c.estado === 'pendiente' && c.clase !== 'manual')) throw new Error('Ya tenés una solicitud pendiente para esa ' + t + '.');
+    const c = { id: nuevoId_('C'), clase: 'correccion', tipo: t, uid: s.user.id, legajo: s.user.legajo, nombre: s.user.nombre, sucursal: sucDe_(s.user), ingresoId: ing ? ing.id : '', horaOriginal: ing ? ing.hora : '',
       fecha: fecha, horaPropuesta: hp, motivo: motivo, estado: 'pendiente', creado: new Date().toISOString() };
     tAdd_('Correcciones', c);
-    log_(s, 'solicitud_correccion', 'pendiente', c.id, t + ' ' + fecha + ' → ' + hp);
+    log_(s, 'solicitud_correccion', 'pendiente', c.id, t + ' ' + fecha + ' → ' + hp + (ing ? ' (registro ' + ing.hora + ')' : ' (sin registro)'));
     return { id: c.id };
   });
 }
 
+/* =================== 3.4 · Correcciones de jefes (siempre con motivo; se conserva el valor original) =================== */
+function corregirFichaje(token, id, hora, motivo) {
+  const s = sesion_(token, 'ingresos', true);
+  hora = horaOk_(hora); motivo = txt_(motivo, 300);
+  if (!hora) throw new Error('Hora inválida (formato HH:MM).');
+  if (motivo.length < 5) throw new Error('Escribí el motivo de la corrección: queda registrado.');
+  return lock_(() => {
+    const r = tAll_('Ingresos').find(x => x.id === String(id || '')); if (!r) throw new Error('Registro no encontrado.');
+    if (!vivo_(r)) throw new Error('El registro está anulado.');
+    if (r.uid === s.user.id) throw new Error('No podés corregir tus propios fichajes: lo tiene que hacer otro jefe.');
+    if (r.fecha === hoy_() && hora > hora_().slice(0, 5)) throw new Error('La hora no puede ser posterior a la hora actual.');
+    const antes = horaEf_(r);
+    r.correcciones = (r.correcciones || []).concat([{ de: antes, a: hora, motivo: motivo, por: s.user.nombre + ' (' + s.user.legajo + ')', ts: new Date().toISOString() }]);
+    r.horaCorregida = hora; if (r.estado !== 'corregido') r.estadoAnterior = r.estado; r.estado = 'corregido';
+    r.revisadoPor = s.user.nombre; r.revisado = new Date().toISOString();
+    if (tipoDe_(r) === 'salida' && r.entradaId) { const e = tAll_('Ingresos').find(x => x.id === r.entradaId); if (e) r.minutos = minutosEntre_(horaEf_(e), hora); }
+    tUpd_('Ingresos', 'id', r.id, r);
+    log_(s, 'correccion_fichaje_jefe', 'corregido', r.id, r.nombre + ' · ' + tipoDe_(r) + ' ' + r.fecha + ' ' + (r.hora || 'sin registro') + (antes !== r.hora ? ' (vigente ' + antes + ')' : '') + ' → ' + hora + ' · motivo: ' + motivo);
+    return true;
+  });
+}
+/** Carga de un fichaje faltante por un jefe (por ejemplo, la salida de una entrada que quedó abierta). */
+function cargarFichajeJefe(token, uid, fecha, tipo, hora, motivo) {
+  const s = sesion_(token, 'ingresos', true);
+  fecha = fechaOk_(fecha); hora = horaOk_(hora); motivo = txt_(motivo, 300); tipo = tipo === 'salida' ? 'salida' : 'entrada';
+  if (!fecha || !hora) throw new Error('Completá fecha y hora.');
+  if (motivo.length < 5) throw new Error('Escribí el motivo: queda registrado.');
+  if (fecha > hoy_() || (fecha === hoy_() && hora > hora_().slice(0, 5))) throw new Error('No se pueden cargar fichajes en el futuro.');
+  return lock_(() => {
+    const u = usuarios_().find(x => x.id === uid); if (!u) throw new Error('Empleado no encontrado.');
+    if (u.id === s.user.id) throw new Error('No podés cargar tus propios fichajes: lo tiene que hacer otro jefe.');
+    const ahora = new Date().toISOString();
+    const rec = { id: nuevoId_(tipo === 'salida' ? 'O' : 'I'), tipo: tipo, uid: u.id, legajo: u.legajo, nombre: u.nombre, sucursal: sucDe_(u), fecha: fecha, hora: '', horaCorregida: hora,
+      estado: 'corregido', origen: 'jefe', modo: 'manual', geoResultado: 'no_aplica', tieneFoto: false, creado: ahora,
+      correcciones: [{ de: '', a: hora, motivo: motivo, por: s.user.nombre + ' (' + s.user.legajo + ')', ts: ahora }], revisadoPor: s.user.nombre, revisado: ahora };
+    tAdd_('Ingresos', rec);
+    log_(s, 'carga_fichaje_jefe', 'corregido', rec.id, u.nombre + ' · ' + tipo + ' ' + fecha + ' ' + hora + ' · motivo: ' + motivo);
+    return { id: rec.id };
+  });
+}
+
+/* =================== 3.4 · Horas trabajadas =================== */
+/** ¿Es feriado para esta sucursal? Los nacionales valen para todas; las excepciones manuales del calendario son de Palermo. */
+function feriadoSuc_(cal, suc, d) {
+  const f = cal.feriado(d); if (!f) return null;
+  if (f.origen === 'manual' && normSuc_(suc) !== 'palermo') return null;
+  return f;
+}
+const redondear_ = (m, r) => r > 1 ? Math.round(m / r) * r : m;
+/** Resumen de horas por empleado: por día, semana y mes, con total, promedio y diferencia con lo esperado (informativo). */
+function horas_(opts) {
+  const cfg = cfg_(), cal = calendario_(cfg), vac = deVacaciones_(), hoy = hoy_(), red = Number(cfg.redondeoMin) || 1;
+  let hasta = fechaOk_(opts.hasta) || hoy, desde = fechaOk_(opts.desde) || (hoy.slice(0, 8) + '01');
+  if (desde > hasta) { const t = desde; desde = hasta; hasta = t; }
+  if (hasta > hoy) hasta = hoy;
+  if (sumarDias_(desde, 400) < hasta) desde = sumarDias_(hasta, -400);
+  const sucs = sucursales_();
+  let users = usuarios_().filter(u => opts.uids ? opts.uids.indexOf(u.id) >= 0 : (u.registraIngreso && (u.estado === 'activo' || (u.fechaBaja && u.fechaBaja >= desde))));
+  if (opts.sucursal) users = users.filter(u => normSuc_(sucDe_(u)) === normSuc_(opts.sucursal));
+  const ing = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta && vivo_(x));
+  const empleados = users.map(u => {
+    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(sucDe_(u))), ops = suc ? suc.dias : cfg.diasOperativos;
+    const mios = ing.filter(x => x.uid === u.id), dias = [], he = u.horasEsperadas || null;
+    let d = u.fechaIngreso && u.fechaIngreso > desde ? u.fechaIngreso : desde;
+    const fin = u.estado !== 'activo' && u.fechaBaja && u.fechaBaja < hasta ? u.fechaBaja : hasta;
+    for (let i = 0; d <= fin && i < 402; i++, d = sumarDias_(d, 1)) {
+      const recs = mios.filter(x => x.fecha === d), fer = feriadoSuc_(cal, sucDe_(u), d), enVac = vac(u.id, d), abre = ops.indexOf(dow_(d)) >= 0;
+      const base = { fecha: d, dia: DIAS_CORTOS[dow_(d)], semana: lunes_(d), feriado: fer ? fer.nombre : '', vacaciones: enVac, abre: abre };
+      if (recs.length) {
+        const P = pares_(recs, d, hoy);
+        const revisar = recs.some(x => x.estado === 'revisar'), manual = recs.some(x => x.modo === 'manual'), corregido = recs.some(x => x.estado === 'corregido');
+        dias.push(Object.assign(base, { estado: P.incompleto ? 'incompleto' : P.enCurso ? 'en_curso' : 'trabajado', pares: P.pares,
+          minutos: P.incompleto || P.enCurso ? null : redondear_(P.minutos, red), minutosParciales: P.minutos, revisar: revisar, manual: manual, corregido: corregido }));
+      } else if (enVac) dias.push(Object.assign(base, { estado: 'vacaciones', minutos: null }));
+      else if (fer) dias.push(Object.assign(base, { estado: 'feriado', minutos: null }));
+      else if (abre && d < hoy) dias.push(Object.assign(base, { estado: 'sin_fichaje', minutos: null }));
+    }
+    // Esperado (informativo): por día de apertura (sin vacaciones ni feriados) o por semana, prorrateado por los días de apertura del rango.
+    const diasEsperables = [];
+    for (let k = 0, f = u.fechaIngreso && u.fechaIngreso > desde ? u.fechaIngreso : desde; f <= fin && k < 402; k++, f = sumarDias_(f, 1)) {
+      if (ops.indexOf(dow_(f)) >= 0 && (f < hoy || dias.some(y => y.fecha === f && y.estado === 'trabajado')) && !vac(u.id, f) && !feriadoSuc_(cal, sucDe_(u), f)) diasEsperables.push(f);
+    }
+    const espSem = {};
+    if (he && he.horas > 0 && he.tipo === 'semana') {
+      const porSem = {}; diasEsperables.forEach(f => { const w = lunes_(f); porSem[w] = (porSem[w] || 0) + 1; });
+      Object.keys(porSem).forEach(w => { espSem[w] = Math.round(he.horas * 60 * porSem[w] / Math.max(1, ops.length)); });
+    } else if (he && he.horas > 0) diasEsperables.forEach(f => { const w = lunes_(f); espSem[w] = (espSem[w] || 0) + Math.round(he.horas * 60); });
+    const trab = dias.filter(x => x.estado === 'trabajado'), total = trab.reduce((a, x) => a + x.minutos, 0);
+    const semanas = {}, meses = {};
+    dias.forEach(x => {
+      const w = semanas[x.semana] = semanas[x.semana] || { semana: x.semana, minutos: 0, dias: 0, esperado: null };
+      const m = meses[x.fecha.slice(0, 7)] = meses[x.fecha.slice(0, 7)] || { mes: x.fecha.slice(0, 7), minutos: 0, dias: 0, esperado: null };
+      if (x.estado === 'trabajado') { w.minutos += x.minutos; w.dias++; m.minutos += x.minutos; m.dias++; }
+    });
+    Object.keys(espSem).forEach(w => { (semanas[w] = semanas[w] || { semana: w, minutos: 0, dias: 0, esperado: null }).esperado = espSem[w]; });
+    if (he && he.horas > 0) {
+      Object.keys(meses).forEach(k => { meses[k].esperado = 0; });
+      diasEsperables.forEach(f => { const k = f.slice(0, 7); meses[k] = meses[k] || { mes: k, minutos: 0, dias: 0, esperado: 0 }; meses[k].esperado = (meses[k].esperado || 0) + (he.tipo === 'semana' ? Math.round(he.horas * 60 / Math.max(1, ops.length)) : Math.round(he.horas * 60)); });
+    }
+    const esperado = he && he.horas > 0 ? Object.keys(espSem).reduce((a, w) => a + espSem[w], 0) : null;
+    const cuenta = e => dias.filter(x => x.estado === e).length;
+    return { uid: u.id, nombre: u.nombre, legajo: u.legajo, sucursal: sucDe_(u), activo: u.estado === 'activo', horasEsperadas: he,
+      dias: dias.sort((a, b) => a.fecha.localeCompare(b.fecha)),
+      semanas: Object.keys(semanas).sort().map(k => semanas[k]), meses: Object.keys(meses).sort().map(k => meses[k]),
+      total: total, diasTrabajados: trab.length, promedio: trab.length ? Math.round(total / trab.length) : null,
+      esperado: esperado, diferencia: esperado == null ? null : total - esperado,
+      incompletos: cuenta('incompleto'), sinFichaje: cuenta('sin_fichaje'), vacaciones: cuenta('vacaciones'), feriados: cuenta('feriado'), revisar: dias.filter(x => x.revisar).length };
+  }).sort((a, b) => (a.sucursal + a.nombre).localeCompare(b.sucursal + b.nombre));
+  return { desde: desde, hasta: hasta, redondeo: red, sucursales: sucs.map(x => x.nombre), empleados: empleados,
+    incompletos: [].concat.apply([], empleados.map(e => e.dias.filter(x => x.estado === 'incompleto').map(x => ({ uid: e.uid, nombre: e.nombre, sucursal: e.sucursal, fecha: x.fecha, pares: x.pares })))) };
+}
+/** Horas: cada empleado ve solo las suyas; los jefes (permiso de ingresos) ven todas y filtran por sucursal, empleado y fechas. */
+function resumenHoras(token, f) {
+  const s = sesion_(token); f = f || {};
+  const jefe = s.perms.indexOf('ingresos') >= 0;
+  if (!jefe || f.propias) { const r = horas_({ desde: f.desde, hasta: f.hasta, uids: [s.user.id] }); r.empleados.forEach(e => e.dias.forEach(x => { delete x.revisar; })); return r; }
+  return horas_({ desde: f.desde, hasta: f.hasta, sucursal: txt_(f.sucursal, 40) || null, uids: f.uid ? [String(f.uid)] : null });
+}
+/** Exporta el resumen de horas a la hoja "Horas" de la planilla (para liquidación de sueldos). Reemplaza el contenido anterior. */
+function exportarHoras(token, f) {
+  const s = sesion_(token, 'ingresos', true); f = f || {};
+  const r = horas_({ desde: f.desde, hasta: f.hasta, sucursal: txt_(f.sucursal, 40) || null, uids: f.uid ? [String(f.uid)] : null });
+  const hm = m => m == null ? '' : Math.floor(m / 60) + ':' + String(Math.abs(m) % 60).padStart(2, '0');
+  const sg = m => m == null ? '' : (m < 0 ? '-' : '+') + hm(Math.abs(m));
+  const EST = { trabajado: 'Trabajado', incompleto: 'Incompleto (no se suma)', en_curso: 'En curso', vacaciones: 'Vacaciones', feriado: 'Feriado', sin_fichaje: 'Sin fichaje (revisar)' };
+  const filas = [['Resumen de horas · ' + fdm_(r.desde) + ' al ' + fdm_(r.hasta) + (f.sucursal ? ' · ' + f.sucursal : ''), '', '', '', '', '', '', '', '', ''],
+    ['Generado por ' + s.user.nombre + ' el ' + Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm') + ' · redondeo: ' + (r.redondeo > 1 ? r.redondeo + ' min' : 'al minuto') + ' · la diferencia con lo esperado es informativa (no calcula pagos ni horas extra).', '', '', '', '', '', '', '', '', ''],
+    ['', '', '', '', '', '', '', '', '', ''],
+    ['Sucursal', 'Empleado', 'Usuario', 'Fecha', 'Día', 'Estado', 'Entradas y salidas', 'Horas (h:mm)', 'Minutos', 'Observaciones']];
+  r.empleados.forEach(e => e.dias.forEach(x => filas.push([e.sucursal, e.nombre, e.legajo.toLowerCase(), fdm_(x.fecha), x.dia, EST[x.estado] || x.estado,
+    (x.pares || []).map(p => (p.entrada || '¿?') + '–' + (p.salida || '¿?')).join(', '), x.minutos == null ? '' : hm(x.minutos), x.minutos == null ? '' : x.minutos,
+    [x.feriado ? 'Feriado: ' + x.feriado : '', x.vacaciones && x.estado !== 'vacaciones' ? 'Con vacaciones aprobadas' : '', x.manual ? 'Incluye fichaje manual' : '', x.corregido ? 'Incluye corrección' : '', x.revisar ? 'Precisión/ubicación para revisar' : ''].filter(Boolean).join(' · ')])));
+  filas.push(['', '', '', '', '', '', '', '', '', ''], ['Totales por empleado', '', '', '', '', '', '', '', '', ''],
+    ['Sucursal', 'Empleado', 'Usuario', 'Días trabajados', 'Total (h:mm)', 'Total (min)', 'Promedio diario', 'Esperado (h:mm)', 'Diferencia', 'Incompletos / sin fichaje / vacaciones / feriados']);
+  r.empleados.forEach(e => filas.push([e.sucursal, e.nombre, e.legajo.toLowerCase(), e.diasTrabajados, hm(e.total), e.total, hm(e.promedio), hm(e.esperado), sg(e.diferencia),
+    e.incompletos + ' / ' + e.sinFichaje + ' / ' + e.vacaciones + ' / ' + e.feriados]));
+  const safe = filas.map(row => row.map(v => typeof v === 'string' ? celda_(v) : v));
+  lock_(() => {
+    const ss = ss_(); let sh = ss.getSheetByName('Horas');
+    if (!sh) sh = ss.insertSheet('Horas'); else sh.clear();
+    sh.getRange(1, 1, safe.length, 10).setValues(safe);
+    sh.getRange(4, 1, 1, 10).setFontWeight('bold').setFontColor('#ffffff').setBackground('#111113');
+    sh.getRange(1, 1, 1, 1).setFontWeight('bold');
+    sh.setFrozenRows(4);
+  });
+  log_(s, 'exportacion_horas', 'ok', 'Horas', r.desde + ' a ' + r.hasta + ' · ' + r.empleados.length + ' empleados' + (f.sucursal ? ' · ' + f.sucursal : ''));
+  return { filas: safe.length, empleados: r.empleados.length, url: ss_().getUrl() + '#gid=' + ss_().getSheetByName('Horas').getSheetId() };
+}
+/** Panel de jefes: fichajes de hoy por sucursal (quién entró, quién salió, quién falta) y pendientes. */
+function panelFichajesHoy(token) {
+  sesion_(token, 'ingresos');
+  const hoy = hoy_(), cfg = cfg_(), cal = calendario_(cfg), vac = deVacaciones_(), sucs = sucursales_();
+  const ing = tAll_('Ingresos').filter(x => vivo_(x));
+  const users = usuarios_().filter(u => u.estado === 'activo' && u.registraIngreso);
+  const man = tAll_('Correcciones').filter(c => c.estado === 'pendiente');
+  const nombres = sucs.map(x => x.nombre);
+  users.forEach(u => { if (!nombres.some(n => normSuc_(n) === normSuc_(sucDe_(u)))) nombres.push(sucDe_(u)); });
+  return { fecha: hoy, sucursales: nombres.map(n => {
+    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(n)) || { nombre: n, incompleta: ['la sucursal no está en la hoja Sucursales'], dias: cfg.diasOperativos, avisos: [] };
+    const fer = feriadoSuc_(cal, n, hoy), abre = suc.dias.indexOf(dow_(hoy)) >= 0;
+    const personas = users.filter(u => normSuc_(sucDe_(u)) === normSuc_(n)).map(u => {
+      const recs = ing.filter(x => x.uid === u.id && x.fecha === hoy), P = pares_(recs, hoy, hoy);
+      const ev = eventos_(u.id), ab = abiertaAnterior_(u.id, ev, hoy), pend = man.filter(c => c.uid === u.id && c.fecha === hoy);
+      let estado = recs.length ? (P.abierta ? 'adentro' : P.incoherente ? 'revisar' : 'salio') : vac(u.id, hoy) ? 'vacaciones' : fer ? 'feriado' : abre ? 'falta' : 'no_abre';
+      if (!recs.length && pend.length) estado = 'manual_pendiente';
+      return { uid: u.id, nombre: u.nombre, legajo: u.legajo, estado: estado, pares: P.pares, minutos: P.minutos,
+        ultima: recs.length ? horaEf_(recs.slice().sort(ordenEv_).slice(-1)[0]).slice(0, 5) : null, abiertaAnterior: ab, manualesPendientes: pend.length,
+        revisar: recs.some(x => x.estado === 'revisar') };
+    }).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    const c = e => personas.filter(p => p.estado === e).length;
+    return { nombre: n, direccion: suc.direccion || '', incompleta: suc.incompleta || [], avisos: suc.avisos || [], abre: abre, feriado: fer ? fer.nombre : '', radio: suc.radio || null,
+      personas: personas, adentro: c('adentro'), salieron: c('salio'), faltan: c('falta'), deVacaciones: c('vacaciones'), entradas: personas.filter(p => p.pares.length).length };
+  }), manualesPendientes: man.filter(c => c.clase === 'manual').length, correccionesPendientes: man.filter(c => c.clase !== 'manual').length };
+}
+
 /* =================== Registro de ingresos (vista administrativa) =================== */
+/** 3.3: vacaciones APROBADAS por persona y día: esos días no son falta ni fichada pendiente. Devuelve fn(uid, fecha) → true. */
+function deVacaciones_() {
+  const apro = tAll_('Vacaciones').filter(v => v.estado === 'aprobada');
+  return (uid, fecha) => apro.some(v => v.uid === uid && v.desde <= fecha && v.hasta >= fecha);
+}
 function diasOperativosEntre_(desde, hasta, dias) {
   const out = [], d = new Date(desde + 'T12:00:00Z'), h = new Date(hasta + 'T12:00:00Z');
   for (let i = 0; d <= h && i < 400; i++) { if (dias.indexOf(d.getUTCDay()) >= 0) out.push(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() + 1); }
@@ -681,29 +1197,38 @@ function listarIngresos(token, desde, hasta) {
   const ing = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta);
   const corr = tAll_('Correcciones');
   const users = usuarios_();
+  // La ubicación (latitud, longitud, precisión, distancia) solo llega acá: esta vista exige el permiso de jefes ("ingresos").
   const lista = ing.map(x => ({ id: x.id, tipo: tipoDe_(x), minutos: x.minutos == null ? null : x.minutos, uid: x.uid, fecha: x.fecha, legajo: x.legajo, nombre: x.nombre, hora: x.hora, horaCorregida: x.horaCorregida || '',
-    estado: x.estado, geoResultado: x.geoResultado, distancia: x.distancia, tieneFoto: !!x.foto, fotoPurgada: !!x.fotoPurgada, observacion: x.observacion || '',
+    estado: x.estado, geoResultado: x.geoResultado, distancia: x.distancia, latitud: x.geo ? x.geo.lat : null, longitud: x.geo ? x.geo.lng : null, precision: x.geo ? x.geo.acc : null,
+    precisionBaja: !!x.precisionBaja, sucursal: x.sucursal || sucDe_(users.find(u => u.id === x.uid)), modo: x.modo || (x.origen === 'correccion' ? 'correccion' : x.origen === 'jefe' ? 'manual' : 'automatico'),
+    correcciones: x.correcciones || [], tieneFoto: !!x.foto, fotoPurgada: !!x.fotoPurgada, observacion: x.observacion || '',
     revisadoPor: x.revisadoPor || '', origen: x.origen || 'app', derivado: !!x.derivado,
     usuarioInactivo: !!users.find(u => u.id === x.uid && u.estado !== 'activo') }));
-  // Duplicados y pendientes (alertas para revisión, no conclusiones)
-  const dups = {}; lista.forEach(x => { if (x.estado !== 'anulado') { const k = x.uid + x.fecha + x.tipo; dups[k] = (dups[k] || 0) + 1; } });
-  lista.forEach(x => { x.duplicado = dups[x.uid + x.fecha + x.tipo] > 1; });
-  // Jornadas: entrada + salida por persona y día
-  const jornadas = {};
-  lista.filter(x => x.estado !== 'anulado').forEach(x => {
-    const k = x.uid + '|' + x.fecha, j = jornadas[k] = jornadas[k] || { uid: x.uid, fecha: x.fecha, nombre: x.nombre, legajo: x.legajo, entrada: '', salida: '', minutos: null };
-    j[x.tipo] = x.horaCorregida || x.hora;
+  // 3.4: varios pares por día son válidos; se marca para revisar solo una secuencia rota (dos entradas seguidas, salida sin entrada).
+  const hoy = hoy_(), porDia = {};
+  lista.filter(x => x.estado !== 'anulado').forEach(x => { const k = x.uid + '|' + x.fecha; (porDia[k] = porDia[k] || []).push(x); });
+  const listaJ = Object.keys(porDia).map(k => {
+    const L = porDia[k], x0 = L[0], P = pares_(L, x0.fecha, hoy);
+    L.forEach(x => { x.duplicado = P.incoherente; });
+    const ent = L.filter(x => x.tipo === 'entrada').map(horaEf_).sort(), sal = L.filter(x => x.tipo === 'salida').map(horaEf_).sort();
+    return { uid: x0.uid, fecha: x0.fecha, nombre: x0.nombre, legajo: x0.legajo, sucursal: x0.sucursal, entrada: ent[0] || '', salida: sal[sal.length - 1] || '',
+      pares: P.pares, minutos: P.incompleto || P.enCurso ? null : P.minutos, sinSalida: !!P.abierta && x0.fecha < hoy, incompleto: P.incompleto, enCurso: P.enCurso };
+  }).sort((a, b) => (b.fecha + a.nombre).localeCompare(a.fecha + b.nombre));
+  // Días de apertura sin entrada (por sucursal: sus días y feriados). Las vacaciones aprobadas se listan aparte: no son falta.
+  const cfg = cfg_(), cal = calendario_(cfg), vac = deVacaciones_(), sucs = sucursales_();
+  const pendientes = [], deVacaciones = [];
+  users.filter(u => u.estado === 'activo' && u.registraIngreso).forEach(u => {
+    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(sucDe_(u))), ops = suc ? suc.dias : cfg.diasOperativos;
+    diasOperativosEntre_(desde, hasta, ops).filter(d => d <= hoy && (!u.fechaIngreso || u.fechaIngreso <= d) && !(normSuc_(sucDe_(u)) === 'palermo' && cal.cerrado(d))).forEach(d => {
+      if (lista.some(x => x.uid === u.id && x.fecha === d && x.estado !== 'anulado' && x.tipo === 'entrada')) return;
+      if (vac(u.id, d)) deVacaciones.push({ fecha: d, uid: u.id, legajo: u.legajo, nombre: u.nombre });
+      else { const f = feriadoSuc_(cal, sucDe_(u), d); if (f && f.origen === 'api' && normSuc_(sucDe_(u)) !== 'palermo') return; pendientes.push({ fecha: d, uid: u.id, legajo: u.legajo, nombre: u.nombre, sucursal: sucDe_(u), feriado: f ? f.nombre : '' }); }
+    });
   });
-  const listaJ = Object.keys(jornadas).map(k => { const j = jornadas[k]; j.minutos = minutosEntre_(j.entrada, j.salida); j.sinSalida = !!j.entrada && !j.salida && j.fecha < hoy_(); return j; })
-    .sort((a, b) => (b.fecha + a.nombre).localeCompare(a.fecha + b.nombre));
-  const dias = diasOperativosEntre_(desde, hasta, cfg_().diasOperativos).filter(d => d <= hoy_());
-  const pendientes = [];
-  dias.forEach(d => users.filter(u => u.estado === 'activo' && u.registraIngreso && (!u.fechaIngreso || u.fechaIngreso <= d)).forEach(u => {
-    if (!lista.some(x => x.uid === u.id && x.fecha === d && x.estado !== 'anulado' && x.tipo === 'entrada')) pendientes.push({ fecha: d, uid: u.id, legajo: u.legajo, nombre: u.nombre });
-  }));
+  pendientes.sort((a, b) => b.fecha.localeCompare(a.fecha) || a.nombre.localeCompare(b.nombre));
   return { desde: desde, hasta: hasta, lista: lista.sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora)),
-    correcciones: corr.filter(c => c.estado === 'pendiente' || (c.fecha >= desde && c.fecha <= hasta)), pendientes: pendientes,
-    jornadas: listaJ, sinSalida: listaJ.filter(j => j.sinSalida) };
+    correcciones: corr.filter(c => c.estado === 'pendiente' || (c.fecha >= desde && c.fecha <= hasta)), pendientes: pendientes, deVacaciones: deVacaciones,
+    jornadas: listaJ, sinSalida: listaJ.filter(j => j.sinSalida), incompletos: listaJ.filter(j => j.incompleto) };
 }
 function fotoIngreso(token, id) {
   const s = sesion_(token, 'ingresos');
@@ -726,16 +1251,25 @@ function resolverCorreccion(token, id, aprobar, comentario) {
     const c = tAll_('Correcciones').find(x => x.id === id); if (!c) throw new Error('Solicitud no encontrada.');
     if (c.estado !== 'pendiente') throw new Error('La solicitud ya fue resuelta.');
     if (c.uid === s.user.id) throw new Error('No podés aprobar tu propia corrección.');
-    c.estado = aprobar ? 'aprobada' : 'rechazada'; c.resueltoPor = s.user.nombre; c.resuelto = new Date().toISOString(); c.comentario = txt_(comentario, 300);
+    const coment = txt_(comentario, 300);
+    if (!aprobar && coment.length < 3) throw new Error('Para rechazar tenés que escribir el motivo: la persona lo va a ver.');
+    c.estado = aprobar ? 'aprobada' : 'rechazada'; c.resueltoPor = s.user.nombre; c.resuelto = new Date().toISOString(); c.comentario = coment;
     tUpd_('Correcciones', 'id', c.id, c);
-    if (aprobar) {
+    if (aprobar && c.clase === 'manual') {
+      // 3.4 · Fichaje manual aprobado: se registra con la hora del servidor del momento en que se pidió (no la de la aprobación).
+      const u = usuarios_().find(x => x.id === c.uid) || {};
+      tAdd_('Ingresos', { id: nuevoId_(c.tipo === 'salida' ? 'O' : 'I'), tipo: c.tipo, uid: c.uid, legajo: c.legajo, nombre: c.nombre, sucursal: c.sucursal || sucDe_(u), fecha: c.fecha,
+        hora: c.horaSolicitada || (c.horaPropuesta + ':00'), ts: c.creado, estado: 'valido', origen: 'manual', modo: 'manual', manualId: c.id, aprobadoPor: s.user.nombre,
+        geoResultado: c.geoMotivo || 'no_disponible', geo: c.geo || null, latitud: c.geo ? c.geo.lat : '', longitud: c.geo ? c.geo.lng : '', precision: c.geo ? c.geo.acc : '', distancia: c.distancia,
+        tieneFoto: false, creado: new Date().toISOString() });
+    } else if (aprobar) {
       const ings = tAll_('Ingresos');
       const ing = c.ingresoId ? ings.find(x => x.id === c.ingresoId) : null;
       if (ing) { ing.horaCorregida = c.horaPropuesta; ing.correccionId = c.id; ing.estado = 'corregido'; tUpd_('Ingresos', 'id', ing.id, ing); }
       else tAdd_('Ingresos', { id: nuevoId_(c.tipo === 'salida' ? 'O' : 'I'), tipo: c.tipo || 'entrada', uid: c.uid, legajo: c.legajo, nombre: c.nombre, fecha: c.fecha, hora: '', horaCorregida: c.horaPropuesta,
         estado: 'corregido', origen: 'correccion', correccionId: c.id, geoResultado: 'no_aplica', tieneFoto: false, creado: new Date().toISOString() });
     }
-    log_(s, 'resolucion_correccion', c.estado, c.id, (c.tipo || 'entrada') + ' · ' + c.nombre + ' ' + c.fecha + ' ' + (c.horaOriginal || 'sin registro') + ' → ' + c.horaPropuesta);
+    log_(s, c.clase === 'manual' ? 'resolucion_fichaje_manual' : 'resolucion_correccion', c.estado, c.id, (c.tipo || 'entrada') + ' · ' + c.nombre + ' ' + c.fecha + ' ' + (c.clase === 'manual' ? (c.horaSolicitada || c.horaPropuesta) + ' (manual)' : (c.horaOriginal || 'sin registro') + ' → ' + c.horaPropuesta) + (c.comentario ? ' · ' + c.comentario : ''));
     return c;
   });
 }
@@ -745,7 +1279,7 @@ function observarIngreso(token, id, obs, marcar) {
     const r = tAll_('Ingresos').find(x => x.id === id); if (!r) throw new Error('Registro no encontrado.');
     r.observacion = txt_(obs, 300);
     if (['valido', 'revisar', 'anulado'].indexOf(marcar) >= 0 && marcar !== r.estado) {
-      if (marcar === 'anulado') sesion_(token, 'ingresos', true);
+      if (marcar === 'anulado') { sesion_(token, 'ingresos', true); if (txt_(obs, 300).length < 5) throw new Error('Para anular un fichaje escribí el motivo en la observación: queda registrado.'); }
       r.estadoAnterior = r.estado; r.estado = marcar;
     }
     r.revisadoPor = s.user.nombre; r.revisado = new Date().toISOString();
@@ -918,6 +1452,172 @@ function actualizarAccion(token, id, estadoN, nota, foto) {
   });
 }
 
+/* =================== 3.3 · Feriados de Argentina ===================
+ * Se descargan solos (año actual y siguiente) de una API pública sin clave; si una fuente falla se prueba la siguiente.
+ * Se guardan en la hoja "Feriados" junto con las excepciones manuales (feriados de CABA, inventario, eventos).
+ * Regla: NUNCA se asume que el local cerró en un feriado. Un día de apertura feriado sin caja queda "a confirmar";
+ * un jefe marca "Estuvo cerrado" (se excluye de todos los cálculos) o "Abrió" (queda como cierre pendiente de carga).
+ */
+const FERIADOS_DIAS_REFRESCO = 7;
+const dow_ = d => new Date(d + 'T12:00:00Z').getUTCDay();
+function sumarDias_(f, n) { const d = new Date(f + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function feriados_() { return tAll_('Feriados').filter(f => fechaOk_(f.fecha)).sort((a, b) => a.fecha.localeCompare(b.fecha)); }
+function feriadosSync_() { try { return JSON.parse(PROPS.getProperty('FERIADOS_SYNC') || 'null'); } catch (e) { return null; } }
+/** Busca y reemplaza una fila por condición sobre el JSON (p. ej. fecha + origen). */
+function tUpdWhere_(nombre, pred, o) {
+  delete MEMO_[nombre];
+  const filas = jsonCol_(nombre);
+  for (let i = 0; i < filas.length; i++) if (filas[i] && pred(filas[i])) {
+    const row = filaDe_(nombre, o);
+    tabla_(nombre).getRange(i + 2, 1, 1, row.length).setValues([row]);
+    return true;
+  }
+  return false;
+}
+/** Descarga los feriados del año actual y el siguiente y actualiza la hoja. Devuelve el estado (también queda en FERIADOS_SYNC). */
+function feriadosActualizar_(s) {
+  const anioHoy = Number(hoy_().slice(0, 4)), anios = [anioHoy, anioHoy + 1], intentos = [];
+  let ok = null;
+  for (let i = 0; i < FERIADOS_FUENTES.length && !ok; i++) {
+    const f = FERIADOS_FUENTES[i], lista = [];
+    try {
+      anios.forEach(y => {
+        const r = UrlFetchApp.fetch(f.url(y), { muteHttpExceptions: true, followRedirects: true, validateHttpsCertificates: true, headers: { Accept: 'application/json' } });
+        const code = r.getResponseCode();
+        if (code !== 200) throw new Error('HTTP ' + code + ' para ' + y);
+        const items = f.parse(JSON.parse(r.getContentText()), y).filter(x => x.fecha && x.fecha.slice(0, 4) === String(y) && x.nombre);
+        // Conectó pero sin datos (o muy pocos): no se borra lo guardado; se prueba la siguiente fuente.
+        if (items.length < 6) throw new Error('sin datos suficientes para ' + y + ' (' + items.length + ')');
+        items.forEach(x => lista.push(x));
+      });
+      ok = { fuente: f.id, nombre: f.nombre, lista: lista };
+      intentos.push({ fuente: f.id, ok: true, n: lista.length });
+    } catch (e) { intentos.push({ fuente: f.id, ok: false, error: String(e && e.message || e).slice(0, 160) }); }
+  }
+  const prev = feriadosSync_();
+  if (!ok) {
+    const st = { ts: new Date().toISOString(), ok: false, intentos: intentos, anios: anios, ultimaOk: prev ? (prev.ok ? prev.ts : prev.ultimaOk) || null : null,
+      fuente: prev && prev.fuente || null, nombreFuente: prev && prev.nombreFuente || null, total: feriados_().filter(f => f.origen === 'api').length,
+      error: 'No pude actualizar los feriados, usando la última lista guardada.' };
+    PROPS.setProperty('FERIADOS_SYNC', JSON.stringify(st));
+    log_(s, 'feriados_actualizacion', 'error', anios.join('-'), intentos.map(i => i.fuente + ': ' + (i.error || 'ok')).join(' · '));
+    return st;
+  }
+  let nuevos = 0, total = 0;
+  lock_(() => {
+    const actuales = feriados_(), porFecha = {};
+    actuales.filter(f => f.origen === 'api').forEach(f => { porFecha[f.fecha] = f; });
+    const ts = new Date().toISOString(), vistos = {}, api = [];
+    ok.lista.forEach(x => {
+      if (vistos[x.fecha]) return; vistos[x.fecha] = 1;
+      const p = porFecha[x.fecha]; if (!p) nuevos++;
+      // Se conserva la confirmación que hizo un jefe (cerrado/abrió) sobre un feriado que sigue existiendo.
+      api.push({ fecha: x.fecha, nombre: x.nombre, tipo: x.tipo, origen: 'api', fuente: ok.fuente, palermo: p ? (p.palermo || '') : '',
+        confirmadoPor: p ? (p.confirmadoPor || '') : '', confirmado: p ? (p.confirmado || '') : '', actualizado: ts });
+    });
+    const otrosAnios = actuales.filter(f => f.origen === 'api' && anios.indexOf(Number(f.fecha.slice(0, 4))) < 0);   // años anteriores: se conservan
+    const manuales = actuales.filter(f => f.origen === 'manual');                                                     // excepciones: nunca se borran
+    const todo = otrosAnios.concat(api).concat(manuales).sort((a, b) => a.fecha.localeCompare(b.fecha));
+    total = todo.length;
+    tReplace_('Feriados', todo);
+  });
+  const st = { ts: new Date().toISOString(), ok: true, fuente: ok.fuente, nombreFuente: ok.nombre, anios: anios, total: ok.lista.length, nuevos: nuevos, intentos: intentos, ultimaOk: new Date().toISOString() };
+  PROPS.setProperty('FERIADOS_SYNC', JSON.stringify(st));
+  log_(s, 'feriados_actualizacion', 'ok', anios.join('-'), ok.nombre + ' · ' + ok.lista.length + ' feriados · ' + nuevos + ' nuevos');
+  return st;
+}
+/** Respaldo del activador semanal: si la última lectura correcta tiene más de 7 días, actualiza (nunca en llamadas rápidas). */
+function autoFeriados_() {
+  const st = feriadosSync_();
+  const ult = st && (st.ok ? st.ts : st.ultimaOk);
+  if (ult && Date.now() - new Date(ult).getTime() < FERIADOS_DIAS_REFRESCO * 86400000) return;
+  if (st && !st.ok && Date.now() - new Date(st.ts).getTime() < 6 * 3600000) return;   // acaba de fallar: no reintentar en cada pedido
+  try { feriadosActualizar_(null); } catch (e) {}
+}
+/** Activador semanal (lo crea instalarActivadores): refresca los feriados. */
+function feriadosSemanal() { return feriadosActualizar_(null); }
+/** Ejecutar UNA vez desde el editor de Apps Script: crea el activador semanal (si no existe) y hace la primera descarga. */
+function instalarActivadores() {
+  const hay = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'feriadosSemanal');
+  if (!hay) ScriptApp.newTrigger('feriadosSemanal').timeBased().everyWeeks(1).onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(6).create();
+  const st = feriadosActualizar_(null);
+  console.log((hay ? 'El activador semanal ya existía.' : 'Activador semanal creado (lunes, 6 h).') + ' FERIADOS ' + JSON.stringify(st));
+  return st;
+}
+/** Calendario del local: feriados (api) y excepciones (manual) con su estado. Las excepciones siempre significan "cerrado". */
+function calendario_(cfg) {
+  cfg = cfg || cfg_();
+  const ops = cfg.diasOperativos || [3, 4, 5, 6], map = {};
+  feriados_().forEach(f => { if (f.origen === 'manual' || !map[f.fecha]) map[f.fecha] = f; });
+  const esApertura = d => ops.indexOf(dow_(d)) >= 0;
+  return { ops: ops, map: map, esApertura: esApertura, feriado: d => map[d] || null,
+    cerrado: d => { const f = map[d]; return !!f && (f.origen === 'manual' || f.palermo === 'cerrado'); },
+    sinConfirmar: d => { const f = map[d]; return !!f && f.origen === 'api' && !f.palermo && esApertura(d); },
+    lista: Object.keys(map).sort().map(k => map[k]) };
+}
+/** Días de apertura reales: calendario configurado menos feriados confirmados cerrados y excepciones. */
+function diasAperturaEfectivos_(desde, hasta, cal) { return diasOperativosEntre_(desde, hasta, cal.ops).filter(d => !cal.cerrado(d)); }
+function feriadoInfo_(f, cal, con) {
+  return { fecha: f.fecha, nombre: f.nombre, tipo: f.tipo, origen: f.origen, palermo: f.palermo || '', confirmadoPor: f.confirmadoPor || '', confirmado: f.confirmado || '',
+    dia: NOMBRE_DIA[dow_(f.fecha)], abre: cal.esApertura(f.fecha), conCierre: !!(con && con[f.fecha]), finDeSemanaLargo: [1, 4, 5].indexOf(dow_(f.fecha)) >= 0 };
+}
+/** Panel de feriados para la app: lista, próximos 30 días en días de apertura, pendientes de confirmar y excepciones. */
+function feriadosPanel_(cfg) {
+  const cal = calendario_(cfg), hoy = hoy_(), con = {};
+  const cierres = tAll_('Cierres').filter(c => c.total > 0); cierres.forEach(c => { con[c.fecha] = 1; });
+  const desdeDatos = cierres.length ? cierres.map(c => c.fecha).sort()[0] : sumarDias_(hoy, -60), lim = sumarDias_(hoy, 30);
+  const info = f => feriadoInfo_(f, cal, con);
+  return { lista: cal.lista.map(info), sync: feriadosSync_(), diasOperativos: cal.ops,
+    proximos: cal.lista.filter(f => f.fecha >= hoy && f.fecha <= lim && cal.esApertura(f.fecha)).map(info),
+    proximos5: cal.lista.filter(f => f.fecha >= hoy && f.origen === 'api').slice(0, 5).map(info),
+    pendientes: cal.lista.filter(f => f.fecha < hoy && f.fecha >= desdeDatos && cal.sinConfirmar(f.fecha) && !con[f.fecha]).map(info),
+    excepciones: cal.lista.filter(f => f.origen === 'manual').map(info) };
+}
+function getFeriados(token) {
+  const s = sesion_(token);
+  if (!['cierre', 'kpi', 'config', 'vacaciones'].some(p => s.perms.indexOf(p) >= 0)) throw new Error('PERM');
+  autoFeriados_();
+  return feriadosPanel_(cfg_());
+}
+/** Un jefe confirma qué pasó en un feriado que cae en día de apertura: 'cerrado', 'abierto' o '' (deshacer). */
+function confirmarFeriado(token, fecha, estadoN) {
+  const s = sesion_(token, 'cierre');
+  fecha = fechaOk_(fecha); if (!fecha) throw new Error('Fecha inválida.');
+  if (['cerrado', 'abierto', ''].indexOf(estadoN) < 0) throw new Error('Estado inválido.');
+  if (fecha > hoy_()) throw new Error('Ese feriado todavía no pasó: se confirma después del día.');
+  return lock_(() => {
+    const f = feriados_().find(x => x.fecha === fecha && x.origen === 'api'); if (!f) throw new Error('Ese día no figura como feriado nacional.');
+    f.palermo = estadoN; f.confirmadoPor = estadoN ? s.user.nombre + ' (' + s.user.legajo + ')' : ''; f.confirmado = estadoN ? new Date().toISOString() : ''; f.actualizado = new Date().toISOString();
+    tUpdWhere_('Feriados', x => x.fecha === fecha && x.origen === 'api', f);
+    log_(s, 'feriado_confirmado', estadoN || 'sin_confirmar', fecha, f.nombre + ' → ' + (estadoN === 'cerrado' ? 'Palermo estuvo cerrado' : estadoN === 'abierto' ? 'Palermo abrió (cierre pendiente de carga)' : 'sin confirmar'));
+    return feriadosPanel_(cfg_());
+  });
+}
+/** Excepción manual (administración): feriado de CABA, inventario, evento. Significa local cerrado ese día. */
+function agregarExcepcion(token, fecha, motivo) {
+  const s = sesion_(token, 'config', true);
+  fecha = fechaOk_(fecha); motivo = txt_(motivo, 80);
+  if (!fecha || !motivo) throw new Error('Completá la fecha y el motivo.');
+  return lock_(() => {
+    if (feriados_().some(x => x.fecha === fecha && x.origen === 'manual')) throw new Error('Ya hay una excepción para esa fecha.');
+    tAdd_('Feriados', { fecha: fecha, nombre: motivo, tipo: 'excepción', origen: 'manual', fuente: 'manual', palermo: 'cerrado', confirmadoPor: s.user.nombre + ' (' + s.user.legajo + ')', confirmado: new Date().toISOString(), actualizado: new Date().toISOString() });
+    log_(s, 'excepcion_calendario', 'agregada', fecha, motivo);
+    return feriadosPanel_(cfg_());
+  });
+}
+function quitarExcepcion(token, fecha) {
+  const s = sesion_(token, 'config', true);
+  fecha = fechaOk_(fecha); if (!fecha) throw new Error('Fecha inválida.');
+  return lock_(() => {
+    const todos = feriados_(), resto = todos.filter(x => !(x.fecha === fecha && x.origen === 'manual'));
+    if (resto.length === todos.length) throw new Error('No hay una excepción en esa fecha.');
+    tReplace_('Feriados', resto);
+    log_(s, 'excepcion_calendario', 'quitada', fecha, '');
+    return feriadosPanel_(cfg_());
+  });
+}
+function actualizarFeriados(token) { const s = sesion_(token, 'config'); feriadosActualizar_(s); return feriadosPanel_(cfg_()); }
+
 /* =================== Cierre diario (SOLO LECTURA de la planilla) =================== */
 function xmlTexto_(s) { return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (m, n) => String.fromCharCode(n)).replace(/&amp;/g, '&'); }
 function leerXlsx_(blob) {
@@ -960,15 +1660,29 @@ function diaDeEtiqueta_(s) {
   const k = String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '').slice(0, 3);
   return Object.prototype.hasOwnProperty.call(DIAS_ABR, k) ? DIAS_ABR[k] : null;
 }
+/** 3.3: columnas con fecha de una hoja (fila 4 = día de la semana o fila 5 = fecha), en orden. Lee todas las semanas que haya
+ *  (4, 5 o más bloques), no solo las 4 primeras; se excluyen SUBTOTAL y TOTAL. */
+function columnasFecha_(c) {
+  const cols = {};
+  Object.keys(c).forEach(ref => {
+    const m = /^([A-Z]+)([45])$/.exec(ref); if (!m || m[1] === 'A') return;
+    const v = c[ref];
+    if (m[2] === '4') { if (diaDeEtiqueta_(v) != null && !/subtotal|total/i.test(String(v))) cols[m[1]] = 1; }
+    else if (typeof v === 'number' || /^\s*\d{1,2}\s*[-\/.]\s*\d{1,2}/.test(String(v))) cols[m[1]] = 1;
+  });
+  Object.keys(cols).forEach(col => { if (/subtotal|total/i.test(String(c[col + '4'] || ''))) delete cols[col]; });
+  return Object.keys(cols).sort((a, b) => a.length - b.length || a.localeCompare(b));
+}
 function parsearCierres_(hojas) {
-  const out = [], errores = [], sinFecha = [];
-  const COLS = ['B', 'C', 'D', 'E', 'G', 'H', 'I', 'J', 'L', 'M', 'N', 'O', 'Q', 'R', 'S', 'T'];
+  const out = [], errores = [], avisos = [], sinFecha = [];   // errores: hay que corregir la planilla · avisos: informativos (se importa igual)
   hojas.forEach(h => {
     const c = h.celdas;
     const etiq = String(c.E2 || c.A1 || '');
     const anio = Number((etiq.match(/(20\d{2})/) || String(c.A1 || '').match(/(20\d{2})/) || [])[1]);
     const mesHoja = MESES.indexOf(String(h.nombre).trim().toLowerCase()) + 1;
     if (!(String(c.A6 || '').toUpperCase().indexOf('TARJETA') >= 0)) { errores.push('Hoja "' + h.nombre + '": no tiene el formato esperado (fila 6 = TARJETAS).'); return; }
+    const COLS = columnasFecha_(c), fechasHoja = {};
+    if (COLS.length > 16) avisos.push('Hoja "' + h.nombre + '": tiene ' + (COLS.length / 4) + ' semanas (' + COLS.length + ' columnas con fecha); se leen todas.');
     COLS.forEach(col => {
       const vt = c[col + '6'], vtr = c[col + '7'], ve = c[col + '8'], f = c[col + '5'];
       const hayValores = [vt, vtr, ve].some(v => v != null && v !== '');
@@ -980,7 +1694,11 @@ function parsearCierres_(hojas) {
       if (typeof f === 'number') { const d = new Date(Math.round((f - 25569) * 86400000)); dia = d.getUTCDate(); mes = d.getUTCMonth() + 1; }
       else { const m = String(f).match(/^\s*(\d{1,2})\s*[-\/.]\s*(\d{1,2})/); if (!m) { errores.push('Hoja "' + h.nombre + '" columna ' + col + ': fecha ilegible "' + String(f).slice(0, 12) + '".'); return; } dia = Number(m[1]); mes = Number(m[2]); }
       let y = anio || Number(hoy_().slice(0, 4));
-      if (mesHoja && mes !== mesHoja) errores.push('Hoja "' + h.nombre + '" columna ' + col + ': la fecha ' + dia + '/' + mes + ' no corresponde al mes de la hoja.');
+      if (mesHoja && mes !== mesHoja) avisos.push('Hoja "' + h.nombre + '" columna ' + col + ': la fecha ' + dia + '/' + mes + ' está en la hoja de otro mes; se importa con su fecha real.');
+      // 3.3: una semana copiada sin actualizar las fechas (p. ej. 5.ª semana con las mismas fechas que la 4.ª) se avisa aunque no tenga importes.
+      const kf = dia + '/' + mes;
+      if (fechasHoja[kf] && !hayValores) errores.push('Hoja "' + h.nombre + '" columna ' + col + ': la fecha ' + kf + ' se repite (ya está en la columna ' + fechasHoja[kf] + '); si es la semana siguiente, corregí las fechas antes de cargar importes.');
+      if (!fechasHoja[kf]) fechasHoja[kf] = col;
       if (!hayValores) return;
       const num = v => { if (v == null || v === '') return 0; const n = typeof v === 'number' ? v : Number(String(v).replace(/\./g, '').replace(',', '.')); return isFinite(n) && n >= 0 ? n : NaN; };
       const t = num(vt), tr = num(vtr), e = num(ve);
@@ -990,7 +1708,9 @@ function parsearCierres_(hojas) {
       const dsem = new Date(fecha + 'T12:00:00Z').getUTCDay(), dEtiq = diaDeEtiqueta_(c[col + '4']);
       if (isNaN(dsem)) { errores.push('Hoja "' + h.nombre + '" columna ' + col + ': fecha inválida.'); return; }
       if (dEtiq != null && dEtiq !== dsem) errores.push('Hoja "' + h.nombre + '" columna ' + col + ': la fecha ' + fecha.split('-').reverse().join('/') + ' no cae ' + c[col + '4'] + '.');
-      out.push({ fecha: fecha, tarjetas: t, transferencia: tr, efectivo: e, total: Math.round((t + tr + e) * 100) / 100, hoja: h.nombre, columna: col });
+      const total = Math.round((t + tr + e) * 100) / 100;
+      // 3.3: un día con importes cargados en $0 es un día CARGADO sin ventas (o feriado): no es un cierre pendiente.
+      out.push({ fecha: fecha, tarjetas: t, transferencia: tr, efectivo: e, total: total, enCero: total === 0, hoja: h.nombre, columna: col });
     });
   });
   // Importes sin fecha que coinciden exactamente con un día fechado (posible doble carga)
@@ -998,7 +1718,7 @@ function parsearCierres_(hojas) {
     const igual = out.find(o => o.tarjetas === s.t && o.transferencia === s.tr && o.efectivo === s.e && (s.t + s.tr + s.e) > 0);
     if (igual) errores.push('Hoja "' + s.hoja + '" columna ' + s.columna + ': los importes sin fecha son idénticos a los del ' + igual.fecha.split('-').reverse().join('/') + ' (posible doble carga).');
   });
-  return { cierres: out, errores: errores };
+  return { cierres: out, errores: errores, avisos: avisos };
 }
 function sincronizarCierre(token) { return sync_(sesion_(token, 'cierre')); }
 /** Sincroniza sola si la última lectura tiene más de 6 h (se registra como "sistema"). */
@@ -1037,46 +1757,59 @@ function sync_(s) {
     });
   });
   const st = { ts: new Date().toISOString(), ok: true, archivo: file.getName(), modificado: file.getLastUpdated().toISOString(),
-    dias: Object.keys(porFecha).length, nuevos: nuevos, cambiados: cambiados, errores: res.errores.slice(0, 40) };
+    dias: Object.keys(porFecha).length, nuevos: nuevos, cambiados: cambiados, errores: res.errores.slice(0, 40), avisos: (res.avisos || []).slice(0, 40) };
   PROPS.setProperty('CIERRE_SYNC', JSON.stringify(st));
   log_(s, 'sync_cierre', res.errores.length ? 'con_alertas' : 'ok', file.getId(), st.dias + ' días · ' + nuevos + ' nuevos · ' + cambiados + ' cambiados · ' + res.errores.length + ' alertas');
   return st;
 }
-function alertasCierre_(cierres, desde, hasta) {
+function alertasCierre_(cierres, desde, hasta, cal) {
   const cfg = cfg_(), users = usuarios_(), ing = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta && x.estado !== 'anulado' && tipoDe_(x) === 'entrada');
+  cal = cal || calendario_(cfg);
+  const vac = deVacaciones_();
   const alertas = [], porFecha = {};
   cierres.forEach(c => { porFecha[c.fecha] = c; });
   diasOperativosEntre_(desde, hasta, cfg.diasOperativos).filter(d => d < hoy_()).forEach(d => {
-    const c = porFecha[d], delDia = ing.filter(x => x.fecha === d);
-    if (!c) alertas.push({ fecha: d, tipo: 'cierre_pendiente', detalle: 'Día de apertura sin cierre cargado en la planilla.' });
+    const c = porFecha[d], delDia = ing.filter(x => x.fecha === d), f = cal.feriado(d);
+    // "Sin caja": no hay fila cargada, o está en $0 y es feriado sin confirmar que abrió. Un $0 en un día común es un día cargado sin ventas.
+    const sinCaja = !c || (c.total === 0 && f && f.palermo !== 'abierto');
+    if (sinCaja && cal.cerrado(d)) return;   // feriado confirmado cerrado o excepción: no es un cierre pendiente
+    if (sinCaja && cal.sinConfirmar(d)) alertas.push({ fecha: d, tipo: 'feriado_confirmar', detalle: 'Feriado (' + f.nombre + '): confirmar si Palermo abrió. No se cuenta como cierre pendiente hasta confirmarlo.', feriado: f.nombre });
+    else if (!c) alertas.push({ fecha: d, tipo: 'cierre_pendiente', detalle: 'Día de apertura sin cierre cargado en la planilla.' + (f ? ' Feriado (' + f.nombre + ') confirmado como abierto.' : '') });
+    else if (c.total === 0) alertas.push({ fecha: d, tipo: 'cierre_en_cero', detalle: 'Cargado en $ 0: día sin ventas' + (f ? ' (feriado ' + f.nombre + ', confirmado abierto)' : '') + '. Si el local no abrió, marcalo como excepción en Configuración para excluirlo del promedio.' });
     if (c && c.total > 0) {
-      users.filter(u => u.estado === 'activo' && u.registraIngreso && (!u.fechaIngreso || u.fechaIngreso <= d)).forEach(u => {
+      users.filter(u => u.estado === 'activo' && u.registraIngreso && normSuc_(sucDe_(u)) === 'palermo' && (!u.fechaIngreso || u.fechaIngreso <= d) && !vac(u.id, d)).forEach(u => {   // 3.3: de vacaciones no es falta · 3.4: la caja es de Palermo
         if (!delDia.some(x => x.uid === u.id)) alertas.push({ fecha: d, tipo: 'falta_ingreso', detalle: 'Hay cierre de ventas pero no hay ingreso registrado de ' + u.nombre + '.' });
       });
     }
     if (!c && delDia.length) alertas.push({ fecha: d, tipo: 'ingresos_sin_cierre', detalle: delDia.length + ' ingreso(s) registrado(s) y ningún cierre en la planilla.' });
   });
-  const cuenta = {}; ing.forEach(x => { const k = x.uid + x.fecha; cuenta[k] = (cuenta[k] || 0) + 1; });
-  Object.keys(cuenta).filter(k => cuenta[k] > 1).forEach(k => { const x = ing.find(i => i.uid + i.fecha === k); alertas.push({ fecha: x.fecha, tipo: 'ingreso_duplicado', detalle: 'Más de un ingreso de ' + x.nombre + '.' }); });
+  // 3.4: varias entradas en el día son válidas si alternan con salidas; se alerta solo la secuencia rota (dos entradas seguidas).
+  const todos = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta && vivo_(x)), grupos = {};
+  todos.forEach(x => { const k = x.uid + '|' + x.fecha; (grupos[k] = grupos[k] || []).push(x); });
+  Object.keys(grupos).forEach(k => { const L = grupos[k]; if (pares_(L, L[0].fecha, hoy_()).incoherente) alertas.push({ fecha: L[0].fecha, tipo: 'ingreso_duplicado', detalle: 'Fichajes de ' + L[0].nombre + ' con la secuencia entrada/salida rota (revisar).' }); });
   ing.forEach(x => { const u = users.find(v => v.id === x.uid); if (u && u.estado !== 'activo' && u.fechaBaja && x.fecha > u.fechaBaja) alertas.push({ fecha: x.fecha, tipo: 'empleado_inactivo', detalle: 'Ingreso de ' + x.nombre + ' posterior a su baja.' }); });
   return alertas.sort((a, b) => b.fecha.localeCompare(a.fecha));
 }
 function getCierre(token, desde, hasta) {
   sesion_(token, 'cierre');
-  autoSync_();
+  autoSync_(); autoFeriados_();
   hasta = fechaOk_(hasta) || hoy_(); desde = fechaOk_(desde) || (hasta.slice(0, 8) + '01');
-  const cierres = tAll_('Cierres').filter(c => c.fecha >= desde && c.fecha <= hasta).sort((a, b) => a.fecha.localeCompare(b.fecha));
-  return { desde: desde, hasta: hasta, cierres: cierres, sync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), alertas: alertasCierre_(cierres, desde, hasta) };
+  const cfg = cfg_(), cal = calendario_(cfg);
+  // Cada cierre lleva su contexto de calendario: feriado (🎉) y venta en día no habitual (se cuenta igual, pero se marca).
+  const cierres = tAll_('Cierres').filter(c => c.fecha >= desde && c.fecha <= hasta).sort((a, b) => a.fecha.localeCompare(b.fecha))
+    .map(c => { const f = cal.feriado(c.fecha); return Object.assign({}, c, { feriado: f ? f.nombre : '', noHabitual: !cal.esApertura(c.fecha) }); });
+  const feriados = {}; cal.lista.filter(f => f.fecha >= desde && f.fecha <= hasta).forEach(f => { feriados[f.fecha] = feriadoInfo_(f, cal, null); });
+  return { desde: desde, hasta: hasta, cierres: cierres, sync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), alertas: alertasCierre_(cierres, desde, hasta, cal), feriados: feriados };
 }
 
 /* =================== KPIs (datos reales, agregados en el servidor) =================== */
 function getKPIs(token, desde, hasta) {
   const s = sesion_(token, 'kpi');
-  autoSync_();
+  autoSync_(); autoFeriados_();
   hasta = fechaOk_(hasta) || hoy_(); desde = fechaOk_(desde) || '2000-01-01';
-  const audN = leerAud_().filter(a => a.fecha >= desde && a.fecha <= hasta).length;
+  const auds = leerAud_(), audN = auds.filter(a => a.fecha >= desde && a.fecha <= hasta).length;
   const acc = tAll_('Acciones');
-  const hoy = hoy_();
+  const hoy = hoy_(), cfg = cfg_(), cal = calendario_(cfg);
   const todasF = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta);
   const ing = todasF.filter(x => tipoDe_(x) === 'entrada');
   const sal = todasF.filter(x => tipoDe_(x) === 'salida' && vivo_(x));
@@ -1084,12 +1817,20 @@ function getKPIs(token, desde, hasta) {
   const porDia = {}; ing.filter(x => x.estado !== 'anulado').forEach(x => { porDia[x.fecha] = (porDia[x.fecha] || 0) + 1; });
   const cierres = tAll_('Cierres').filter(c => c.fecha >= desde && c.fecha <= hasta).sort((a, b) => a.fecha.localeCompare(b.fecha));
   const desdeCierre = cierres.length ? cierres[0].fecha : (desde > '2000-01-01' ? desde : hasta.slice(0, 8) + '01');
-  const alertas = alertasCierre_(cierres, desdeCierre, hasta);
+  const alertas = alertasCierre_(cierres, desdeCierre, hasta, cal);
+  const sync = JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null');
+  const comercial = kpiComercial_(tAll_('Cierres'), cfg, hasta, sync, cal);
+  const accionesK = { abiertas: acc.filter(a => a.estado === 'abierta' || a.estado === 'en_curso').length,
+    vencidas: acc.filter(a => (a.estado === 'abierta' || a.estado === 'en_curso') && a.vence && a.vence < hoy).length,
+    resueltas: acc.filter(a => a.estado === 'resuelta').length, total: acc.length };
+  const auditoria = kpiAuditoria_(auds, acc, params_(), hoy);
+  const feriados = feriadosPanel_(cfg);
+  const pendientes = alertas.filter(a => a.tipo === 'cierre_pendiente').map(a => a.fecha).sort();
+  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy });
   return {
     desde: desde, hasta: hasta, auditoriasN: audN, params: params_(),
-    acciones: { abiertas: acc.filter(a => a.estado === 'abierta' || a.estado === 'en_curso').length,
-      vencidas: acc.filter(a => (a.estado === 'abierta' || a.estado === 'en_curso') && a.vence && a.vence < hoy).length,
-      resueltas: acc.filter(a => a.estado === 'resuelta').length, total: acc.length },
+    acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio,
+    cierresPendientes: pendientes, feriadosPendientes: alertas.filter(a => a.tipo === 'feriado_confirmar').map(a => a.fecha).sort(),
     ingresos: { total: ing.filter(x => x.estado !== 'anulado').length, revisar: ing.filter(x => x.estado === 'revisar').length,
       validos: ing.filter(x => x.estado === 'valido').length, corregidos: ing.filter(x => x.estado === 'corregido').length,
       fuera: ing.filter(x => x.geoResultado === 'fuera').length, sinUbicacion: ing.filter(x => ['sin_permiso', 'no_disponible', 'tiempo_agotado'].indexOf(x.geoResultado) >= 0).length,
@@ -1097,10 +1838,40 @@ function getKPIs(token, desde, hasta) {
       sinSalida: ing.filter(e => vivo_(e) && e.fecha < hoy && !sal.some(o => o.uid === e.uid && o.fecha === e.fecha)).length,
       minutosPromedio: (() => { const m = sal.map(o => o.minutos).filter(v => v != null); return m.length ? Math.round(m.reduce((a, b) => a + b, 0) / m.length) : null; })() },
     cierres: cierres.map(c => ({ fecha: c.fecha, tarjetas: c.tarjetas, transferencia: c.transferencia, efectivo: c.efectivo, total: c.total })),
-    cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'),
-    comercial: kpiComercial_(tAll_('Cierres'), cfg_(), hasta, JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null')),
-    alertas: { cierrePendiente: alertas.filter(a => a.tipo === 'cierre_pendiente').length, total: alertas.length, faltaIngreso: alertas.filter(a => a.tipo === 'falta_ingreso').length }
+    cierreSync: sync,
+    comercial: comercial,
+    alertas: { cierrePendiente: pendientes.length, total: alertas.length, faltaIngreso: alertas.filter(a => a.tipo === 'falta_ingreso').length, feriadoConfirmar: alertas.filter(a => a.tipo === 'feriado_confirmar').length }
   };
+}
+
+/* =================== 3.3 · Indicadores de auditoría (para el audio y el panel) =================== */
+function kpiAuditoria_(auds, acc, p, hoy) {
+  const L = auds.slice().sort((a, b) => (a.fecha + (a.creado || '')).localeCompare(b.fecha + (b.creado || '')));
+  const abiertas = acc.filter(a => a.estado === 'abierta' || a.estado === 'en_curso'), vencidas = abiertas.filter(a => a.vence && a.vence < hoy);
+  const out = { auditorias: L.length, ultima: null, anterior: null, puntoDebil: null, infraccionTop: null, pedidosFuera: 0, tendencia: null,
+    accionesAbiertas: abiertas.length, accionesVencidas: vencidas.length, recomendaciones: [], diferenciasCaja: 'sin_datos' };
+  if (!L.length) { out.recomendaciones.push({ prioridad: 1, queEstaPasando: 'Todavía no hay auditorías cargadas.', accion: 'Hacer la primera auditoría del local desde la app para tener una línea de base.' }); return out; }
+  const u = L[L.length - 1], a = L[L.length - 2] || null;
+  out.ultima = { fecha: u.fecha, promedio: u.promedio, resultado: u.resultado, auditor: u.auditor };
+  if (a) { out.anterior = { fecha: a.fecha, promedio: a.promedio, resultado: a.resultado }; out.tendencia = u.promedio > a.promedio ? 'mejora' : u.promedio < a.promedio ? 'empeora' : 'igual'; }
+  const rec90 = L.filter(x => x.fecha >= sumarDias_(hoy, -90)); const base = rec90.length ? rec90 : L.slice(-5);
+  const prom = {}; PUNTOS.forEach(x => { const v = base.map(b => b.puntajes && b.puntajes[x[0]]).filter(Boolean); prom[x[0]] = v.length ? v.reduce((s, y) => s + y, 0) / v.length : null; });
+  const deb = PUNTOS.filter(x => prom[x[0]] != null).sort((x, y) => prom[x[0]] - prom[y[0]])[0];
+  if (deb) out.puntoDebil = { punto: deb[1], promedio: r2_(prom[deb[0]]) };
+  const inf = PUNTOS.map(x => ({ punto: x[2], total: base.reduce((s, b) => s + ((b.infracciones || {})[x[0]] || 0), 0) })).sort((x, y) => y.total - x.total);
+  if (inf[0] && inf[0].total) out.infraccionTop = inf[0];
+  out.pedidosFuera = base.filter(b => b.diasPedido != null && b.diasPedido > p.diasMax).length;
+  // Recomendaciones: primero qué está pasando (hecho), después la acción. Sin conclusiones sobre el desempeño del personal.
+  const R = out.recomendaciones;
+  if (vencidas.length) R.push({ prioridad: 1, queEstaPasando: vencidas.length + ' acción(es) correctiva(s) vencida(s) sin resolver' + (vencidas[0] ? ' (la más antigua: ' + vencidas[0].descripcion.slice(0, 60) + ')' : '') + '.', accion: 'Revisar esas acciones con el local esta semana y cerrarlas con evidencia o fijar una nueva fecha.' });
+  if (out.pedidosFuera) R.push({ prioridad: 1, queEstaPasando: out.pedidosFuera + ' auditoría(s) reciente(s) con pedidos de más de ' + p.diasMax + ' días sin retirar.', accion: 'Pedir aviso diario de pedidos pendientes y confirmar el retiro en la próxima visita.' });
+  if (out.infraccionTop) R.push({ prioridad: 2, queEstaPasando: 'La infracción más frecuente en las últimas auditorías es «' + out.infraccionTop.punto + '» (' + out.infraccionTop.total + ').', accion: 'Atacar primero ese punto: definir un responsable en el local y revisarlo en la próxima auditoría.' });
+  if (out.puntoDebil && out.puntoDebil.promedio < p.promExc) R.push({ prioridad: 2, queEstaPasando: 'El punto más débil es «' + out.puntoDebil.punto + '» con ' + String(out.puntoDebil.promedio).replace('.', ',') + ' sobre 5.', accion: 'Subirlo a ' + String(p.promExc).replace('.', ',') + ': acordar con el local qué se corrige y verificarlo en la próxima visita.' });
+  if (out.tendencia === 'empeora') R.push({ prioridad: 3, queEstaPasando: 'La última auditoría bajó respecto de la anterior (' + String(a.promedio).replace('.', ',') + ' → ' + String(u.promedio).replace('.', ',') + ').', accion: 'Hacer una visita de seguimiento antes de 7 días.' });
+  if (abiertas.length && !vencidas.length) R.push({ prioridad: 3, queEstaPasando: abiertas.length + ' acción(es) correctiva(s) abierta(s), ninguna vencida.', accion: 'Mantener el seguimiento y cerrarlas con evidencia al resolverse.' });
+  if (!R.length) R.push({ prioridad: 3, queEstaPasando: 'El local está dentro de los parámetros (última auditoría: ' + u.resultado + ').', accion: 'Mantener la frecuencia de auditoría.' });
+  R.sort((x, y) => x.prioridad - y.prioridad);
+  return out;
 }
 
 /* =================== KPIs comerciales e inteligencia de negocio ===================
@@ -1150,12 +1921,15 @@ const $_ = n => '$ ' + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g,
 const fdm_ = f => f.split('-').reverse().join('/');
 const MES_NOM = m => MESES[Number(m.slice(5, 7)) - 1] + ' ' + m.slice(0, 4);
 
-function kpiComercial_(todos, cfg, hasta, sync) {
+function kpiComercial_(todos, cfg, hasta, sync, cal) {
   hasta = hasta || hoy_();
-  const ac = Object.assign({ caidaPct: 15, mixPp: 10, minDias: 4, concentracionPct: 45 }, cfg.alertasCom || {});
-  const dias = todos.filter(c => c.fecha <= hasta && c.total > 0).sort((a, b) => a.fecha.localeCompare(b.fecha));
+  const ac = Object.assign({ caidaPct: 15, mixPp: 10, minDias: 4, concentracionPct: 45, mesBajoPct: 10 }, cfg.alertasCom || {});
+  cal = cal || calendario_(cfg);   // 3.3: feriados y excepciones
+  // 3.3: un día cargado en $0 es un día de apertura sin ventas (cuenta como cierre). Si es feriado y nadie confirmó que abrió, queda "a confirmar".
+  const cargado = c => c.total > 0 || (c.total === 0 && (!cal.feriado(c.fecha) || cal.feriado(c.fecha).palermo === 'abierto'));
+  const dias = todos.filter(c => c.fecha <= hasta && cargado(c)).sort((a, b) => a.fecha.localeCompare(b.fecha));
   const base = { definiciones: DEFINICIONES, noDisponible: NO_DISPONIBLE, actualizado: sync ? sync.ts : null, fuente: FUENTE_CIERRE };
-  if (!dias.length) return Object.assign(base, { sinDatos: true, alertas: [], recomendaciones: [] });
+  if (!dias.length) return Object.assign(base, { sinDatos: true, alertas: [], recomendaciones: [], mesBajo: null, accionesComerciales: [] });
   const ops = cfg.diasOperativos || [3, 4, 5, 6];
 
   // ---- Meses
@@ -1166,12 +1940,20 @@ function kpiComercial_(todos, cfg, hasta, sync) {
   const meses = Object.keys(porMes).sort().map(m => {
     const s = sumar_(porMes[m]);
     const fin = new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).toISOString().slice(0, 10);
-    const opMes = diasOperativosEntre_(m + '-01', fin, ops);
-    const pasados = opMes.filter(d => d < hasta || (d === hasta && porMes[m].some(c => c.fecha === d)));
     const conCierre = {}; porMes[m].forEach(c => { conCierre[c.fecha] = 1; });
-    s.mes = m; s.nombre = MES_NOM(m); s.diasOperativos = opMes.length;
-    s.diasSinCierre = pasados.filter(d => !conCierre[d]);
-    s.restantes = opMes.filter(d => d >= hasta && !conCierre[d]).length;
+    const opMes = diasOperativosEntre_(m + '-01', fin, ops);
+    // Días de apertura efectivos: sin feriados confirmados cerrados ni excepciones (un día con caja cuenta siempre, aunque esté marcado cerrado).
+    const cerrados = opMes.filter(d => cal.cerrado(d) && !conCierre[d]).map(d => ({ fecha: d, motivo: cal.feriado(d).nombre, tipo: cal.feriado(d).origen === 'manual' ? 'excepción' : 'feriado' }));
+    const opEf = opMes.filter(d => !cerrados.some(x => x.fecha === d));
+    const pasados = opEf.filter(d => d < hasta || (d === hasta && conCierre[d]));
+    s.mes = m; s.nombre = MES_NOM(m); s.diasOperativos = opEf.length; s.diasCalendario = opMes.length; s.diasCerrados = cerrados;
+    s.feriadosSinConfirmar = pasados.filter(d => !conCierre[d] && cal.sinConfirmar(d)).map(d => ({ fecha: d, nombre: cal.feriado(d).nombre }));
+    s.feriadosConVenta = porMes[m].filter(c => cal.feriado(c.fecha)).map(c => ({ fecha: c.fecha, nombre: cal.feriado(c.fecha).nombre, total: c.total }));
+    s.ventasNoHabituales = porMes[m].filter(c => !cal.esApertura(c.fecha)).map(c => ({ fecha: c.fecha, total: c.total }));
+    s.diasEnCero = porMes[m].filter(c => c.total === 0).map(c => c.fecha);
+    s.diasSinCierre = pasados.filter(d => !conCierre[d] && !cal.sinConfirmar(d));
+    s.restantes = opEf.filter(d => d >= hasta && !conCierre[d]).length;
+    s.feriadosRestantes = opEf.filter(d => d >= hasta && !conCierre[d] && cal.feriado(d)).map(d => ({ fecha: d, nombre: cal.feriado(d).nombre }));
     s.enCurso = m === mesHoy;
     s.objetivo = (cfg.objetivos || {})[m] || null;
     if (porMes[m].length) {
@@ -1182,8 +1964,16 @@ function kpiComercial_(todos, cfg, hasta, sync) {
   });
   meses.forEach((s, i) => {
     const p = meses[i - 1];
-    if (p && p.dias) s.vsAnterior = { mes: p.mes, total: p.total, deltaTotal: r2_(s.total - p.total), deltaTotalPct: pct_(s.total, p.total),
-      promDia: p.promDia, deltaPromPct: s.promDia != null ? pct_(s.promDia, p.promDia) : null };
+    if (p && p.dias) {
+      s.vsAnterior = { mes: p.mes, total: p.total, deltaTotal: r2_(s.total - p.total), deltaTotalPct: pct_(s.total, p.total),
+        promDia: p.promDia, deltaPromPct: s.promDia != null ? pct_(s.promDia, p.promDia) : null, diasOperativos: p.diasOperativos, diasCerrados: p.diasCerrados.length };
+      // La comparación dice si los feriados cambiaron la cantidad de días de apertura.
+      const notas = [];
+      if (s.diasCerrados.length) notas.push(s.nombre + ' tuvo ' + s.diasCerrados.length + ' día(s) menos de apertura por ' + s.diasCerrados.map(x => x.tipo + ' (' + fdm_(x.fecha) + ')').join(', '));
+      if (p.diasCerrados.length) notas.push(p.nombre + ' tuvo ' + p.diasCerrados.length + ' día(s) menos de apertura por ' + p.diasCerrados.map(x => x.tipo + ' (' + fdm_(x.fecha) + ')').join(', '));
+      if (s.diasOperativos !== p.diasOperativos) notas.push('Días de apertura: ' + s.diasOperativos + ' en ' + s.nombre + ' vs. ' + p.diasOperativos + ' en ' + p.nombre + '; por eso se compara el promedio por día y no el total.');
+      s.vsAnterior.notaFeriados = notas.length ? notas.join('. ') + '.' : '';
+    }
   });
 
   // ---- Semanas (lunes a domingo)
@@ -1215,10 +2005,13 @@ function kpiComercial_(todos, cfg, hasta, sync) {
     const med = cuantil_(recientes, 0.5), p25 = cuantil_(recientes, 0.25), p75 = cuantil_(recientes, 0.75);
     proyeccion = { esEstimacion: true, real: actual.total, diasRestantes: actual.restantes, base: recientes.length,
       medio: r2_(actual.total + actual.restantes * med), minimo: r2_(actual.total + actual.restantes * p25), maximo: r2_(actual.total + actual.restantes * p75),
-      supuestos: ['Abre ' + ops.map(d => NOMBRE_DIA[d]).join(', ') + ' (' + actual.restantes + ' días de apertura restantes en ' + actual.nombre + ').',
+      supuestos: ['Abre ' + ops.map(d => NOMBRE_DIA[d]).join(', ') + ' (' + actual.restantes + ' días de apertura restantes en ' + actual.nombre +
+          (actual.diasCerrados.length ? '; ya descontados ' + actual.diasCerrados.length + ' día(s) cerrado(s): ' + actual.diasCerrados.map(x => fdm_(x.fecha) + ' ' + x.motivo).join(', ') : '') + ').',
         'Cada día restante vende como la mediana de los últimos ' + recientes.length + ' días con cierre (' + $_(med) + ').',
-        'Rango: percentiles 25 y 75 de esos días. No incluye feriados, promociones ni eventos especiales.',
-        actual.diasSinCierre.length ? 'Hay ' + actual.diasSinCierre.length + ' día(s) de apertura sin cierre: si se cargan, el real sube.' : 'Todos los días de apertura pasados tienen cierre.'],
+        'Rango: percentiles 25 y 75 de esos días. No incluye promociones ni eventos especiales.',
+        actual.feriadosRestantes.length ? 'Incluye como día de apertura el feriado ' + actual.feriadosRestantes.map(x => fdm_(x.fecha) + ' (' + x.nombre + ')').join(' y ') + ': nunca se asume que el local cierra; si no abre, marcalo como cerrado y la proyección se ajusta.' : 'No quedan feriados en los días de apertura restantes.',
+        actual.diasSinCierre.length ? 'Hay ' + actual.diasSinCierre.length + ' día(s) de apertura sin cierre: si se cargan, el real sube.' : 'Todos los días de apertura pasados tienen cierre.'].concat(
+        actual.feriadosSinConfirmar.length ? ['Feriado(s) sin confirmar: ' + actual.feriadosSinConfirmar.map(x => fdm_(x.fecha)).join(', ') + '. No se cuentan como días sin cierre hasta que un jefe confirme si Palermo abrió.'] : []),
       incertidumbre: recientes.length < 12 ? 'alta' : (p75 - p25) / (med || 1) > 0.8 ? 'alta' : 'media' };
     if (actual.objetivo) {
       proyeccion.objetivo = actual.objetivo;
@@ -1230,7 +2023,16 @@ function kpiComercial_(todos, cfg, hasta, sync) {
 
   // ---- Alertas (valor observado, período comparado, motivo)
   const alertas = [];
+  const quintaSemana = meses.filter(m => m.diasOperativos > 16).map(m => m.nombre);   // regla de la 5.ª semana con días de apertura efectivos
   const ultCompleto = meses.filter(m => !m.enCurso && m.dias >= ac.minDias);
+  const feriadosPend = meses.reduce((a, m) => a.concat(m.feriadosSinConfirmar), []).filter(x => x.fecha >= dias[0].fecha);
+  if (feriadosPend.length) alertas.push({ tipo: 'feriado_confirmar', nivel: 'media', titulo: 'Feriado: confirmar si abrió',
+    observado: feriadosPend.map(x => fdm_(x.fecha) + ' (' + x.nombre + ')').join(', '), comparado: 'Días de apertura sin caja que caen en feriado', valor: feriadosPend.length,
+    motivo: 'No se asume que el local cerró. Un jefe marca «Estuvo cerrado» (se excluye de promedios y proyección) o «Abrió» (queda como cierre pendiente de carga).' });
+  const enCero = meses.reduce((a, m) => a.concat(m.diasEnCero), []);
+  if (enCero.length) alertas.push({ tipo: 'cierres_en_cero', nivel: 'media', titulo: 'Días cargados en $ 0 (sin ventas)',
+    observado: enCero.length + ' día(s): ' + enCero.slice(-6).map(fdm_).join(', ') + (enCero.length > 6 ? '…' : ''), comparado: 'Planilla: importes en 0 en tarjetas, transferencia y efectivo', valor: enCero.length,
+    motivo: 'Se toman como días de apertura sin ventas (cuentan en el promedio por día). Si el local no abrió, marcá el día como excepción en Configuración y queda excluido.' });
   const comp = (m, p) => {
     if (!m || !p || m.dias < ac.minDias || p.dias < ac.minDias) return;
     const d = pct_(m.promDia, p.promDia);
@@ -1298,7 +2100,7 @@ function kpiComercial_(todos, cfg, hasta, sync) {
     if (a.tipo === 'datos_incompletos' || a.tipo === 'inconsistencias') rec.push({ prioridad: a.tipo === 'datos_incompletos' ? 1 : 2, titulo: a.tipo === 'datos_incompletos' ? 'Completar los cierres faltantes' : 'Corregir inconsistencias de la planilla',
       diagnostico: 'Los indicadores dependen de que el cierre se cargue completo cada día.', datos: a.observado + '.',
       causa: 'Hecho: faltan datos o hay datos ambiguos. No es una conclusión sobre el desempeño del local ni del personal.',
-      accion: a.tipo === 'datos_incompletos' ? 'Cargar los días pendientes o indicar en la planilla que el local estuvo cerrado. Agregar una 5.ª semana en los meses con más de 16 días de apertura.' : 'Revisar en la planilla las celdas señaladas (' + a.motivo.slice(0, 160) + ').',
+      accion: a.tipo === 'datos_incompletos' ? 'Cargar los días pendientes o, si el local no abrió, marcarlo en la app (feriado «Estuvo cerrado» o excepción). ' + (quintaSemana.length ? 'Agregar una 5.ª semana en la planilla en ' + quintaSemana.join(', ') + ' (más de 16 días de apertura efectivos).' : 'Ningún mes supera los 16 días de apertura efectivos: no hace falta 5.ª semana.') : 'Revisar en la planilla las celdas señaladas (' + a.motivo.slice(0, 160) + ').',
       medicion: 'Cero días pendientes y cero observaciones en la próxima sincronización.' });
   });
   if (actual && actual.vsAnterior && actual.vsAnterior.deltaPromPct != null && actual.vsAnterior.deltaPromPct >= ac.caidaPct && actual.dias >= ac.minDias) rec.push({ prioridad: 3, titulo: 'Sostener la mejora',
@@ -1307,11 +2109,17 @@ function kpiComercial_(todos, cfg, hasta, sync) {
     accion: 'Registrar en Otros/Novedades qué acciones comerciales hubo este mes para poder repetirlas.', medicion: 'Que el promedio del mes próximo no baje de ' + $_(actual.vsAnterior.promDia) + '.' });
   rec.sort((a, b) => a.prioridad - b.prioridad);
 
+  // ---- 3.3 · ¿Mes bajo? y acciones comerciales (tráfico antes que precio). Considera feriados y fines de semana largos próximos.
+  const mesBajo = mesBajo_(meses, actual, proyeccion, ac, dias);
+  const proxFer = cal.lista.filter(f => f.fecha >= hasta && f.fecha <= sumarDias_(hasta, 45) && f.origen === 'api').map(f => feriadoInfo_(f, cal, null));
+  const accionesComerciales = mesBajo && mesBajo.esBajo ? accionesComerciales_(mesBajo, diaSemana, actual, proxFer) : [];
+
   // ---- Resumen ejecutivo
   const ref = actual && actual.dias ? actual : ultCompleto[ultCompleto.length - 1];
   const resumen = [];
   if (ref && ref.vsAnterior) resumen.push({ pregunta: '¿Estamos vendiendo más o menos que antes?', respuesta: ref.nombre + ': ' + $_(ref.promDia) + ' por día con cierre, ' +
-    (ref.vsAnterior.deltaPromPct >= 0 ? '+' : '') + ref.vsAnterior.deltaPromPct + '% contra ' + MES_NOM(ref.vsAnterior.mes) + ' (' + $_(ref.vsAnterior.promDia) + ').' + (ref.enCurso ? ' Mes en curso.' : '') });
+    (ref.vsAnterior.deltaPromPct >= 0 ? '+' : '') + ref.vsAnterior.deltaPromPct + '% contra ' + MES_NOM(ref.vsAnterior.mes) + ' (' + $_(ref.vsAnterior.promDia) + ').' + (ref.enCurso ? ' Mes en curso.' : '') + (ref.vsAnterior.notaFeriados ? ' ' + ref.vsAnterior.notaFeriados : '') });
+  if (mesBajo && mesBajo.esBajo != null) resumen.push({ pregunta: '¿Es un mes bajo?', respuesta: mesBajo.mensaje + (mesBajo.esBajo ? ' Ver «Acciones comerciales para Palermo».' : '') });
   if (proyeccion && proyeccion.bloqueada) resumen.push({ pregunta: '¿Cómo cerraría el mes?', respuesta: proyeccion.motivo });
   else if (proyeccion) resumen.push({ pregunta: '¿Cómo cerraría el mes?', respuesta: 'Estimación: ' + $_(proyeccion.minimo) + ' a ' + $_(proyeccion.maximo) + ' (central ' + $_(proyeccion.medio) + '), incertidumbre ' + proyeccion.incertidumbre + '.' + (proyeccion.objetivo ? ' Objetivo ' + $_(proyeccion.objetivo) + ': avance ' + proyeccion.avancePct + '%.' : ' No hay objetivo cargado para este mes.') });
   if (top) resumen.push({ pregunta: '¿Qué está impulsando las ventas?', respuesta: 'Los ' + top.nombre + ' aportan el ' + top.participacion + '% (' + $_(top.promedio) + ' de promedio). Sin detalle por producto no se puede identificar qué artículos impulsan la venta.' });
@@ -1319,7 +2127,174 @@ function kpiComercial_(todos, cfg, hasta, sync) {
 
   return Object.assign(base, { desde: dias[0].fecha, hasta: dias[dias.length - 1].fecha, diasConCierre: dias.length,
     meses: meses, semanas: semanas.slice(-16), anios: anios, diaSemana: diaSemana, proyeccion: proyeccion, alertas: alertas, recomendaciones: rec, resumen: resumen,
-    ultimos: dias.slice(-31) });
+    ultimos: dias.slice(-31).map(c => Object.assign({}, c, { feriado: cal.feriado(c.fecha) ? cal.feriado(c.fecha).nombre : '', noHabitual: !cal.esApertura(c.fecha) })),
+    mesBajo: mesBajo, accionesComerciales: accionesComerciales, quintaSemana: quintaSemana });
+}
+
+/* ---- 3.3 · Mes bajo: promedio por día de apertura (o su proyección) vs. mes anterior o promedio del año, con umbral configurable ---- */
+function mesBajo_(meses, actual, proyeccion, ac, dias) {
+  const umbral = Number(ac.mesBajoPct) || 10;
+  let m = actual && actual.dias >= ac.minDias ? actual : null, aclaracion = '';
+  if (!m) { const comp = meses.filter(x => !x.enCurso && x.dias >= ac.minDias); m = comp[comp.length - 1] || null;
+    if (actual) aclaracion = 'Todavía no hay suficientes días con cierre en ' + actual.nombre + ' (' + actual.dias + ' de un mínimo de ' + ac.minDias + '); se evalúa ' + (m ? m.nombre : 'ningún mes') + '.'; }
+  if (!m) return { esBajo: null, umbralPct: umbral, mensaje: 'Sin datos suficientes para evaluar un mes.', aclaracion: aclaracion };
+  const idx = meses.indexOf(m), prev = idx > 0 && meses[idx - 1].dias >= ac.minDias ? meses[idx - 1] : null;
+  const delAnio = dias.filter(c => c.fecha.slice(0, 4) === m.mes.slice(0, 4) && c.fecha.slice(0, 7) < m.mes);
+  const promAnio = delAnio.length >= ac.minDias ? r2_(delAnio.reduce((a, c) => a + c.total, 0) / delAnio.length) : null;
+  const promProy = m.enCurso && proyeccion && !proyeccion.bloqueada && (m.dias + m.restantes) ? r2_(proyeccion.medio / (m.dias + m.restantes)) : null;
+  const comps = [];
+  const cmp = (contra, refV) => { if (refV == null) return; const d1 = pct_(m.promDia, refV), d2 = promProy != null ? pct_(promProy, refV) : null;
+    comps.push({ contra: contra, referencia: refV, deltaPromPct: d1, deltaProyPct: d2, bajo: (d1 != null && d1 <= -umbral) || (d2 != null && d2 <= -umbral) }); };
+  if (prev) cmp('mes anterior (' + prev.nombre + ')', prev.promDia);
+  cmp('promedio del año (' + delAnio.length + ' días con cierre)', promAnio);
+  if (!comps.length) return { esBajo: null, mes: m.mes, nombre: m.nombre, promDia: m.promDia, umbralPct: umbral, aclaracion: aclaracion, mensaje: 'No hay un mes anterior ni promedio del año para comparar ' + m.nombre + '.' };
+  const esBajo = comps.some(c => c.bajo);
+  const peorDe = c => Math.min(c.deltaPromPct == null ? 0 : c.deltaPromPct, c.deltaProyPct == null ? 0 : c.deltaProyPct);
+  const peor = comps.filter(c => c.bajo).sort((a, b) => peorDe(a) - peorDe(b))[0];
+  const porProm = peor && peor.deltaPromPct != null && peor.deltaPromPct <= -umbral;
+  return { esBajo: esBajo, mes: m.mes, nombre: m.nombre, enCurso: !!m.enCurso, dias: m.dias, promDia: m.promDia, promDiaProyectado: promProy, comparaciones: comps, umbralPct: umbral, aclaracion: aclaracion,
+    criterio: esBajo ? (porProm ? 'promedio' : 'proyeccion') : null, contra: peor ? peor.contra : null, referencia: peor ? peor.referencia : null, deltaPct: peor ? (porProm ? peor.deltaPromPct : peor.deltaProyPct) : null,
+    mensaje: esBajo ? cap_(m.nombre) + ' se considera mes bajo: ' + (porProm ? 'el promedio por día de apertura (' + $_(m.promDia) + ') está ' + Math.abs(peor.deltaPromPct) + '% por debajo del ' + peor.contra : 'la proyección por día (' + $_(promProy) + ') queda ' + Math.abs(peor.deltaProyPct) + '% por debajo del ' + peor.contra) + ' (' + $_(peor.referencia) + '). Umbral: ' + umbral + '%.'
+      : 'Sin alertas: el mes viene en línea. ' + cap_(m.nombre) + ': ' + $_(m.promDia) + ' por día de apertura' + comps.map(c => ', ' + (c.deltaPromPct >= 0 ? '+' : '') + c.deltaPromPct + '% vs. ' + c.contra).join('') + ' (umbral −' + umbral + '%).' };
+}
+/* ---- 3.3 · Acciones comerciales para meses bajos: qué hacer · por qué (dato) · esfuerzo · plazo · cómo medir. Tráfico antes que descuentos. ---- */
+function accionesComerciales_(mb, diaSemana, actual, proxFer) {
+  const A = [];
+  const ds = diaSemana.filter(d => d.n >= 2), flojo = ds.slice().sort((a, b) => a.promedio - b.promedio)[0], fuerte = ds.slice().sort((a, b) => b.participacion - a.participacion)[0];
+  const dato = $_(mb.promDia) + ' por día de apertura en ' + mb.nombre + ' vs. ' + $_(mb.referencia) + ' del ' + mb.contra + ' (' + mb.deltaPct + '%)';
+  const ferLargo = proxFer.filter(f => f.finDeSemanaLargo || f.abre)[0];
+  A.push({ prioridad: 1, tipo: 'trafico', titulo: 'Pauta geolocalizada alrededor del showroom y contenido del local',
+    queHacer: 'Correr una campaña en Instagram/Meta con radio de pocos kilómetros alrededor del showroom, activa en los horarios de apertura, y publicar contenido del local físico (vidriera, cómo llegar, horarios) dos veces por semana.',
+    porQue: 'Dato: ' + dato + '. Hipótesis a verificar: el showroom tiene poco tráfico y la pauta digital no apunta al punto físico.',
+    esfuerzo: 'medio', plazo: 'esta semana', medicion: 'Promedio por día de apertura de las próximas 2 semanas contra ' + $_(mb.promDia) + ', y cantidad de visitas que mencionan el anuncio (anotarlas en cada venta).' });
+  if (flojo) A.push({ prioridad: 2, tipo: 'dias_flojos', titulo: 'Acción para ' + flojo.nombre + (flojo.dia === 3 ? ' y jueves' : ''),
+    queHacer: 'Un beneficio exclusivo para quien visita el showroom los ' + flojo.nombre + (flojo.dia === 3 ? ' y jueves' : '') + ' (asesoramiento de look, regalo con la compra o preventa de la colección), comunicado el día anterior por redes y WhatsApp.',
+    porQue: 'Dato: los ' + flojo.nombre + ' promedian ' + $_(flojo.promedio) + ' (' + flojo.participacion + '% de la facturación)' + (fuerte && fuerte.dia !== flojo.dia ? ' contra ' + $_(fuerte.promedio) + ' los ' + fuerte.nombre + ' (' + fuerte.participacion + '%)' : '') + '.',
+    esfuerzo: 'bajo', plazo: 'esta semana', medicion: 'Promedio de los ' + flojo.nombre + ' en 4 semanas contra ' + $_(flojo.promedio) + '.' });
+  if (ferLargo) A.push({ prioridad: 2, tipo: 'evento', titulo: 'Acción especial para el ' + (ferLargo.finDeSemanaLargo ? 'fin de semana largo del ' : 'feriado del ') + fdm_(ferLargo.fecha),
+    queHacer: 'Confirmar si Palermo abre el ' + ferLargo.dia + ' ' + fdm_(ferLargo.fecha) + ' (' + ferLargo.nombre + ') y armar una acción para esos días: horario extendido el sábado, lanzamiento o evento en el showroom y aviso previo a la base de clientas.',
+    porQue: 'Dato: hay un feriado en los próximos días' + (ferLargo.abre ? ', en día de apertura' : '') + '. Hipótesis: más gente circulando en un fin de semana largo; hay que verificarlo con las ventas de esos días.',
+    esfuerzo: 'medio', plazo: 'este mes', medicion: 'Venta de cada día del fin de semana largo contra el promedio del mismo día de la semana.' });
+  else A.push({ prioridad: 2, tipo: 'evento', titulo: 'Evento o lanzamiento en el showroom con alianzas cercanas',
+    queHacer: 'Organizar un evento (lanzamiento de colección, tarde para clientas invitadas) y aliarse con dos o tres comercios cercanos para cruzar públicos (flyer o beneficio mutuo).',
+    porQue: 'Dato: ' + dato + '. Hipótesis: falta un motivo puntual para ir al showroom.',
+    esfuerzo: 'alto', plazo: 'este mes', medicion: 'Venta del día del evento contra el promedio del mismo día de la semana, y contactos nuevos registrados.' });
+  A.push({ prioridad: 3, tipo: 'conversion', titulo: 'Beneficio por 2 o más prendas y promo con un medio de pago',
+    queHacer: 'Combo o beneficio al llevar dos o más prendas y una promo acotada con un medio de pago (por ejemplo transferencia), antes que bajar precios de lista.',
+    porQue: 'Dato: la planilla no tiene cantidad de operaciones, así que no se mide conversión ni ticket promedio; la acción apunta a subir el importe por visita. Mix actual: ' + (actual && actual.mix ? 'tarjetas ' + actual.mix.tarjetas + '%, transferencia ' + actual.mix.transferencia + '%, efectivo ' + actual.mix.efectivo + '%' : 'sin datos') + '.',
+    esfuerzo: 'bajo', plazo: 'esta semana', medicion: 'Facturación por día de apertura y participación del medio de pago promocionado en las próximas 2 semanas.' });
+  A.push({ prioridad: 3, tipo: 'clientes', titulo: 'Campaña de WhatsApp a clientas anteriores y registro de contactos',
+    queHacer: 'Mandar una campaña por WhatsApp o mail a clientas anteriores con una invitación concreta al showroom, y registrar el contacto en cada venta nueva.',
+    porQue: 'Dato: no hay identificación de clientes en la planilla (indicador 10.4 sin datos); sin base no hay recurrencia medible.',
+    esfuerzo: 'bajo', plazo: 'este mes', medicion: 'Contactos registrados por semana y ventas que responden a la campaña.' });
+  A.push({ prioridad: 3, tipo: 'ticket', titulo: 'Venta cruzada y armado de looks',
+    queHacer: 'Armar looks completos en el showroom y ofrecer la segunda prenda en cada venta.',
+    porQue: 'Dato: sin cantidad de operaciones no se conoce el ticket promedio; la hipótesis es que hay margen para subirlo.',
+    esfuerzo: 'bajo', plazo: 'esta semana', medicion: 'Facturación por día de apertura en 2 semanas contra ' + $_(mb.promDia) + '.' });
+  return A.slice(0, 5);
+}
+
+/* ---- 3.3 · Audio: números dichos como se hablan ---- */
+const UNI_ = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro', 'veinticinco', 'veintiséis', 'veintisiete', 'veintiocho', 'veintinueve'];
+const DEC_ = ['', '', 'veinte', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];
+const CEN_ = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+function palabras_(n) {
+  n = Math.round(Math.abs(Number(n) || 0));
+  if (n < 30) return UNI_[n];
+  if (n < 100) return DEC_[Math.floor(n / 10)] + (n % 10 ? ' y ' + UNI_[n % 10] : '');
+  if (n === 100) return 'cien';
+  if (n < 1000) return CEN_[Math.floor(n / 100)] + (n % 100 ? ' ' + palabras_(n % 100) : '');
+  if (n < 1000000) { const m = Math.floor(n / 1000), r = n % 1000; return (m === 1 ? 'mil' : palabras_(m).replace(/uno$/, 'un') + ' mil') + (r ? ' ' + palabras_(r) : ''); }
+  const M = Math.floor(n / 1000000), r = n % 1000000;
+  return (M === 1 ? 'un millón' : palabras_(M) + ' millones') + (r ? ' ' + palabras_(r) : '');
+}
+/** Importes: "dos con veintinueve millones de pesos" · "cuatrocientos sesenta y dos mil pesos" · "ochocientos pesos". */
+function dinero_(n) {
+  n = Math.round(Number(n) || 0);
+  if (n >= 1000000) {
+    let M = Math.floor(n / 1e6), dec = Math.round((n % 1e6) / 1e4); if (dec === 100) { M++; dec = 0; }
+    const un = w => w.replace(/veintiuno$/, 'veintiún').replace(/ uno$/, ' un');   // "setenta y un millones"
+    return (dec ? palabras_(M) + ' con ' + (dec < 10 ? 'cero ' : '') + un(palabras_(dec)) : un(palabras_(M))) + (M === 1 && !dec ? ' millón' : ' millones') + ' de pesos';
+  }
+  if (n >= 1000) { const r = Math.round(n / 1000) * 1000; return r >= 1000000 ? dinero_(r) : palabras_(r) + ' pesos'; }
+  return palabras_(n) + ' pesos';
+}
+function porcentaje_(p) { if (p == null || isNaN(p)) return ''; const a = Math.abs(p), ent = Math.floor(a), d = Math.round((a - ent) * 10); return (p < 0 ? 'menos ' : 'más ') + palabras_(ent) + (d && ent < 10 ? ' coma ' + palabras_(d) : '') + ' por ciento'; }
+function fechaHablada_(f) { const d = Number(f.slice(8, 10)); return 'el ' + NOMBRE_DIA[dow_(f)] + ' ' + (d === 1 ? 'primero' : palabras_(d)) + ' de ' + MESES[Number(f.slice(5, 7)) - 1]; }
+/** Pasa a forma hablada los importes ($ 1.234.567), porcentajes (−12%, 8,5%) y fechas (12/10/2026) que haya en un texto. */
+function hablar_(t) {
+  return String(t || '').replace(/\$\s?([\d.]+)/g, (m, d) => dinero_(Number(d.replace(/\./g, ''))))
+    .replace(/([+\-−]?)(\d+(?:[.,]\d+)?)\s?%/g, (m, sg, p) => (sg === '+' ? 'más ' : sg ? 'menos ' : '') + palabras_(Math.floor(Number(p.replace(',', '.')))) + ((p.indexOf(',') >= 0 || p.indexOf('.') >= 0) && Number(p.replace(',', '.')) < 10 && Math.round((Number(p.replace(',', '.')) % 1) * 10) ? ' coma ' + palabras_(Math.round((Number(p.replace(',', '.')) % 1) * 10)) : '') + ' por ciento')
+    .replace(/(\d{2})\/(\d{2})\/(\d{4})/g, (m, d, mo, y) => fechaHablada_(y + '-' + mo + '-' + d).replace(/^el /, ''))
+    .replace(/\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre) 20\d\d\b/g, '$1')   // "octubre 2026" → "octubre"
+    .replace(/\s+pp\b/g, ' puntos').replace(/ vs\. /g, ' contra ').replace(/\bs\/d\b/g, 'sin dato');
+}
+const sinEl_ = s => s.replace(/^el /, '');
+const cap_ = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+/* ---- 3.3 · Textos del resumen hablado (el navegador los lee con la Web Speech API; aquí solo se arma el texto con datos reales) ---- */
+function audio_(u, com, aud, ctx) {
+  const nombre = String(u && u.nombre || '').trim().split(' ')[0];
+  const hola = nombre ? 'Hola ' + nombre + ', ' : 'Hola, ';
+  const hoy = ctx.hoy || hoy_();
+  // Feriados: una frase breve solo cuando corresponde.
+  const fer = ctx.feriados || { proximos: [], pendientes: [] }, lim14 = sumarDias_(hoy, 14);
+  const prox = (fer.proximos || []).filter(f => f.fecha >= hoy && f.fecha <= lim14 && f.abre && !f.palermo)[0];
+  const nPend = (fer.pendientes || []).length;
+  const ferProx = prox ? 'Atención, ' + fechaHablada_(prox.fecha) + ' es feriado, ' + prox.nombre + ', hay que confirmar si Palermo abre.' : '';
+  const ferPend = nPend ? (nPend === 1 ? 'Hay un feriado pendiente de confirmar si el local abrió.' : 'Hay ' + palabras_(nPend) + ' feriados pendientes de confirmar si el local abrió.') : '';
+  // ---- Comercial
+  const C = [], Cg = [];   // completo y versión corta para el general
+  let mesTxt = '';
+  if (com.sinDatos) { C.push('Todavía no hay cierres cargados en la planilla, así que no tengo indicadores comerciales.'); Cg.push(C[0]); }
+  else {
+    const meses = com.meses || [], actual = meses.find(m => m.enCurso), conDatos = meses.filter(m => m.dias), ref = conDatos[conDatos.length - 1], ult = (com.ultimos || []).slice(-1)[0];
+    if (ult) { const s = 'El último cierre es del ' + sinEl_(fechaHablada_(ult.fecha)) + ', con ' + dinero_(ult.total) + (ult.feriado ? ', un día feriado' : '') + '.'; C.push(s); Cg.push(s); }
+    if (ref) {
+      const s = 'En ' + ref.nombre.split(' ')[0] + ' van ' + dinero_(ref.total) + ' en ' + palabras_(ref.dias) + (ref.dias === 1 ? ' día con cierre' : ' días con cierre') + ', un promedio de ' + dinero_(ref.promDia) + ' por día' +
+        (ref.vsAnterior && ref.vsAnterior.deltaPromPct != null ? ', ' + porcentaje_(ref.vsAnterior.deltaPromPct) + ' que en ' + MES_NOM(ref.vsAnterior.mes).split(' ')[0] + '.' : '.');
+      C.push(s); Cg.push(s);
+      if (ref.diasCerrados && ref.diasCerrados.length) { mesTxt = 'Este mes tuvo ' + (ref.diasCerrados.length === 1 ? 'un día menos de apertura' : palabras_(ref.diasCerrados.length) + ' días menos de apertura') + ' por ' + ref.diasCerrados[0].tipo + '.'; C.push(mesTxt); Cg.push(mesTxt); }
+    }
+    const sem = (com.semanas || []).filter(s => s.dias >= 1), us = sem[sem.length - 1];
+    if (us) C.push('La última semana con ventas, la del ' + sinEl_(fechaHablada_(us.semana)) + ', sumó ' + dinero_(us.total) + (us.deltaPct != null ? ', ' + porcentaje_(us.deltaPct) + ' respecto de la anterior.' : '.'));
+    const P = com.proyeccion;
+    if (P && P.bloqueada) { const s = 'No proyecto el mes porque hay ' + palabras_(actual.diasSinCierre.length) + ' días de apertura sin cierre cargado.'; C.push(s); Cg.push(s); }
+    else if (P) { const s = 'Si se mantiene el ritmo, ' + (actual ? actual.nombre.split(' ')[0] : 'el mes') + ' cerraría cerca de ' + dinero_(P.medio) + ', entre ' + dinero_(P.minimo) + ' y ' + dinero_(P.maximo) + '. Es una estimación.' + (P.objetivo ? ' El objetivo es ' + dinero_(P.objetivo) + ' y el avance real es del ' + palabras_(Math.round(P.avancePct)) + ' por ciento.' : ''); C.push(s); Cg.push(s); }
+    const ds = (com.diaSemana || []).filter(d => d.n >= 2), fuerte = ds.slice().sort((a, b) => b.participacion - a.participacion)[0], flojo = ds.slice().sort((a, b) => a.promedio - b.promedio)[0];
+    if (fuerte) { const s = 'El día más fuerte es el ' + fuerte.nombre + ', con el ' + palabras_(Math.round(fuerte.participacion)) + ' por ciento de la facturación' + (flojo && flojo.dia !== fuerte.dia ? '; el más flojo, el ' + flojo.nombre + ', con ' + dinero_(flojo.promedio) + ' de promedio.' : '.'); C.push(s); Cg.push(s); }
+    if (ref && ref.mix) {
+      C.push('En medios de pago: tarjetas ' + palabras_(Math.round(ref.mix.tarjetas)) + ' por ciento, transferencia ' + palabras_(Math.round(ref.mix.transferencia)) + ' y efectivo ' + palabras_(Math.round(ref.mix.efectivo)) + '.');
+      const cm = (com.alertas || []).find(a => a.tipo === 'cambio_mix'); if (cm) C.push('Cambio relevante: ' + hablar_(cm.titulo.toLowerCase() + ', ' + cm.observado + ' contra ' + cm.comparado) + '.');
+    }
+    const recs = (com.recomendaciones || []).slice(0, 2); if (recs.length) C.push('Recomendaciones comerciales: ' + recs.map(r => hablar_(r.titulo).toLowerCase()).join('; ') + '.');
+  }
+  // ---- Mes bajo (una frase) y acciones
+  const mb = com.mesBajo, X = [];
+  let bajoTxt = '';
+  if (!mb || mb.esBajo == null) bajoTxt = mb && mb.mensaje ? hablar_(mb.mensaje) : 'No hay datos suficientes para evaluar si el mes es bajo.';
+  else if (!mb.esBajo) bajoTxt = 'Sin alertas: el mes viene en línea. ' + cap_(mb.nombre.split(' ')[0]) + ' promedia ' + dinero_(mb.promDia) + ' por día de apertura y no queda por debajo del umbral del ' + palabras_(mb.umbralPct) + ' por ciento.';
+  else bajoTxt = cap_(mb.nombre.split(' ')[0]) + ' se considera un mes bajo: ' + (mb.criterio === 'promedio' ? 'el promedio por día de apertura es ' + dinero_(mb.promDia) : 'la proyección por día es ' + dinero_(mb.promDiaProyectado)) + ', ' + porcentaje_(mb.deltaPct) + ' que el ' + mb.contra.replace(/\s*\(.*\)/, '') + ', con un umbral del ' + palabras_(mb.umbralPct) + ' por ciento.';
+  X.push(bajoTxt);
+  const acs = com.accionesComerciales || [];
+  if (acs.length) {
+    X.push('Las ' + (acs.length >= 3 ? 'tres' : palabras_(acs.length)) + ' acciones principales: ' + acs.slice(0, 3).map((a, i) => palabras_(i + 1) + ', ' + hablar_(a.titulo) + '. ' + hablar_(a.porQue.replace(/^Dato: /, '')) + ' Esfuerzo ' + a.esfuerzo + ', plazo ' + a.plazo + '.').join(' '));
+    X.push('El detalle de cada acción, con cómo medirla, está en pantalla.');
+  }
+  // ---- Auditoría
+  const A = [], pend = ctx.pendientes || [], ac = ctx.acciones || {};
+  A.push(pend.length ? (pend.length === 1 ? 'Hay un cierre pendiente de carga, el ' + sinEl_(fechaHablada_(pend[0])) + '.' : 'Hay ' + palabras_(pend.length) + ' cierres pendientes de carga; los primeros son ' + pend.slice(0, 3).map(f => sinEl_(fechaHablada_(f))).join(', ') + '.') : 'No hay cierres pendientes de carga en los días de apertura.');
+  A.push('Sobre diferencias de caja: la planilla no registra arqueos ni diferencias, así que no puedo informarlas.');
+  A.push(ac.abiertas ? 'Observaciones abiertas: ' + palabras_(ac.abiertas) + (ac.abiertas === 1 ? ' acción correctiva abierta' : ' acciones correctivas abiertas') + (ac.vencidas ? ', ' + palabras_(ac.vencidas) + (ac.vencidas === 1 ? ' vencida.' : ' vencidas.') : ', ninguna vencida.') : 'No hay acciones correctivas abiertas.');
+  if (aud && aud.ultima) A.push('La última auditoría fue el ' + sinEl_(fechaHablada_(aud.ultima.fecha)) + ', con resultado ' + String(aud.ultima.resultado).toLowerCase() + ', ' + String(aud.ultima.promedio).replace('.', ' coma ') + ' sobre cinco.');
+  const recA = (aud && aud.recomendaciones || []).slice(0, 3).map(r => 'Prioridad ' + palabras_(r.prioridad) + ': ' + hablar_(r.queEstaPasando) + ' Acción: ' + hablar_(r.accion));
+  const intro = t => hola + t + ' ';
+  const comercial = intro('te cuento los indicadores comerciales de Palermo.') + C.join(' ') + (ferProx ? ' ' + ferProx : '');
+  const auditoria = intro('te cuento los indicadores de auditoría de Palermo.') + A.concat(recA).join(' ') + (ferPend ? ' ' + ferPend : '');
+  const acciones = intro('te cuento las acciones comerciales para Palermo.') + X.join(' ');
+  const general = intro('te cuento las últimas novedades de Palermo.') + Cg.join(' ') + ' ' + bajoTxt + ' Ahora, auditoría. ' + A.slice(0, 3).join(' ') + (recA.length ? ' ' + recA[0] : '') +
+    (ferProx ? ' ' + ferProx : '') + (ferPend ? ' ' + ferPend : '') + ' Eso es todo por ahora.';
+  const limpiar = t => t.replace(/\s+/g, ' ').trim();
+  return { saludo: nombre, general: limpiar(general), comercial: limpiar(comercial), auditoria: limpiar(auditoria), acciones: limpiar(acciones) };
 }
 
 /* =================== Historial =================== */
@@ -1384,12 +2359,121 @@ function actualizarNovedad(token, id, estadoN, nota) {
   });
 }
 
+/* =================== 3.3 · Vacaciones (todo dentro de la app, sin mails) ===================
+ * Empleado: usa el mismo usuario + PIN de la fichada; solo ve y cancela lo suyo. Jefes (permiso "vacaciones"): resuelven.
+ * El servidor valida dueño y permiso en cada llamada. En la hoja no hay PIN ni mail: solo el usuario (legajo) y el id interno.
+ */
+const VAC_MAX_DIAS = 60;
+const solapa_ = (a1, b1, a2, b2) => a1 <= b2 && a2 <= b1;
+function diasVacaciones_(desde, hasta, modo, cal) {
+  if (modo === 'apertura') return diasAperturaEfectivos_(desde, hasta, cal).filter(d => !cal.feriado(d)).length;
+  return Math.round((new Date(hasta + 'T12:00:00Z') - new Date(desde + 'T12:00:00Z')) / 86400000) + 1;
+}
+function vacPublica_(v, u, completa) {
+  const o = { id: v.id, uid: v.uid, usuario: v.legajo, nombre: u ? u.nombre : v.legajo, desde: v.desde, hasta: v.hasta, dias: v.dias, modoDias: v.modoDias || 'corridos', estado: v.estado,
+    solicitado: v.solicitado, decididoPor: v.decididoPor || '', decidido: v.decidido || '', visto: v.visto || '' };
+  if (completa) { o.comentario = v.comentario || ''; o.motivo = v.motivo || ''; }   // comentarios y motivos: solo la persona y los jefes
+  return o;
+}
+function misVacaciones(token) {
+  const s = sesion_(token), u = s.user, cfg = cfg_(), cal = calendario_(cfg), hoy = hoy_();
+  const todas = tAll_('Vacaciones'), users = usuarios_();
+  const mias = todas.filter(v => v.uid === u.id).sort((a, b) => b.desde.localeCompare(a.desde)).map(v => vacPublica_(v, u, true));
+  // Equipo: solo períodos aprobados de otras personas (nombre y fechas), de 30 días atrás a 6 meses adelante.
+  const equipo = todas.filter(v => v.uid !== u.id && v.estado === 'aprobada' && v.hasta >= sumarDias_(hoy, -30) && v.desde <= sumarDias_(hoy, 180))
+    .map(v => { const x = users.find(w => w.id === v.uid); return { nombre: x ? x.nombre : v.legajo, desde: v.desde, hasta: v.hasta }; });
+  return { hoy: hoy, nombre: u.nombre, mias: mias, novedades: mias.filter(v => (v.estado === 'aprobada' || v.estado === 'rechazada') && !v.visto), equipo: equipo,
+    feriados: cal.lista.filter(f => f.fecha >= sumarDias_(hoy, -30) && f.fecha <= sumarDias_(hoy, 400)).map(f => ({ fecha: f.fecha, nombre: f.nombre, tipo: f.tipo })),
+    modoDias: cfg.vacacionesDias === 'apertura' ? 'apertura' : 'corridos', diasOperativos: cal.ops, maxDias: VAC_MAX_DIAS };
+}
+function solicitarVacaciones(token, desde, hasta, comentario) {
+  const s = sesion_(token), u = s.user, cfg = cfg_(), cal = calendario_(cfg), hoy = hoy_(), modo = cfg.vacacionesDias === 'apertura' ? 'apertura' : 'corridos';
+  desde = fechaOk_(desde); hasta = fechaOk_(hasta); comentario = txt_(comentario, 300);
+  if (!desde || !hasta) throw new Error('Elegí el primer y el último día.');
+  if (desde < hoy) throw new Error('No se pueden pedir fechas pasadas.');
+  if (hasta < desde) throw new Error('El último día tiene que ser igual o posterior al primero.');
+  if (diasVacaciones_(desde, hasta, 'corridos', cal) > VAC_MAX_DIAS) throw new Error('El pedido supera los ' + VAC_MAX_DIAS + ' días corridos. Dividilo en dos solicitudes.');
+  const dias = diasVacaciones_(desde, hasta, modo, cal);
+  if (dias < 1) throw new Error('El período no incluye días de vacaciones: con el modo «días de apertura», elegí al menos un día en que Palermo abra.');
+  return lock_(() => {
+    const choque = tAll_('Vacaciones').find(v => v.uid === u.id && (v.estado === 'pendiente' || v.estado === 'aprobada') && solapa_(desde, hasta, v.desde, v.hasta));
+    if (choque) throw new Error('Ya tenés una solicitud ' + choque.estado + ' del ' + fdm_(choque.desde) + ' al ' + fdm_(choque.hasta) + ' que se superpone.');
+    const ts = new Date().toISOString();
+    const v = { id: nuevoId_('V'), uid: u.id, legajo: u.legajo, usuario: u.legajo, desde: desde, hasta: hasta, dias: dias, modoDias: modo, comentario: comentario, estado: 'pendiente',
+      solicitado: ts, decididoPor: '', decidido: '', motivo: '', visto: '', historial: [{ ts: ts, quien: u.nombre + ' (' + u.legajo + ')', que: 'solicitud' }] };
+    tAdd_('Vacaciones', v);
+    log_(s, 'vacaciones_solicitud', 'pendiente', v.id, fdm_(desde) + ' → ' + fdm_(hasta) + ' · ' + dias + ' días ' + modo);
+    return vacPublica_(v, u, true);
+  });
+}
+function cancelarVacaciones(token, id) {
+  const s = sesion_(token), u = s.user, hoy = hoy_();
+  return lock_(() => {
+    const v = tAll_('Vacaciones').find(x => x.id === String(id || '')); if (!v || v.uid !== u.id) throw new Error('Solicitud no encontrada.');
+    if (v.estado === 'aprobada' && v.desde <= hoy) throw new Error('Esas vacaciones aprobadas ya empezaron: hablá con tu jefe para modificarlas.');
+    if (v.estado !== 'pendiente' && v.estado !== 'aprobada') throw new Error('Esa solicitud ya está ' + v.estado + '.');
+    const antes = v.estado; v.estado = 'cancelada'; v.decidido = new Date().toISOString(); v.decididoPor = u.nombre + ' (' + u.legajo + ')'; v.motivo = 'Cancelada por quien la solicitó';
+    v.historial = (v.historial || []).concat([{ ts: v.decidido, quien: v.decididoPor, que: 'cancelada', antes: antes }]);
+    tUpd_('Vacaciones', 'id', v.id, v);
+    log_(s, 'vacaciones_cancelada', antes, v.id, fdm_(v.desde) + ' → ' + fdm_(v.hasta));
+    return vacPublica_(v, u, true);
+  });
+}
+/** La persona marca como vistas sus solicitudes resueltas (salen de "Novedades"). */
+function vacacionesVistas(token, ids) {
+  const s = sesion_(token), u = s.user;
+  ids = Array.isArray(ids) ? ids.map(String).slice(0, 50) : [];
+  return lock_(() => {
+    let n = 0;
+    tAll_('Vacaciones').filter(v => v.uid === u.id && ids.indexOf(v.id) >= 0 && !v.visto && (v.estado === 'aprobada' || v.estado === 'rechazada')).forEach(v => { v.visto = new Date().toISOString(); tUpd_('Vacaciones', 'id', v.id, v); n++; });
+    return n;
+  });
+}
+/* ---- Jefes ---- */
+function listarVacaciones(token) {
+  sesion_(token, 'vacaciones');
+  const cfg = cfg_(), cal = calendario_(cfg), hoy = hoy_(), users = usuarios_(), todas = tAll_('Vacaciones'), lim3 = Date.now() - 3 * 86400000;
+  const lista = todas.map(v => {
+    const u = users.find(x => x.id === v.uid), o = vacPublica_(v, u, true);
+    o.demorada = v.estado === 'pendiente' && new Date(v.solicitado).getTime() < lim3;
+    o.diasEsperando = v.estado === 'pendiente' ? Math.floor((Date.now() - new Date(v.solicitado).getTime()) / 86400000) : null;
+    o.historial = v.historial || [];
+    if (v.estado === 'pendiente') {
+      // Cobertura (informativa, no bloquea): otras personas con vacaciones aprobadas en esas fechas; feriados o fin de semana largo en el período.
+      const otras = todas.filter(w => w.id !== v.id && w.uid !== v.uid && w.estado === 'aprobada' && solapa_(v.desde, v.hasta, w.desde, w.hasta))
+        .map(w => { const x = users.find(y => y.id === w.uid); return { nombre: x ? x.nombre : w.legajo, desde: w.desde, hasta: w.hasta }; });
+      const fer = cal.lista.filter(f => f.fecha >= v.desde && f.fecha <= v.hasta).map(f => feriadoInfo_(f, cal, null));
+      o.cobertura = { otras: otras, feriados: fer, finDeSemanaLargo: fer.some(f => f.finDeSemanaLargo) };
+    }
+    return o;
+  }).sort((a, b) => ((a.estado === 'pendiente' ? 0 : 1) - (b.estado === 'pendiente' ? 0 : 1)) || (a.estado === 'pendiente' ? a.solicitado.localeCompare(b.solicitado) : b.desde.localeCompare(a.desde)));
+  return { hoy: hoy, lista: lista, pendientes: lista.filter(v => v.estado === 'pendiente').length, demoradas: lista.filter(v => v.demorada).length,
+    feriados: cal.lista.filter(f => f.fecha >= sumarDias_(hoy, -30) && f.fecha <= sumarDias_(hoy, 400)).map(f => ({ fecha: f.fecha, nombre: f.nombre, tipo: f.tipo })),
+    diasOperativos: cal.ops, modoDias: cfg.vacacionesDias === 'apertura' ? 'apertura' : 'corridos' };
+}
+function resolverVacaciones(token, id, aprobar, motivo) {
+  const s = sesion_(token, 'vacaciones');
+  motivo = txt_(motivo, 300);
+  if (!aprobar && !motivo) throw new Error('Para rechazar hay que indicar el motivo.');
+  return lock_(() => {
+    const v = tAll_('Vacaciones').find(x => x.id === String(id || '')); if (!v) throw new Error('Solicitud no encontrada.');
+    if (v.estado !== 'pendiente') throw new Error('La solicitud ya fue resuelta (' + v.estado + ').');
+    if (v.uid === s.user.id) throw new Error('No podés resolver tu propia solicitud.');
+    v.estado = aprobar ? 'aprobada' : 'rechazada'; v.decididoPor = s.user.nombre + ' (' + s.user.legajo + ')'; v.decidido = new Date().toISOString(); v.motivo = motivo; v.visto = '';
+    v.historial = (v.historial || []).concat([{ ts: v.decidido, quien: v.decididoPor, que: v.estado, motivo: motivo }]);
+    tUpd_('Vacaciones', 'id', v.id, v);
+    const u = usuarios_().find(x => x.id === v.uid);
+    log_(s, 'vacaciones_decision', v.estado, v.id, (u ? u.nombre : v.legajo) + ' · ' + fdm_(v.desde) + ' → ' + fdm_(v.hasta) + ' · ' + v.dias + ' días' + (motivo ? ' · ' + motivo : ''));
+    return vacPublica_(v, u, true);
+  });
+}
+
 /* =================== Configuración =================== */
 function getConfig(token) {
   sesion_(token, 'config');
   const c = cfg_();
   return Object.assign({}, c, { modulos: MODULOS, permsRol: PERMS_ROL, version: VERSION, cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'),
-    ultimaPurga: PROPS.getProperty('ULTIMA_PURGA') || '' });
+    ultimaPurga: PROPS.getProperty('ULTIMA_PURGA') || '', feriados: feriadosPanel_(c), sucursales: sucursales_() });
 }
 function setConfig(token, d) {
   const s = sesion_(token, 'config', true);
@@ -1399,6 +2483,8 @@ function setConfig(token, d) {
   if (d.local === null) c.local = null;
   else if (d.local && isFinite(d.local.lat) && isFinite(d.local.lng)) c.local = { lat: Math.round(Number(d.local.lat) * 1e6) / 1e6, lng: Math.round(Number(d.local.lng) * 1e6) / 1e6, radio: Math.min(2000, Math.max(30, Math.round(Number(d.local.radio) || c.radioDef))) };
   if (d.fotoIngresoObligatoria != null) c.fotoIngresoObligatoria = !!d.fotoIngresoObligatoria;
+  if (d.ubicacionObligatoria != null) c.ubicacionObligatoria = !!d.ubicacionObligatoria;
+  if (d.vacacionesDias != null) c.vacacionesDias = d.vacacionesDias === 'apertura' ? 'apertura' : 'corridos';
   if (d.retencionIngresosDias != null) c.retencionIngresosDias = Math.min(3650, Math.max(7, Math.round(Number(d.retencionIngresosDias) || 90)));
   if (d.retencionAuditoriasMeses != null) c.retencionAuditoriasMeses = Math.min(120, Math.max(1, Math.round(Number(d.retencionAuditoriasMeses) || 12)));
   if (d.cierreFileId != null) { const id = txt_(d.cierreFileId, 100); if (!/^[\w-]{20,100}$/.test(id)) throw new Error('ID de archivo inválido.'); c.cierreFileId = id; }
@@ -1409,9 +2495,13 @@ function setConfig(token, d) {
   }
   if (d.alertasCom && typeof d.alertasCom === 'object') {
     const a = d.alertasCom, n = (v, lo, hi, def) => { v = Number(v); return isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def; };
-    c.alertasCom = { caidaPct: n(a.caidaPct, 1, 90, 15), mixPp: n(a.mixPp, 1, 60, 10), minDias: Math.round(n(a.minDias, 2, 15, 4)), concentracionPct: n(a.concentracionPct, 26, 90, 45) };
+    c.alertasCom = { caidaPct: n(a.caidaPct, 1, 90, 15), mixPp: n(a.mixPp, 1, 60, 10), minDias: Math.round(n(a.minDias, 2, 15, 4)), concentracionPct: n(a.concentracionPct, 26, 90, 45), mesBajoPct: n(a.mesBajoPct, 1, 90, 10) };
   }
   if (d.avisoFotos != null) c.avisoFotos = txt_(d.avisoFotos, 600) || CFG_DEF.avisoFotos;
+  if (d.avisoUbicacion != null) c.avisoUbicacion = txt_(d.avisoUbicacion, 600) || CFG_DEF.avisoUbicacion;
+  if (d.redondeoMin != null) { const r = Number(d.redondeoMin); if ([1, 5, 10, 15].indexOf(r) < 0) throw new Error('El redondeo puede ser 1, 5, 10 o 15 minutos.'); c.redondeoMin = r; }
+  if (d.precisionMax != null) c.precisionMax = Math.min(500, Math.max(20, Math.round(Number(d.precisionMax) || 100)));
+  if (d.precisionRevisar != null) c.precisionRevisar = Math.min(c.precisionMax || 100, Math.max(5, Math.round(Number(d.precisionRevisar) || 50)));
   PROPS.setProperty('CFG', JSON.stringify(c));
   log_(s, 'cambio_configuracion', 'ok', '', antes.slice(0, 180) + ' → ' + JSON.stringify(c).slice(0, 180));
   return c;
