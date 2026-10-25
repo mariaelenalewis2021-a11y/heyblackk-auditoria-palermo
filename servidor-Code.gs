@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.6';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.7';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -159,7 +159,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -1863,8 +1863,12 @@ function getKPIs(token, desde, hasta) {
   return {
     desde: desde, hasta: hasta, auditoriasN: audN, params: params_(),
     acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio,
-    clientes36: cliR ? { clientes: cliR.clientes, pedido: cliR.pedido, entregado: cliR.entregado, pendiente: cliR.pendiente, cumplimiento: cliR.cumplimiento, estados: cliR.estados, alertas: cliR.alertas.slice(0, 3) } : null,
-    produccion36: proR ? { planificado: proR.planificado, ingresado: proR.ingresado, enProceso: proR.enProceso, faltaFabricar: proR.faltaFabricar, avance: proR.avance, atrasados: proR.atrasados, alertas: proR.alertas.slice(0, 3) } : null,
+    clientes36: cliR ? { clientes: cliR.clientes, pedido: cliR.pedido, entregado: cliR.despachado, despachado: cliR.despachado, separado: cliR.separado, pendiente: cliR.pendiente, avance: cliR.avance, cumplimiento: cliR.cumplimiento,
+      pagado: cliR.pagado, faltaPagar: cliR.faltaPagar, estados: cliR.estados, alertas: cliR.alertas.slice(0, 3) } : null,
+    produccion36: proR ? { planificado: proR.planificado, ingresado: proR.ingresado, enProceso: proR.enProceso, faltaFabricar: proR.faltaFabricar, avance: proR.avance, atrasados: proR.atrasados,
+      stockLibre: proR.stock ? proR.stock.libre : null, stockFisico: proR.stock ? proR.stock.fisico : null, stockComprometido: proR.stock ? proR.stock.comprometido : null, faltaProducir: proR.falta ? proR.falta.total : null,
+      taller: proR.taller ? { llegado: proR.taller.llegadas, enProduccion: proR.taller.estados.en_produccion.unidades, porLlegar: proR.taller.estados.por_llegar.unidades, atrasados: proR.taller.estados.atrasado.pedidos } : null,
+      alertas: proR.alertas.slice(0, 3) } : null,
     controlSync: (cliR || proR) ? sync36_() : null,
     rrhh: rrhh ? { periodo: rrhh.periodo, cuenta: rrhh.cuenta, alertas: rrhh.alertas.filter(a => a.nivel !== 'verde').slice(0, 5).concat(rrhh.alertas.filter(a => a.nivel === 'verde').slice(0, 3)), ranking: rrhh.ranking.slice(0, 3) } : null,
     cierresPendientes: pendientes, feriadosPendientes: alertas.filter(a => a.tipo === 'feriado_confirmar').map(a => a.fecha).sort(),
@@ -2358,8 +2362,12 @@ function audio_(u, com, aud, ctx) {
   if (A.length) cuerpo.push('Ahora, auditoría. ' + A.slice(0, 3).join(' ') + (recA.length ? ' ' + recA[0] : ''));
   const cr = ctx.clientes, pr = ctx.produccion;
   if (cr && cr.clientes) { const top = (ctx.clientesLista || []).filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente)[0];
-    cuerpo.push('Pedidos de clientes: cumplimiento del ' + palabras_(cr.cumplimiento || 0) + ' por ciento, con ' + unid36_(cr.pendiente) + ' pendientes' + (top ? '; ' + top.nombre + ' es el que más espera, ' + unid36_(top.pendiente) : '') + '.'); }
-  if (pr && pr.planificado) cuerpo.push('Producción: avance del ' + palabras_(pr.avance || 0) + ' por ciento' + (pr.faltaFabricar ? ', faltan fabricar ' + unid36_(pr.faltaFabricar) + ' para pedidos' : '') + (pr.atrasados ? ' y hay ' + palabras_(pr.atrasados) + (pr.atrasados === 1 ? ' artículo atrasado' : ' artículos atrasados') : '') + '.');
+    const tp = cr.topPendiente && cr.topPendiente[0];
+    cuerpo.push('Pedidos de clientes: se llevaron ' + unid36_(cr.despachado) + ', el ' + palabras_(cr.avance || 0) + ' por ciento' + (cr.separado ? ', hay ' + unid36_(cr.separado) + ' separadas' : '') + ' y faltan despachar ' + unid36_(cr.pendiente) + (tp ? '; ' + tp.nombre + ' es el que más espera' : '') + '.' +
+      (cr.pagado != null ? ' Pagado: ' + dinero_(cr.pagado) + (cr.faltaPagar ? ', falta pagar ' + dinero_(cr.faltaPagar) : '') + '.' : '')); }
+  if (pr && (pr.planificado || pr.stock)) cuerpo.push('Producción: ' + (pr.stock ? 'stock real libre en Lima, ' + unid36_(pr.stock.libre) + '; ' : '') + (pr.falta ? 'falta producir ' + unid36_(pr.falta.total) + '; ' : '') +
+    (pr.taller ? 'de los pedidos de taller llegaron ' + unid36_(pr.taller.llegadas) + (pr.taller.estados.en_produccion.unidades ? ' y ' + unid36_(pr.taller.estados.en_produccion.unidades) + ' siguen en producción' : '') : 'avance del ' + palabras_(pr.avance || 0) + ' por ciento') +
+    (pr.atrasados ? '; hay ' + palabras_(pr.atrasados) + (pr.atrasados === 1 ? ' pedido atrasado' : ' pedidos atrasados') : '') + '.');
   if (R.length) cuerpo.push('En recursos humanos: ' + R.join(' '));
   const general = cuerpo.length ? limpiar(intro('te cuento las últimas novedades.') + cuerpo.join(' ') + ' Eso es todo por ahora.') : limpiar((nombre ? 'Hola ' + nombre : 'Hola') + ', que tengas un buen día.');
   return { saludo: nombre, general: general, comercial: comercial, auditoria: auditoria, acciones: acciones, rrhh: rrhh };
@@ -2968,49 +2976,75 @@ function leerControl_() {
       if (sumaDetalle.pedido !== C.pedido) C.difDetalle = 'El detalle por modelo (hoja PEDIDOS) suma ' + sumaDetalle.pedido + ' u pedidas y el resumen de la planilla dice ' + C.pedido + ' u.';
     }
   }
-  // ---- SE LLEVÓ (entregas con fecha): hojas que empiezan con «SE LLEVÓ»; el cliente sale del nombre de la hoja o de una columna Cliente
-  ss.getSheets().filter(s => /^SE LLEVO/.test(nh_(s.getName()))).forEach(sh => {
-    const H = vals36_(sh);
-    // Formato «remito»: PRODUCTOS · PRECIO · $ Franquicia · talles · CANT. · SUBTOTAL → monto facturado al cliente (sin fechas)
-    const eR = enc36_(H, [/^PRODUCTOS?$/, /^SUBTOTAL$/]);
-    if (eR) {
-      const cli = clientes[nh_(sh.getName()).replace(/^SE LLEVO\s*/, '')]; if (!cli) return;
-      const cS = eR.col(/^SUBTOTAL$/), cP = eR.col(/^PRODUCTOS?$/), cQ = eR.col(/^CANT/);
-      let monto = 0, unid = 0;
-      for (let i = eR.i + 1; i < H.v.length; i++) { const nom = nh_(H.d[i][cP]); if (!nom || /^TOTAL/.test(nom)) continue; monto += n36_(H.v[i][cS]); if (cQ >= 0) unid += n36_(H.v[i][cQ]); }
-      cli.facturado = (cli.facturado || 0) + monto; cli.unidadesRemito = (cli.unidadesRemito || 0) + unid;
-      return;
-    }
-    const e = enc36_(H, [/^FECHA/, /CODIGO|SKU/]); if (!e) return;
-    const cF = e.col(/^FECHA/), cK = e.col(/CODIGO|SKU/), cQ = e.col(/^CANT|^UNID|^TOTAL$/), cCl = e.col(/^CLIENTE/);
-    const delNombre = nh_(sh.getName()).replace(/^SE LLEVO\s*/, '');
-    for (let i = e.i + 1; i < H.v.length; i++) {
-      const f = f36_(H.v[i][cF], H.d[i][cF]), k = String(H.d[i][cK] || '').trim(); if (!f || !k) continue;
-      const cli = clientes[cCl >= 0 ? nh_(H.d[i][cCl]) : delNombre]; if (!cli) continue;
-      const q = cQ >= 0 ? n36_(H.v[i][cQ]) : 1; if (q <= 0) continue;
-      (cli.entregas = cli.entregas || []).push({ fecha: f, codigo: k, unidades: q });
-    }
+  // ---- 3.7 · Hojas de cada cliente y sus «SE LLEVÓ…» (formato remito). Pedido = lo que figura en la hoja del cliente + lo que se
+  //      movió a su hoja SE LLEVÓ; Se llevó (despachado) = la hoja SE LLEVÓ; Pagó = «Abonado». La fecha sale del nombre (p. ej. «EL 25-9»).
+  const claves = orden.slice().sort((a, b) => b.length - a.length);
+  const deHoja = n => { const t = nh_(n).replace(/^SE LLEVO\s*/, '').replace(/^TRASLADADO.*\bA\s+/, ''); return claves.find(k => t === k || t.indexOf(k + ' ') === 0) || null; };
+  ss.getSheets().forEach(sh => {
+    const nom = nh_(sh.getName()), llevo = /^SE LLEVO/.test(nom), k = llevo ? deHoja(sh.getName()) : claves.find(x => x === nom);
+    if (!k) return;
+    const t = totales36_(vals36_(sh)); if (!t) return;
+    const C = clientes[k];
+    if (llevo) {
+      const m = nom.match(/\bEL\s+(\d{1,2})[-\/](\d{1,2})\b/); let f = null;
+      if (m) { f = hoy.slice(0, 4) + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2); if (f > hoy) f = (Number(hoy.slice(0, 4)) - 1) + f.slice(4); }
+      C.llevo = C.llevo || { unidades: 0, monto: 0, remitos: [] };
+      C.llevo.unidades += t.unidades || 0; C.llevo.monto += t.monto || 0; C.llevo.remitos.push({ hoja: sh.getName(), fecha: f, unidades: t.unidades || 0, monto: t.monto || 0 });
+      if (t.abonado) C.abonadoLlevo = Math.max(C.abonadoLlevo || 0, t.abonado);
+    } else { C.hoja = { nombre: sh.getName(), unidades: t.unidades || 0, monto: t.monto || 0 }; if (t.abonado) C.abonadoHoja = t.abonado; }
   });
+  // ---- 3.7 · STOCK vs Pedidos: por SKU, stock de Lima, lo pendiente de todos los clientes, «Stock Lima final» (lo que le queda a Lima)
+  //      y, por cliente, Pedido · Se llevó · Stock depo (separado) · Pendiente.
+  const SV = hoja36_(ss, /^STOCK VS PEDIDOS$/), eS = enc36_(SV, [/^CODIGO$/, /^STOCK LIMA FINAL/]);
+  const stockSku = [];
+  if (!eS) avisos.push('No se encontró la hoja «STOCK vs Pedidos» con «Stock Lima final».');
+  else {
+    const c = { cod: eS.col(/^CODIGO$/), prod: eS.col(/^PRODUCTO$/), art: eS.col(/^NOMBRE ARTISTICO/), st: eS.col(/^STOCK LIMA DISP/), tp: eS.col(/^TOTAL PENDIENTE/),
+      fin: eS.col(/^STOCK LIMA FINAL/), fal: eS.col(/^FALTAN FABRICAR/), est: eS.col(/^ESTADO$/) };
+    // Grupos por cliente: cada «Pedido» abre un grupo (Pedido · Se llevó · Stock depo · Pendiente), en el orden de los clientes de la fila de arriba.
+    const arriba = SV.d.slice(0, eS.i).map(r => r.map(nh_));
+    const filaCli = arriba.map(r => r.filter(x => clientes[x]).length).reduce((b, n, i, A) => n > A[b] ? i : b, 0);   // la fila con más nombres de clientes
+    const seq = []; (arriba[filaCli] || []).forEach((x, j, r) => { if (clientes[x] && !seq.some(q => q.k === x)) seq.push({ k: x, j: j, si: nh_(r[j + 1] || '') !== 'NO' }); });
+    const grupos = []; eS.row.forEach((h, j) => { if (h === 'PEDIDO') grupos.push({ ped: j, lle: j + 1, dep: j + 2, pen: j + 3 }); });
+    const gCli = grupos.slice(-seq.length).map((g, n) => Object.assign({ k: seq[n].k, si: seq[n].si }, g));
+    gCli.forEach(g => { clientes[g.k].separadoDepo = 0; clientes[g.k].seCuentaStock = g.si; clientes[g.k].modelos = []; });
+    for (let i = eS.i + 1; i < SV.v.length; i++) {
+      const r = SV.v[i], d = SV.d[i], cod = String(d[c.cod] || '').trim(), prod = String(d[c.prod] || '').trim(); if (!cod || !prod) continue;
+      const tl = talle36_(prod), st = n36_(r[c.st]), tp = Math.max(0, n36_(r[c.tp])), fin = c.fin >= 0 ? n36_(r[c.fin]) : st - tp;
+      stockSku.push({ sku: cod, producto: prod, modelo: tl.modelo, talle: tl.talle, artistico: c.art >= 0 ? String(d[c.art] || '').trim() : '', fisico: Math.max(0, st),
+        comprometido: Math.max(0, Math.min(Math.max(0, st), tp)), pendienteClientes: tp, libre: Math.max(0, fin), faltante: Math.max(0, c.fal >= 0 ? n36_(r[c.fal]) : -fin), estado: c.est >= 0 ? String(d[c.est] || '').trim() : '' });
+      gCli.forEach(g => { const C = clientes[g.k], pe = Math.max(0, n36_(r[g.ped])), ll = Math.max(0, n36_(r[g.lle])), de = Math.max(0, n36_(r[g.dep])), pn = Math.max(0, n36_(r[g.pen]));
+        C.separadoDepo += de; if (pe || ll || de || pn) C.modelos.push({ sku: cod, producto: prod, modelo: tl.modelo, talle: tl.talle, pedido: pe, sellevo: ll, separado: de, pendiente: pn }); });
+    }
+  }
   const tipos = cfg_().tiposCliente || {};
   const listaCli = orden.map(k => {
     const C = clientes[k];
     C.tipo = tipos[k] || 'Franquicia';
-    C.cumplimiento = C.pedido ? Math.round((C.entregado + C.separado) / C.pedido * 100) : null;
-    C.estado = !C.pedido ? 'sin_pedido' : !C.pendiente ? 'completo' : (C.entregado + C.separado) === 0 ? 'pendiente' : 'parcial';
-    if (C.pendiente && C.entregaEstimada && C.entregaEstimada < hoy) C.estado = 'atrasado';
+    // 3.7 · Totales según las hojas del cliente (si existen); si no, quedan los del Tablero clientes.
+    if (C.hoja || C.llevo) {
+      const ll = C.llevo || { unidades: 0, monto: 0, remitos: [] }, hj = C.hoja || { unidades: 0, monto: 0 };
+      C.pedidoTotal = hj.unidades + ll.unidades; C.montoTotal = Math.round(hj.monto + ll.monto);
+      C.despachado = ll.unidades; C.montoDespachado = Math.round(ll.monto);
+      C.pendienteTotal = Math.max(0, C.pedidoTotal - C.despachado);
+      C.exigible = Math.round(0.5 * C.montoTotal + 0.5 * C.montoDespachado);   // 50 % del pedido total (anticipo) + 50 % de lo que se llevó
+      const ab = Math.max(C.abonadoHoja || 0, C.abonadoLlevo || 0);
+      if (ab) { C.pagado = Math.round(ab); C.faltaPagar = Math.max(0, C.exigible - C.pagado); C.pctPagado = C.montoTotal ? Math.round(C.pagado / C.montoTotal * 100) : null; }
+      C.remitos = ll.remitos;
+    }
+    if (C.separadoDepo != null) C.separadoTotal = C.separadoDepo;
+    const ped = C.pedidoTotal != null ? C.pedidoTotal : C.pedido, des = C.despachado != null ? C.despachado : C.entregado, sep = C.separadoTotal != null ? C.separadoTotal : C.separado;
+    const pen = C.pendienteTotal != null ? C.pendienteTotal : C.pendiente;
+    C.avance = ped ? Math.round(des / ped * 100) : null;
+    C.cumplimiento = ped ? Math.round(Math.min(ped, des + sep) / ped * 100) : null;
+    C.estado = !ped ? 'sin_pedido' : !pen ? 'completo' : (des + sep) === 0 ? 'pendiente' : 'parcial';
+    if (pen && C.entregaEstimada && C.entregaEstimada < hoy) C.estado = 'atrasado';
     if (C.monto && C.facturado != null) C.pendienteFacturar = Math.max(0, Math.round(C.monto - C.facturado));
     C.separableYa = C.items.reduce((a, x) => a + Math.min(x.pendiente, x.stockLima), 0);
-    if (C.entregas) {
-      const porF = {}; C.entregas.forEach(x => { porF[x.fecha] = (porF[x.fecha] || 0) + x.unidades; });
-      C.entregasPorFecha = Object.keys(porF).sort().map(f => ({ fecha: f, unidades: porF[f] }));
-      const ult = {}; C.entregas.forEach(x => { if (!ult[x.codigo] || x.fecha > ult[x.codigo]) ult[x.codigo] = x.fecha; });
-      C.items.forEach(x => { if (ult[x.codigo]) x.ultimaEntrega = ult[x.codigo]; });
-      C.primeraEntrega = C.entregasPorFecha.length ? C.entregasPorFecha[0].fecha : null;
-      delete C.entregas;
-    }
     C.items.sort((a, b) => b.pendiente - a.pendiente || a.producto.localeCompare(b.producto));
+    if (C.modelos) C.modelos.sort((a, b) => b.pendiente - a.pendiente || a.producto.localeCompare(b.producto));
     return C;
-  }).filter(C => C.pedido > 0);
+  }).filter(C => (C.pedidoTotal || C.pedido) > 0);
 
   // ---- INGRESO (lo que llega del taller al depósito)
   const I = hoja36_(ss, /^INGRESO$/), eI = enc36_(I, [/^PRODUCTO$/, /^PEDIDO AL TALLER/, /^LLEGO/]);
@@ -3064,7 +3098,21 @@ function leerControl_() {
     }
   }
   let modificado = null; try { modificado = DriveApp.getFileById(id).getLastUpdated().toISOString(); } catch (e) {}
-  return { leida: new Date().toISOString(), modificado: modificado, archivo: ss.getName(), avisos: avisos, clientes: listaCli, lineas: lineas, ots: ots, fabricar: fabricar };
+  return { leida: new Date().toISOString(), modificado: modificado, archivo: ss.getName(), avisos: avisos, clientes: listaCli, lineas: lineas, ots: ots, fabricar: fabricar, stock: stockSku };
+}
+/** 3.7 · Totales de una hoja de cliente o «SE LLEVÓ»: busca las etiquetas y toma el primer número a su derecha. */
+function totales36_(H) {
+  if (!H || !H.d.length) return null;
+  const busca = re => { for (let i = 0; i < H.d.length; i++) for (let j = 0; j < H.d[i].length; j++) if (re.test(nh_(H.d[i][j]))) {
+    for (let k = j + 1; k < H.d[i].length; k++) { const x = n36_(H.v[i][k]); if (x > 0) return x; } } return null; };
+  const u = busca(/^CANTIDAD TOTAL DE PRENDAS$|^CANTIDAD (DE )?PRENDAS$|^PRENDAS TOTALES$/), m = busca(/^TOTAL A PAGAR$/) || busca(/^TOTAL$/), a = busca(/^ABONADO$/);
+  if (u == null && m == null) return null;
+  return { unidades: u || 0, monto: m || 0, abonado: a || 0 };
+}
+/** Talle al final del nombre del producto ("BODY GRANATE BEIGE M" → modelo "BODY GRANATE BEIGE", talle "M"). */
+function talle36_(p) {
+  const m = String(p || '').trim().match(/^(.*?)\s+(XXS|XS|S|M|L|XL|XXL|XXXL|U|UNICO|ÚNICO|T\d|\d{2})$/i);
+  return m ? { modelo: m[1].trim(), talle: m[2].toUpperCase().replace('UNICO', 'ÚNICO') } : { modelo: String(p || '').trim(), talle: 'Único' };
 }
 /** Tipo de cada cliente (Franquicia / Mayorista): se aplica al leer, así un cambio se ve sin releer la planilla. */
 function tipos36_(D) { const T = cfg_().tiposCliente || {}; (D.clientes || []).forEach(c => { c.tipo = T[c.clave] || 'Franquicia'; }); return D; }
@@ -3099,55 +3147,103 @@ function control_(forzar, estricto) {
   PROPS.setProperty('CONTROL_SYNC', JSON.stringify({ ts: d.leida, ok: true, archivo: d.archivo, modificado: d.modificado, avisos: d.avisos.slice(0, 10) }));
   return d;
 }
-/* ---------- Resúmenes ---------- */
+/* ---------- Resúmenes (3.7) ---------- */
 const ESTADO_PED = { completo: 'Completo', parcial: 'Parcial', pendiente: 'Pendiente', atrasado: 'Atrasado' };
+const v37_ = (C, a, b) => C[a] != null ? C[a] : (C[b] || 0);   // valor de las hojas del cliente (3.7) o del Tablero clientes
 function resumenClientes_(D) {
   const L = D.clientes.filter(c => c.seCuenta !== false), hoy = hoy_();
-  const tot = k => L.reduce((a, c) => a + (c[k] || 0), 0);
-  const porTipo = {}; L.forEach(c => { const t = porTipo[c.tipo] = porTipo[c.tipo] || { tipo: c.tipo, clientes: 0, pedido: 0, entregado: 0, separado: 0, pendiente: 0 }; t.clientes++; ['pedido', 'entregado', 'separado', 'pendiente'].forEach(k => { t[k] += c[k]; }); });
-  Object.keys(porTipo).forEach(k => { const t = porTipo[k]; t.cumplimiento = t.pedido ? Math.round((t.entregado + t.separado) / t.pedido * 100) : null; });
+  const sum = (a, b) => L.reduce((t, c) => t + v37_(c, a, b), 0);
+  const pedido = sum('pedidoTotal', 'pedido'), desp = sum('despachado', 'entregado'), sep = sum('separadoTotal', 'separado'), pend = sum('pendienteTotal', 'pendiente');
+  const conPago = L.filter(c => c.pagado != null);
+  const pagado = conPago.reduce((t, c) => t + c.pagado, 0), falta = conPago.reduce((t, c) => t + (c.faltaPagar || 0), 0), totPago = conPago.reduce((t, c) => t + (c.montoTotal || 0), 0);
+  const monto = L.reduce((t, c) => t + (c.montoTotal || c.monto || 0), 0), montoDesp = L.reduce((t, c) => t + (c.montoDespachado || 0), 0);
+  const porTipo = {}; L.forEach(c => { const t = porTipo[c.tipo] = porTipo[c.tipo] || { tipo: c.tipo, clientes: 0, pedido: 0, despachado: 0, separado: 0, pendiente: 0 };
+    t.clientes++; t.pedido += v37_(c, 'pedidoTotal', 'pedido'); t.despachado += v37_(c, 'despachado', 'entregado'); t.separado += v37_(c, 'separadoTotal', 'separado'); t.pendiente += v37_(c, 'pendienteTotal', 'pendiente'); });
+  Object.keys(porTipo).forEach(k => { const t = porTipo[k]; t.avance = t.pedido ? Math.round(t.despachado / t.pedido * 100) : null; });
   const estados = { completo: 0, parcial: 0, pendiente: 0, atrasado: 0 }; L.forEach(c => { if (estados[c.estado] != null) estados[c.estado]++; });
+  const pen = c => v37_(c, 'pendienteTotal', 'pendiente'), ped = c => v37_(c, 'pedidoTotal', 'pedido');
   const alertas = [];
   L.forEach(c => {
-    const pct = c.pedido ? c.pendiente / c.pedido : 0;
-    if (c.estado === 'atrasado') alertas.push({ nivel: 'rojo', cliente: c.nombre, texto: c.nombre + ': ' + c.pendiente + ' u pendientes y la entrega estimada (' + fdm_(c.entregaEstimada) + ') ya pasó.' });
-    else if (c.pendiente >= 50 && pct >= 0.3) alertas.push({ nivel: pct >= 0.6 ? 'rojo' : 'amarillo', cliente: c.nombre, texto: c.nombre + ': falta entregar ' + c.pendiente + ' u, el ' + Math.round(pct * 100) + ' % del pedido.' });
-    if (c.entregaEstimada && c.pendiente && c.entregaEstimada > sumarDias_(hoy, 45)) alertas.push({ nivel: 'amarillo', cliente: c.nombre, texto: c.nombre + ': la entrega total se estima para el ' + fdm_(c.entregaEstimada) + ' (más de 45 días).' });
+    const pct = ped(c) ? pen(c) / ped(c) : 0;
+    if (c.estado === 'atrasado') alertas.push({ nivel: 'rojo', cliente: c.nombre, texto: c.nombre + ': ' + pen(c) + ' u pendientes y la entrega estimada (' + fdm_(c.entregaEstimada) + ') ya pasó.' });
+    else if (pen(c) >= 50 && pct >= 0.3) alertas.push({ nivel: pct >= 0.6 ? 'rojo' : 'amarillo', cliente: c.nombre, texto: c.nombre + ': falta despachar ' + pen(c) + ' u, el ' + Math.round(pct * 100) + ' % del pedido.' });
+    if (c.faltaPagar && c.exigible && c.faltaPagar / c.exigible >= 0.3) alertas.push({ nivel: 'amarillo', cliente: c.nombre, texto: c.nombre + ': falta pagar ' + $_(c.faltaPagar) + ' de lo exigible a hoy.' });
   });
+  const topPend = L.filter(pen).sort((a, b) => pen(b) - pen(a)).slice(0, 5).map(c => ({ nombre: c.nombre, pendiente: pen(c), pedido: ped(c), estado: c.estado }));
+  const topSaldo = conPago.filter(c => c.faltaPagar).sort((a, b) => b.faltaPagar - a.faltaPagar).slice(0, 5).map(c => ({ nombre: c.nombre, faltaPagar: c.faltaPagar, pagado: c.pagado, pctPagado: c.pctPagado }));
   const recomendaciones = [];
-  const sep = L.filter(c => c.separableYa > 0).sort((a, b) => b.separableYa - a.separableYa);
-  if (sep.length) recomendaciones.push('Hay stock en HB Lima para separar ya ' + sep.slice(0, 3).map(c => c.separableYa + ' u de ' + c.nombre).join(', ') + ': pasarlas a su depósito acorta la entrega sin fabricar.');
-  const top = L.filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente)[0];
-  if (top) recomendaciones.push('Priorizar la próxima entrega a ' + top.nombre + ', que tiene la mayor cantidad pendiente (' + top.pendiente + ' u).');
-  const pedido = tot('pedido'), ent = tot('entregado'), sepT = tot('separado');
-  return { clientes: L.length, pedido: pedido, entregado: ent, separado: sepT, pendiente: tot('pendiente'), extra: tot('extra'),
-    cumplimiento: pedido ? Math.round((ent + sepT) / pedido * 100) : null, monto: L.some(c => c.monto) ? tot('monto') : null,
-    porTipo: Object.keys(porTipo).map(k => porTipo[k]), estados: estados, alertas: alertas.sort((a, b) => (a.nivel === 'rojo' ? 0 : 1) - (b.nivel === 'rojo' ? 0 : 1)), recomendaciones: recomendaciones };
+  const sepYa = L.filter(c => c.separableYa > 0).sort((a, b) => b.separableYa - a.separableYa);
+  if (sepYa.length) recomendaciones.push('Separar ya con stock de Lima ' + sepYa.slice(0, 3).map(c => c.separableYa + ' u de ' + c.nombre).join(', ') + ': acorta la entrega sin fabricar.');
+  if (topPend[0]) recomendaciones.push('Priorizar el próximo despacho a ' + topPend[0].nombre + ', que tiene la mayor cantidad pendiente (' + topPend[0].pendiente + ' u).');
+  if (topSaldo[0]) recomendaciones.push('Gestionar el cobro de ' + topSaldo[0].nombre + ' (' + $_(topSaldo[0].faltaPagar) + ' por pagar) antes del próximo despacho.');
+  return { clientes: L.length, pedido: pedido, despachado: desp, entregado: desp, separado: sep, pendiente: pend, monto: monto || null, montoDespachado: montoDesp || null,
+    avance: pedido ? Math.round(desp / pedido * 100) : null, cumplimiento: pedido ? Math.round(Math.min(pedido, desp + sep) / pedido * 100) : null,
+    pagado: conPago.length ? pagado : null, faltaPagar: conPago.length ? falta : null, pctPagado: conPago.length && totPago ? Math.round(pagado / totPago * 100) : null, clientesConPago: conPago.map(c => c.nombre),
+    porTipo: Object.keys(porTipo).map(k => porTipo[k]), estados: estados, topPendiente: topPend, topSaldo: topSaldo,
+    alertas: alertas.sort((a, b) => (a.nivel === 'rojo' ? 0 : 1) - (b.nivel === 'rojo' ? 0 : 1)), recomendaciones: recomendaciones };
+}
+/** Stock real de Lima (lo que queda libre después de los pedidos): planilla «STOCK vs Pedidos», columna «Stock Lima final». */
+function resumenStock37_(D) {
+  const S = D.stock || []; if (!S.length) return null;
+  const tot = k => S.reduce((a, x) => a + (x[k] || 0), 0);
+  const porModelo = {}; S.forEach(x => { const m = porModelo[x.modelo] = porModelo[x.modelo] || { modelo: x.modelo, fisico: 0, comprometido: 0, libre: 0, faltante: 0, talles: 0 };
+    m.fisico += x.fisico; m.comprometido += x.comprometido; m.libre += x.libre; m.faltante += x.faltante; m.talles++; });
+  const M = Object.keys(porModelo).map(k => porModelo[k]);
+  return { fisico: tot('fisico'), comprometido: tot('comprometido'), libre: tot('libre'), faltante: tot('faltante'), skus: S.length, modelos: M.length,
+    topLibre: M.filter(m => m.libre).sort((a, b) => b.libre - a.libre).slice(0, 5),
+    topMenos: M.filter(m => m.faltante || (m.fisico && !m.libre) || m.comprometido).sort((a, b) => (b.faltante - a.faltante) || (a.libre - b.libre)).slice(0, 5) };
+}
+/** Qué falta producir: hoja «A FABRICAR» (para pedidos y para llegar al stock mínimo); el taller sale de la OT o de INGRESO. */
+function resumenFalta37_(D) {
+  const F = D.fabricar || []; if (!F.length) return null;
+  const plan = D.lineas.reduce((a, x) => a + x.planificado, 0), ped = F.reduce((a, x) => a + x.faltanPedidos, 0), min = F.reduce((a, x) => a + x.paraMinimo, 0);
+  const urg = x => /URGENTE/i.test(x.prioridad) ? 0 : 1;
+  const porModelo = {}; F.forEach(x => { const t = talle36_(x.producto), k = t.modelo || x.sku; const m = porModelo[k] = porModelo[k] || { modelo: k, pedidos: 0, minimo: 0, urgente: false, talles: [], taller: '' };
+    m.pedidos += x.faltanPedidos; m.minimo += x.paraMinimo; if (!urg(x)) m.urgente = true; m.talles.push(x.talle || t.talle); if (!m.taller && x.taller) m.taller = x.taller; });
+  const top = Object.keys(porModelo).map(k => porModelo[k]).sort((a, b) => (b.urgente - a.urgente) || (b.pedidos - a.pedidos) || (b.minimo - a.minimo)).slice(0, 5);
+  return { total: ped + min, paraPedidos: ped, paraMinimo: min, planificado: plan, pctPlanificado: plan ? Math.round((ped + min) / plan * 100) : null, urgentes: F.filter(x => !urg(x)).length,
+    sinOt: F.filter(x => x.faltanPedidos && !x.ot).length, top: top };
+}
+/** Pedidos de taller (hoja INGRESO): Llegado (LLEGÓ > 0) · En producción (con taller y falta) · Por llegar (sin taller y falta) · Atrasado (pasó la fecha prometida). */
+function estadoTaller37_(x) { return x.atrasado ? 'atrasado' : x.faltante ? (x.taller !== 'Sin taller' ? 'en_produccion' : 'por_llegar') : 'llegado'; }
+function resumenTaller37_(D) {
+  const L = D.lineas || []; if (!L.length) return null;
+  const est = { llegado: { pedidos: 0, unidades: 0 }, en_produccion: { pedidos: 0, unidades: 0 }, por_llegar: { pedidos: 0, unidades: 0 }, atrasado: { pedidos: 0, unidades: 0 } };
+  let llegadas = 0, conLlegada = 0;
+  L.forEach(x => { const e = estadoTaller37_(x); est[e].pedidos++; est[e].unidades += e === 'llegado' ? x.ingresado + x.sobrante : x.faltante; llegadas += x.ingresado + x.sobrante; if (x.ingresado) conLlegada++; });
+  const ultimos = L.filter(x => x.ultimaLlegada && (x.ingresado || x.sobrante)).sort((a, b) => b.ultimaLlegada.localeCompare(a.ultimaLlegada) || (b.ingresado - a.ingresado)).slice(0, 5)
+    .map(x => ({ taller: x.taller, modelo: x.nombreTienda || x.producto, cantidad: x.ingresado + x.sobrante, fecha: x.ultimaLlegada, ot: x.ot, completo: !x.faltante }));
+  const pend = L.filter(x => x.faltante);
+  const proximos = pend.slice().sort((a, b) => (b.atrasado - a.atrasado) || ((a.fechaPrometida || '9') .localeCompare(b.fechaPrometida || '9')) || ((a.taller === 'Sin taller') - (b.taller === 'Sin taller')) || (b.faltante - a.faltante)).slice(0, 5)
+    .map(x => ({ taller: x.taller, modelo: x.nombreTienda || x.producto, pendiente: x.faltante, fecha: x.fechaPrometida, estado: estadoTaller37_(x), ot: x.ot }));
+  const T = {}; L.forEach(x => { const t = T[x.taller] = T[x.taller] || { taller: x.taller, pedidos: 0, pedido: 0, llegado: 0, falta: 0, atrasados: 0, ultima: null, proxima: null };
+    t.pedidos++; t.pedido += x.planificado; t.llegado += x.ingresado; t.falta += x.faltante; if (x.atrasado) t.atrasados++;
+    if (x.ultimaLlegada && (!t.ultima || x.ultimaLlegada > t.ultima)) t.ultima = x.ultimaLlegada; if (x.faltante && x.fechaPrometida && (!t.proxima || x.fechaPrometida < t.proxima)) t.proxima = x.fechaPrometida; });
+  const total = L.reduce((a, x) => a + x.planificado, 0);
+  return { estados: est, llegadas: llegadas, conLlegada: conLlegada, total: total, ultimos: ultimos, proximos: proximos,
+    talleres: Object.keys(T).map(k => T[k]).sort((a, b) => b.falta - a.falta || b.pedido - a.pedido) };
 }
 function resumenProduccion_(D) {
   const L = D.lineas, tot = k => L.reduce((a, x) => a + (x[k] || 0), 0);
   const plan = tot('planificado'), ing = tot('ingresado');
-  // En producción = lo que falta llegar de artículos ya asignados a un taller · Sin iniciar = planificado todavía sin taller.
   const enProceso = L.filter(x => x.faltante && x.taller !== 'Sin taller').reduce((a, x) => a + x.faltante, 0);
   const sinIniciar = L.filter(x => x.faltante && x.taller === 'Sin taller').reduce((a, x) => a + x.faltante, 0);
   const faltaFab = D.fabricar.reduce((a, x) => a + x.faltanPedidos, 0), paraMin = D.fabricar.reduce((a, x) => a + x.paraMinimo, 0);
-  const talleres = {}; L.forEach(x => { const t = talleres[x.taller] = talleres[x.taller] || { taller: x.taller, lineas: 0, planificado: 0, ingresado: 0, faltante: 0, atrasadas: 0, proxima: null };
-    t.lineas++; t.planificado += x.planificado; t.ingresado += x.ingresado; t.faltante += x.faltante; if (x.atrasado) t.atrasadas++;
-    if (x.faltante && x.fechaPrometida && x.fechaPrometida >= hoy_() && (!t.proxima || x.fechaPrometida < t.proxima)) t.proxima = x.fechaPrometida; });
-  const TL = Object.keys(talleres).map(k => { const t = talleres[k]; t.avance = t.planificado ? Math.round(t.ingresado / t.planificado * 100) : null; return t; }).sort((a, b) => b.faltante - a.faltante);
-  const atrasadas = L.filter(x => x.atrasado), criticos = D.fabricar.filter(x => /URGENTE/i.test(x.prioridad) || x.faltanPedidos > 0).sort((a, b) => b.faltanPedidos - a.faltanPedidos);
+  const atrasadas = L.filter(x => x.atrasado);
+  const stock = resumenStock37_(D), falta = resumenFalta37_(D), taller = resumenTaller37_(D);
   const alertas = [];
-  if (atrasadas.length) alertas.push({ nivel: 'rojo', texto: atrasadas.length + (atrasadas.length === 1 ? ' artículo atrasado' : ' artículos atrasados') + ' (pasó la fecha prometida y falta mercadería): ' + atrasadas.slice(0, 3).map(x => x.producto + ' · ' + x.taller).join(', ') + '.' });
-  const sinOt = criticos.filter(x => !x.ot);
+  if (atrasadas.length) alertas.push({ nivel: 'rojo', texto: atrasadas.length + (atrasadas.length === 1 ? ' pedido de taller atrasado' : ' pedidos de taller atrasados') + ' (pasó la fecha prometida y falta mercadería): ' + atrasadas.slice(0, 3).map(x => (x.nombreTienda || x.producto) + ' · ' + x.taller).join(', ') + '.' });
+  const sinOt = D.fabricar.filter(x => x.faltanPedidos && !x.ot);
   if (sinOt.length) alertas.push({ nivel: 'rojo', texto: sinOt.length + ' talles con faltante para pedidos todavía sin OT (' + sinOt.reduce((a, x) => a + x.faltanPedidos, 0) + ' u).' });
-  const muchoFalt = L.filter(x => x.faltante && x.planificado && x.faltante / x.planificado >= 0.5 && x.ingresado > 0);
-  if (muchoFalt.length) alertas.push({ nivel: 'amarillo', texto: muchoFalt.length + ' artículos con más de la mitad todavía sin llegar.' });
+  if (stock && stock.faltante) alertas.push({ nivel: 'amarillo', texto: 'A Lima le faltan ' + stock.faltante + ' u para cubrir lo que piden los clientes.' });
   const recomendaciones = [];
   if (sinOt.length) recomendaciones.push('Abrir OT para lo urgente sin orden, empezando por ' + sinOt.slice(0, 3).map(x => x.producto).join(', ') + '.');
-  if (TL[0] && TL[0].faltante) recomendaciones.push('Seguir de cerca al taller ' + TL[0].taller + ', que concentra el mayor faltante (' + TL[0].faltante + ' u).');
+  if (taller && taller.talleres[0] && taller.talleres[0].falta && taller.talleres[0].taller !== 'Sin taller') recomendaciones.push('Seguir de cerca al taller ' + taller.talleres[0].taller + ', que concentra lo que falta llegar (' + taller.talleres[0].falta + ' u).');
+  else if (taller && taller.estados.por_llegar.unidades) recomendaciones.push('Asignar taller a lo planificado que todavía no se mandó a fabricar (' + taller.estados.por_llegar.unidades + ' u).');
   return { planificado: plan, ingresado: ing, enProceso: enProceso, sinIniciar: sinIniciar, faltaFabricar: faltaFab, paraMinimo: paraMin, sobrante: tot('sobrante'), fallas: tot('fallas'),
-    avance: plan ? Math.round(ing / plan * 100) : null, articulos: L.length, talleres: TL, otsAbiertas: D.ots.filter(o => !o.terminada).length, otsTerminadas: D.ots.filter(o => o.terminada).length,
-    atrasados: atrasadas.length, alertas: alertas, recomendaciones: recomendaciones };
+    avance: plan ? Math.round(ing / plan * 100) : null, articulos: L.length, talleres: (taller ? taller.talleres : []).map(t => Object.assign({ planificado: t.pedido, ingresado: t.llegado, faltante: t.falta, avance: t.pedido ? Math.round(t.llegado / t.pedido * 100) : null }, t)),
+    otsAbiertas: D.ots.filter(o => !o.terminada).length, otsTerminadas: D.ots.filter(o => o.terminada).length, atrasados: atrasadas.length,
+    stock: stock, falta: falta, taller: taller, alertas: alertas, recomendaciones: recomendaciones };
 }
 /* ---------- Audio (texto que el navegador lee) ---------- */
 function unid36_(n) { n = Math.round(n || 0); return n === 1 ? 'una unidad' : palabras_(n) + ' unidades'; }
@@ -3156,54 +3252,89 @@ function cuandoAct36_() {
   const d = new Date(st.ts), f = Utilities.formatDate(d, TZ, 'yyyy-MM-dd'), h = Utilities.formatDate(d, TZ, 'HH:mm');
   return 'Datos de la planilla actualizados ' + fechaHablada_(f) + ' a las ' + palabras_(Number(h.slice(0, 2))) + (Number(h.slice(3)) ? ' y ' + palabras_(Number(h.slice(3))) : '') + '.';
 }
+const lista37_ = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' y ' + a[a.length - 1];
 function audioClientes_(u, R, L) {
   const nombre = String(u && u.nombre || '').trim().split(' ')[0], P = [];
   if (!R.clientes) return '';
-  P.push((nombre ? 'Hola ' + nombre + ', ' : 'Hola, ') + 'te cuento la situación de los pedidos de clientes.');
+  P.push((nombre ? 'Hola ' + nombre + ', ' : 'Hola, ') + 'te cuento cómo están los pedidos de los clientes.');
   P.push(cuandoAct36_());
-  P.push('Hay ' + palabras_(R.clientes) + (R.clientes === 1 ? ' cliente' : ' clientes') + ' con pedido: ' + unid36_(R.pedido) + ' pedidas, ' + unid36_(R.entregado) + ' entregadas' + (R.separado ? ', ' + unid36_(R.separado) + ' separadas en su depósito' : '') + ' y ' + unid36_(R.pendiente) + ' pendientes. El cumplimiento general es del ' + palabras_(R.cumplimiento || 0) + ' por ciento.');
-  if (R.porTipo.length > 1) R.porTipo.forEach(t => P.push(t.tipo + 's: ' + palabras_(t.clientes) + ', con ' + unid36_(t.pendiente) + ' pendientes y ' + palabras_(t.cumplimiento || 0) + ' por ciento de cumplimiento.'));
-  else if (R.porTipo.length === 1) P.push('Todos son ' + R.porTipo[0].tipo.toLowerCase() + 's.');
-  const e = R.estados, partes = [];
-  if (e.completo) partes.push(palabras_(e.completo) + (e.completo === 1 ? ' completo' : ' completos'));
-  if (e.parcial) partes.push(palabras_(e.parcial) + (e.parcial === 1 ? ' parcial' : ' parciales'));
-  if (e.pendiente) partes.push(palabras_(e.pendiente) + (e.pendiente === 1 ? ' pendiente' : ' pendientes'));
-  if (e.atrasado) partes.push(palabras_(e.atrasado) + (e.atrasado === 1 ? ' atrasado' : ' atrasados'));
-  if (partes.length) P.push('Pedidos: ' + partes.join(', ') + '.');
-  const top = L.filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente).slice(0, 3);
-  if (top.length) P.push('Con más mercadería pendiente: ' + top.map(c => c.nombre + ', ' + unid36_(c.pendiente)).join('; ') + '.');
-  const saldos = L.filter(c => c.pendienteFacturar).sort((a, b) => b.pendienteFacturar - a.pendienteFacturar).slice(0, 2);
-  const montos = L.filter(c => c.monto).sort((a, b) => b.monto - a.monto).slice(0, 2);
-  if (saldos.length) P.push('Como dato complementario, los saldos más altos sin facturar son ' + saldos.map(c => c.nombre + ', ' + dinero_(c.pendienteFacturar)).join(', y ') + '.');
-  else if (montos.length) P.push('Como dato complementario, los pedidos de mayor monto son ' + montos.map(c => c.nombre + ', ' + dinero_(c.monto)).join(', y ') + '.');
-  R.alertas.slice(0, 2).forEach(a => P.push(hablar_(a.texto.replace(/(\d+) u\b/g, (m, n) => unid36_(Number(n))))));
-  R.recomendaciones.slice(0, 2).forEach(r => P.push(hablar_(r.replace(/(\d+) u\b/g, (m, n) => unid36_(Number(n))))));
+  P.push('Pidieron ' + unid36_(R.pedido) + '. Ya se llevaron ' + unid36_(R.despachado) + ', el ' + palabras_(R.avance || 0) + ' por ciento' + (R.separado ? ', hay ' + unid36_(R.separado) + ' separadas en sus depósitos' : '') + ' y faltan despachar ' + unid36_(R.pendiente) + '.');
+  if (R.topPendiente.length) P.push('Los que más esperan: ' + lista37_(R.topPendiente.slice(0, 3).map(c => c.nombre + ', ' + unid36_(c.pendiente))) + '.');
+  if (R.pagado != null) P.push('Pagos: ' + lista37_(R.clientesConPago) + (R.clientesConPago.length === 1 ? ' pagó ' : ' pagaron ') + dinero_(R.pagado) + (R.faltaPagar ? ' y falta pagar ' + dinero_(R.faltaPagar) + ' de lo que corresponde a hoy' : ', está al día') + '.');
+  if (R.recomendaciones.length) P.push('La prioridad de hoy: ' + hablar_(R.recomendaciones[R.recomendaciones.length > 1 && /Separar/.test(R.recomendaciones[0]) ? 0 : 0].replace(/(\d+) u\b/g, (m, n) => unid36_(Number(n)))).replace(/^\w/, c => c.toLowerCase()));
   return P.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
 function audioProduccion_(u, R) {
   const nombre = String(u && u.nombre || '').trim().split(' ')[0], P = [];
-  if (!R.planificado && !R.faltaFabricar) return '';
+  const S = R.stock, F = R.falta, T = R.taller;
+  if (!S && !F && !T && !R.planificado) return '';
   P.push((nombre ? 'Hola ' + nombre + ', ' : 'Hola, ') + 'te cuento cómo viene la producción.');
   P.push(cuandoAct36_());
-  if (R.planificado) P.push('Hay ' + unid36_(R.planificado) + ' planificadas: ' + unid36_(R.ingresado) + ' ya ingresaron al depósito' + (R.enProceso ? ', ' + unid36_(R.enProceso) + ' están en los talleres' : '') + (R.sinIniciar ? ' y ' + unid36_(R.sinIniciar) + ' todavía no se mandaron a ningún taller' : '') + '. El avance es del ' + palabras_(R.avance || 0) + ' por ciento.');
-  const T = R.talleres.filter(t => t.planificado && t.taller !== 'Sin taller');
-  const mejor = T.filter(t => t.avance != null).sort((a, b) => b.avance - a.avance)[0], peor = T.filter(t => t.faltante).sort((a, b) => b.faltante - a.faltante)[0];
-  if (mejor) P.push('El taller más avanzado es ' + mejor.taller + ', con el ' + palabras_(mejor.avance) + ' por ciento.');
-  if (peor && (!mejor || peor.taller !== mejor.taller)) P.push('El que más debe es ' + peor.taller + ': le faltan ' + unid36_(peor.faltante) + (peor.atrasadas ? ', con ' + palabras_(peor.atrasadas) + (peor.atrasadas === 1 ? ' artículo atrasado' : ' artículos atrasados') : '') + '.');
-  if (R.faltaFabricar) P.push('Falta fabricar ' + unid36_(R.faltaFabricar) + ' para cubrir pedidos' + (R.paraMinimo ? ' y ' + unid36_(R.paraMinimo) + ' para llegar al stock mínimo' : '') + '.');
-  R.alertas.slice(0, 2).forEach(a => P.push(hablar_(a.texto.replace(/\((\d+) u\)/g, (m, n) => ', ' + unid36_(Number(n))).replace(/(\d+) talles/, (m, n) => palabras_(Number(n)) + ' talles').replace(/^(\d+) art/, (m, n) => palabras_(Number(n)) + ' art'))));
-  if (R.recomendaciones.length) P.push('Prioridad: ' + R.recomendaciones[0].replace(/\((\d+) u\)/g, (m, n) => ', ' + unid36_(Number(n))));
+  if (S) P.push('Stock real de Lima: ' + unid36_(S.libre) + ' libres para vender, de ' + unid36_(S.fisico) + ' en el depósito; ' + unid36_(S.comprometido) + ' están comprometidas por pedidos' + (S.faltante ? ' y faltan ' + unid36_(S.faltante) + ' para cubrirlos' : '') + '.');
+  if (F) P.push('Falta producir ' + unid36_(F.total) + ', el ' + palabras_(F.pctPlanificado || 0) + ' por ciento de lo planificado: ' + unid36_(F.paraPedidos) + ' para pedidos y ' + unid36_(F.paraMinimo) + ' para el stock mínimo.' +
+    (F.top.length ? ' Lo más urgente: ' + lista37_(F.top.slice(0, 3).map(m => m.modelo.toLowerCase())) + '.' : ''));
+  if (T) {
+    P.push('Pedidos de taller: llegaron ' + unid36_(T.llegadas) + (T.estados.en_produccion.unidades ? ', ' + unid36_(T.estados.en_produccion.unidades) + ' siguen en producción' : '') + (T.estados.por_llegar.unidades ? ' y ' + unid36_(T.estados.por_llegar.unidades) + ' todavía no se mandaron a un taller' : '') + '.');
+    if (T.ultimos.length) P.push('Últimos ingresos: ' + lista37_(T.ultimos.slice(0, 3).map(x => x.modelo.toLowerCase() + ' de ' + x.taller + ', ' + unid36_(x.cantidad))) + '.');
+    if (T.estados.atrasado.pedidos) P.push('Hay ' + palabras_(T.estados.atrasado.pedidos) + (T.estados.atrasado.pedidos === 1 ? ' pedido atrasado' : ' pedidos atrasados') + ', con ' + unid36_(T.estados.atrasado.unidades) + ' que no llegaron.');
+  }
+  if (R.recomendaciones.length) P.push('La prioridad de hoy: ' + R.recomendaciones[0].replace(/\((\d+) u\)/g, (m, n) => ', ' + unid36_(Number(n))).replace(/^\w/, c => c.toLowerCase()));
   return P.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
 /* ---------- API ---------- */
 const sync36_ = () => JSON.parse(PROPS.getProperty('CONTROL_SYNC') || 'null');
+/* En pantalla viajan solo resúmenes y Top 5 (sin listas largas); el detalle completo sale por descargaControl, con el mismo permiso. */
 function clientesPedidos(token) {
-  const s = sesion_(token, 'clientes'), D = control_(false), R = resumenClientes_(D);
-  return { sync: sync36_(), cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), resumen: R, clientes: D.clientes, avisos: D.avisos, audio: audioClientes_(s.user, R, D.clientes.filter(c => c.seCuenta !== false)) };
+  const s = sesion_(token, 'clientes'), D = control_(false), R = resumenClientes_(D), L = D.clientes.filter(c => c.seCuenta !== false);
+  const cli = D.clientes.map(c => ({ clave: c.clave, nombre: c.nombre, tipo: c.tipo, estado: c.estado, seCuenta: c.seCuenta !== false, pedido: v37_(c, 'pedidoTotal', 'pedido'), despachado: v37_(c, 'despachado', 'entregado'),
+    separado: v37_(c, 'separadoTotal', 'separado'), pendiente: v37_(c, 'pendienteTotal', 'pendiente'), avance: c.avance, montoTotal: c.montoTotal || c.monto || null, montoDespachado: c.montoDespachado || null,
+    exigible: c.exigible || null, pagado: c.pagado != null ? c.pagado : null, faltaPagar: c.faltaPagar != null ? c.faltaPagar : null, pctPagado: c.pctPagado != null ? c.pctPagado : null,
+    entregaEstimada: c.entregaEstimada || null, queHacer: c.queHacer || '', separableYa: c.separableYa || 0, remitos: c.remitos || [],
+    topModelos: (c.modelos || c.items.map(x => ({ producto: x.producto, pedido: x.pedido, sellevo: x.entregado, separado: x.separado, pendiente: x.pendiente }))).filter(x => x.pendiente).slice(0, 5) }));
+  return { sync: sync36_(), cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), resumen: R, clientes: cli, avisos: D.avisos, audio: audioClientes_(s.user, R, L) };
 }
 function produccionPanel(token) {
   const s = sesion_(token, 'produccion'), D = control_(false), R = resumenProduccion_(D);
-  return { sync: sync36_(), cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), resumen: R, lineas: D.lineas, ots: D.ots, fabricar: D.fabricar, avisos: D.avisos, audio: audioProduccion_(s.user, R) };
+  return { sync: sync36_(), cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), resumen: R, avisos: D.avisos, audio: audioProduccion_(s.user, R) };
+}
+/** Detalle de un taller (al tocarlo en pantalla): sus pedidos, sin listas largas (hasta 8). */
+function detalleTaller(token, taller) {
+  sesion_(token, 'produccion'); const D = control_(false), t = String(taller || '');
+  const L = D.lineas.filter(x => x.taller === t);
+  return { taller: t, pedidos: L.length, pedido: L.reduce((a, x) => a + x.planificado, 0), llegado: L.reduce((a, x) => a + x.ingresado, 0), falta: L.reduce((a, x) => a + x.faltante, 0),
+    lineas: L.slice().sort((a, b) => (b.atrasado - a.atrasado) || (b.faltante - a.faltante)).slice(0, 8).map(x => ({ modelo: x.nombreTienda || x.producto, ot: x.ot, pedido: x.planificado, llegado: x.ingresado + x.sobrante, falta: x.faltante, estado: estadoTaller37_(x), ultima: x.ultimaLlegada, prometida: x.fechaPrometida })), masDe8: L.length > 8 };
+}
+/** Descargas (Excel / PDF): el detalle completo, con la fecha y hora de la última actualización. Mismo permiso que la sección. */
+function descargaControl(token, tipo) {
+  const perm = { clientes: 'clientes', stock: 'produccion', falta: 'produccion', taller: 'produccion' }[tipo];
+  if (!perm) throw new Error('Descarga inválida.');
+  const s = sesion_(token, perm), D = control_(false), st = sync36_() || {};
+  const meta = { actualizado: st.ts || D.leida, modificado: st.modificado || D.modificado || null, generado: new Date().toISOString(), por: s.user.nombre };
+  const n = x => x == null ? '' : x;
+  if (tipo === 'clientes') {
+    const C = D.clientes;
+    const res = C.map(c => [c.nombre, c.tipo, ESTADO_PED[c.estado] || '', v37_(c, 'pedidoTotal', 'pedido'), v37_(c, 'despachado', 'entregado'), v37_(c, 'separadoTotal', 'separado'), v37_(c, 'pendienteTotal', 'pendiente'),
+      n(c.avance), n(c.montoTotal || c.monto), n(c.montoDespachado), n(c.exigible), n(c.pagado), n(c.faltaPagar), n(c.pctPagado), c.entregaEstimada ? fdm_(c.entregaEstimada) : '']);
+    const det = []; C.forEach(c => (c.modelos || []).forEach(x => det.push([c.nombre, x.sku, x.modelo, x.talle, x.pedido, x.sellevo, x.separado, x.pendiente])));
+    const rem = []; C.forEach(c => (c.remitos || []).forEach(r => rem.push([c.nombre, r.hoja, r.fecha ? fdm_(r.fecha) : '', r.unidades, r.monto])));
+    return Object.assign(meta, { titulo: 'Clientes y pedidos', archivo: 'Clientes-y-pedidos', hojas: [
+      { nombre: 'Resumen por cliente', columnas: ['Cliente', 'Tipo', 'Estado', 'Pedido (u)', 'Se llevó / despachado (u)', 'Separado (u)', 'Pendiente (u)', 'Avance %', 'Monto del pedido', 'Monto despachado', 'A pagar a hoy', 'Pagó', 'Falta pagar', 'Pagado %', 'Entrega estimada'], dinero: [8, 9, 10, 11, 12], filas: res },
+      { nombre: 'Detalle por modelo', columnas: ['Cliente', 'SKU', 'Modelo y color', 'Talle', 'Pedido', 'Se llevó', 'Separado', 'Pendiente'], filas: det },
+      { nombre: 'Remitos (SE LLEVÓ)', columnas: ['Cliente', 'Hoja', 'Fecha', 'Unidades', 'Monto'], dinero: [4], filas: rem }] });
+  }
+  if (tipo === 'stock') return Object.assign(meta, { titulo: 'Stock real de Lima', archivo: 'Stock-real-Lima', hojas: [
+    { nombre: 'Stock real por SKU', columnas: ['SKU', 'Modelo y color', 'Talle', 'Nombre artístico', 'Stock físico Lima', 'Comprometido por pedidos', 'Stock real (libre)', 'Falta para pedidos', 'Estado'],
+      filas: (D.stock || []).map(x => [x.sku, x.modelo, x.talle, x.artistico, x.fisico, x.comprometido, x.libre, x.faltante, x.estado]) }] });
+  if (tipo === 'falta') {
+    const tallerDe = x => { const l = D.lineas.find(y => (x.ot && y.ot === x.ot) || (y.sku && y.sku === x.sku)); const o = D.ots.find(y => (x.ot && y.ot === x.ot) || y.sku === x.sku); return (o && o.taller) || (l && l.taller !== 'Sin taller' ? l.taller : '') || ''; };
+    return Object.assign(meta, { titulo: 'Qué falta producir', archivo: 'Falta-producir', hojas: [
+      { nombre: 'Falta producir', columnas: ['SKU', 'Modelo y color', 'Talle', 'Para pedidos', 'Para el stock mínimo', 'Total a producir', 'Prioridad', 'OT', 'Taller', 'Estado de producción', 'Llega (estim.)'],
+        filas: (D.fabricar || []).map(x => { const t = talle36_(x.producto); return [x.sku, t.modelo, x.talle || t.talle, x.faltanPedidos, x.paraMinimo, x.faltanPedidos + x.paraMinimo, x.prioridad, x.ot, tallerDe(x), x.estadoProduccion, x.llega ? fdm_(x.llega) : '']; }) }] });
+  }
+  const EST = { llegado: 'Llegado', en_produccion: 'En producción', por_llegar: 'Por llegar', atrasado: 'Atrasado' };
+  return Object.assign(meta, { titulo: 'Pedidos de taller', archivo: 'Pedidos-de-taller', hojas: [
+    { nombre: 'Pedidos de taller', columnas: ['Taller', 'OT', 'Modelo', 'SKU', 'Pedido', 'Llegado', 'Pendiente', 'Estado', 'Fecha de llegada', 'Fecha prometida', 'Fallas'],
+      filas: D.lineas.map(x => { const t = talle36_(x.nombreTienda || x.producto); return [x.taller, x.ot, x.nombreTienda || x.producto, x.sku, x.planificado, x.ingresado + x.sobrante, x.faltante, EST[estadoTaller37_(x)], x.ultimaLlegada ? fdm_(x.ultimaLlegada) : '', x.fechaPrometida ? fdm_(x.fechaPrometida) : '', x.fallas || '']; }) }] });
 }
 /** «Actualizar datos»: relee las DOS planillas (Control ingreso y Ventas Palermo), cualquier día de la semana. */
 function actualizarPlanillas(token) {
