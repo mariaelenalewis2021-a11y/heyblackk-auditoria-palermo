@@ -34,7 +34,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes"]);
+const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -484,26 +484,50 @@ function anillo(hecho, total){
   const t = mk("text",{x:36,y:36,"text-anchor":"middle","dominant-baseline":"central",class:"num"}); t.textContent = total ? `${hecho}/${total}` : "–";
   return s;
 }
+/* 3.7 · «Hoy en una mirada»: el día contado en frases cortas (clima, equipo, ventas) y lo que hay para resolver como accesos directos. */
+const DIA_C = ["dom","lun","mar","mié","jue","vie","sáb"];
+const diaCorto = f => DIA_C[new Date(f+"T12:00:00").getDay()];
+function bloqueClima(C){
+  if (!C || !(C.dias||[]).length) return null;
+  const hoy = C.dias[0];
+  const box = el("div",{class:"clima37"},
+    el("div",{class:"clima-hoy"}, el("span",{class:"em","aria-hidden":"true",text:hoy.emoji}),
+      el("div",{}, el("b",{text:`${hoy.max}° / ${hoy.min}° · ${hoy.desc}`}), el("span",{class:"k",text:`Clima en ${C.lugar}${hoy.prob!=null?" · lluvia "+hoy.prob+" %":""}`}))),
+    el("div",{class:"clima-prox"}, C.dias.slice(1).map(d=>el("span",{class:"cp"+(d.lluvia?" lluvia":""),title:d.desc}, `${diaCorto(d.fecha)} ${d.emoji} ${d.max}°`, d.prob!=null&&d.prob>=30?el("small",{text:` ${d.prob} %`}):null))));
+  if (C.aviso) box.append(el("div",{class:"aviso-lluvia",role:"note"}, el("b",{text:"🌧️ "+C.aviso.texto}), el("span",{text:C.aviso.accion}), C.aviso.dato ? el("span",{class:"dato-ll",text:"📈 "+C.aviso.dato}) : null));
+  return box;
+}
 function tiraHoy(R){
-  const box = el("section",{class:"hoy","aria-label":"Resumen de hoy",style:"--i:0"});
+  const box = el("section",{class:"hoy","aria-label":"Hoy en una mirada",style:"--i:0"});
   if (!R){ box.append(el("div",{class:"datos"}, el("span",{class:"chip cargando"}), el("span",{class:"chip cargando"}))); return box; }
-  const datos = el("div",{class:"datos"});
-  const fila = (k,v,alerta) => datos.append(el("div",{class:"dato"+(alerta?" alerta":"")}, el("span",{class:"k",text:k}), el("b",{text:v})));
-  if (R.fichadas){
-    box.append(anillo(R.fichadas.entradas, R.fichadas.esperadas));
-    fila("Fichadas de hoy", (R.fichadas.abre ? `${R.fichadas.entradas} entradas, ${R.fichadas.salidas} salidas` : "Hoy no abre") + (R.fichadas.feriado ? ` · 🎉 ${R.fichadas.feriado}` : ""));
-    if ((R.fichadas.porSucursal||[]).length > 1) fila("Por sucursal", R.fichadas.porSucursal.map(x=>`${x.nombre} ${x.abre ? x.entradas+"/"+x.esperadas : "no abre"}`).join(" · "));
-    (R.fichadas.sucursalesIncompletas||[]).forEach(x=>fila("⚠️ Sucursal "+x.nombre, "Falta "+x.faltan.join(", ")+": no se puede fichar", true));
-    if (R.fichadas.deVacaciones) fila("De vacaciones hoy", plural(R.fichadas.deVacaciones, "1 persona (no cuenta como falta)", "% personas (no cuentan como falta)"));
+  const tiles = el("div",{class:"tiles37"});
+  const tile = (k, v, sub, cls, extra) => tiles.append(el("div",{class:"tile37 "+(cls||"")}, extra||null, el("span",{class:"k",text:k}), el("b",{text:v}), sub?el("span",{class:"sub37",text:sub}):null));
+  const F = R.fichadas;
+  if (F){
+    if (F.abre) tile("Equipo hoy", F.esperadas ? `${F.entradas} de ${F.esperadas} fichadas` : `${F.entradas} fichadas`,
+      [F.salidas ? `${F.salidas} ya salieron` : "", F.deVacaciones ? plural(F.deVacaciones, "1 de vacaciones", "% de vacaciones") : "", F.feriado ? "🎉 "+F.feriado : ""].filter(Boolean).join(" · "),
+      F.esperadas && F.entradas < F.esperadas ? "atencion" : "ok", F.esperadas ? anillo(F.entradas, F.esperadas) : null);
+    else tile("Equipo hoy", "Local cerrado", F.feriado ? "🎉 Feriado: "+F.feriado : "Hoy no es día de apertura", "neutro");
+    if ((F.porSucursal||[]).length > 1) tile("Por sucursal", F.porSucursal.map(x=>`${x.nombre} ${x.abre ? x.entradas+"/"+x.esperadas : "cerrada"}`).join(" · "), "", "neutro");
   }
-  if (R.cierre) fila("Último cierre", `${fmtF(R.cierre.fecha).slice(0,5)}: ${moneyK(R.cierre.total)}`);
-  if (R.mes && R.mes.total) fila("Mes en curso", moneyK(R.mes.total) + (R.mes.objetivo ? ` de ${moneyK(R.mes.objetivo)}` : ""));
-  if (R.manualesPendientes) fila("Fichajes manuales", plural(R.manualesPendientes, "1 por aprobar", "% por aprobar"), true);
-  if (R.correccionesPendientes) fila("Correcciones de fichada", plural(R.correccionesPendientes, "1 por aprobar", "% por aprobar"), true);
-  if (R.acciones && R.acciones.vencidas) fila("Acciones correctivas", plural(R.acciones.vencidas, "1 vencida", "% vencidas"), true);
-  if (R.vacaciones && R.vacaciones.pendientes) fila("Vacaciones por resolver", plural(R.vacaciones.pendientes, "1 solicitud", "% solicitudes") + (R.vacaciones.demoradas ? ` · ${R.vacaciones.demoradas} con más de 3 días` : ""), true);
-  if (!datos.children.length){ box.hidden = true; return box; }   // 3.5: si no hay nada para informar, solo queda el saludo con el nombre
-  box.append(datos);
+  if (R.cierre){ const v = R.cierre.vsDia;
+    tile("Último cierre · "+diaCorto(R.cierre.fecha)+" "+fmtF(R.cierre.fecha).slice(0,5), moneyK(R.cierre.total),
+      v ? `${v.pct>=0?"▲ +":"▼ "}${v.pct} % vs. el promedio de los ${["domingos","lunes","martes","miércoles","jueves","viernes","sábados"][new Date(R.cierre.fecha+"T12:00:00").getDay()]}` : "", v ? (v.pct>=0?"ok":"baja") : "neutro"); }
+  if (R.mes && R.mes.total) tile("Mes en curso", moneyK(R.mes.total),
+    R.mes.objetivo ? `${Math.round(R.mes.total/R.mes.objetivo*100)} % del objetivo (${moneyK(R.mes.objetivo)})` : R.mes.dias ? `${R.mes.dias} días con venta · ${moneyK(R.mes.total/R.mes.dias)} por día` : "", "neutro");
+  const acc = [];
+  const ir2 = (txt, href) => acc.push(el("a",{class:"accion37",href}, el("span",{text:txt}), icono("flecha",16)));
+  if (R.manualesPendientes) ir2(plural(R.manualesPendientes, "1 fichaje manual por aprobar", "% fichajes manuales por aprobar"), "#/ingresos/pendientes");
+  if (R.correccionesPendientes) ir2(plural(R.correccionesPendientes, "1 corrección de fichada", "% correcciones de fichada"), "#/ingresos/pendientes");
+  if (R.vacaciones && R.vacaciones.pendientes) ir2(plural(R.vacaciones.pendientes, "1 pedido de vacaciones", "% pedidos de vacaciones") + (R.vacaciones.demoradas ? ` (${R.vacaciones.demoradas} con más de 3 días)` : ""), "#/vacaciones");
+  if (R.acciones && R.acciones.vencidas) ir2(plural(R.acciones.vencidas, "1 acción correctiva vencida", "% acciones correctivas vencidas"), "#/acciones");
+  (F && F.sucursalesIncompletas || []).forEach(x=>ir2(`Sucursal ${x.nombre}: falta ${x.faltan.join(", ")}`, "#/ingresos/sucursales"));
+  const clima = bloqueClima(R.clima);
+  if (!tiles.children.length && !acc.length && !clima){ box.hidden = true; return box; }   // 3.5: si no hay nada para informar, solo queda el saludo
+  box.append(el("h2",{class:"hoy-tit",text:"Hoy en una mirada"}));
+  if (clima) box.append(clima);
+  if (tiles.children.length) box.append(tiles);
+  if (acc.length) box.append(el("div",{class:"resolver37"}, el("span",{class:"k",text:"Para resolver"}), ...acc));
   return box;
 }
 function renderHome(){
@@ -541,13 +565,13 @@ function renderHome(){
 }
 /* Fila de sesión del panel: quién está adentro, qué rol tiene, cuándo se cierra sola y el botón para cerrarla. */
 function filaSesion(){
-  const u = S.user, min = Math.round(limInact()/60000), gestion = S.perms.length>0;
+  const u = S.user, min = Math.round(limInact()/60000);
+  // 3.7: fila discreta (sin título de «panel»): quién está, cuándo se cierra sola, pendientes y salir.
   return el("div",{class:"sesion",style:"--i:0"},
-    el("span",{class:"ic"}, icono("acceso",18)),
-    el("span",{class:"tx"}, el("b",{text: gestion ? "Panel de gestión y control" : "Sesión personal"}),
-      el("span",{text:`${u.nombre} · ${rolTxt(u)} · se cierra sola tras ${min} min sin uso`})),
+    el("span",{class:"punto37","aria-hidden":"true"}),
+    el("span",{class:"tx",text:`Sesión activa · ${rolTxt(u)} · se cierra sola tras ${min} min sin uso`}),
     el("span",{class:"badge-slot"}, badgePendientes(S.resumen)),
-    el("button",{class:"btn sm",type:"button",onclick:()=>salir("Sesión cerrada")}, icono("salir",16), " Cerrar sesión"));
+    el("button",{class:"btn sm ghost",type:"button",onclick:()=>salir("Sesión cerrada")}, icono("salir",16), " Cerrar sesión"));
 }
 /* 3.4 · Contador rojo de pendientes (fichajes manuales, correcciones y vacaciones) en la fila de sesión del panel. */
 function badgePendientes(R){
@@ -2152,8 +2176,62 @@ function filaActualizacion(D, recargar){
 }
 const hk = (k,v,s,cls) => el("div",{class:"hk"+(cls?" "+cls:"")}, el("span",{class:"k",text:k}), el("b",{text:v}), s?el("span",{class:"hint",text:s}):null);
 
+/* ---------------- 3.7 · Regla de diseño: en pantalla solo indicadores, gráficos simples y Top 5. El detalle va en Excel y PDF. ---------------- */
+const nh = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+/** Botones «Descargar Excel» y «Descargar PDF» de una sección (el servidor valida el permiso y arma el detalle completo). */
+function botonesDescarga(tipo, etiqueta){
+  const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar PDF"});
+  const ir = async (b, fmt)=>{ spinBtn(b, fmt==="xlsx"?"Armando el Excel…":"Armando el PDF…");
+    try{ const D = await apiS("descargaControl", tipo); await (fmt==="xlsx" ? exportarXLSX37(D) : exportarPDF37(D)); }
+    catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); }
+    unspin(b); };
+  bx.onclick = ()=>ir(bx,"xlsx"); bp.onclick = ()=>ir(bp,"pdf");
+  return el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Detalle completo"+(etiqueta?" · "+etiqueta:"")+":"}), bx, bp);
+}
+const sello37 = () => { const d = new Date(), p = n => String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
+const pieAct37 = D => `Planilla actualizada: ${D.actualizado?fechaHora(D.actualizado):"—"}${D.modificado?" · última edición de la planilla: "+fechaHora(D.modificado):""} · generado ${fechaHora(D.generado||new Date().toISOString())} por ${D.por||""}`;
+async function exportarXLSX37(D){
+  await loadLibs("xlsx");
+  const wb = new ExcelJS.Workbook(); wb.creator="Hey Blackk"; wb.created=new Date();
+  D.hojas.forEach(h=>{
+    const ws = wb.addWorksheet(h.nombre.slice(0,31), {views:[{state:"frozen", ySplit:4}], pageSetup:{orientation:"landscape", fitToPage:true, fitToWidth:1, fitToHeight:0}});
+    ws.getCell("A1").value = "Hey Blackk · "+D.titulo+" · "+h.nombre; ws.getCell("A1").font={bold:true,size:14};
+    ws.getCell("A2").value = pieAct37(D); ws.getCell("A2").font={size:10,color:{argb:"FF5F5F68"}};
+    const hr = ws.getRow(4); hr.values = h.columnas; hr.height = 32;
+    hr.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"},size:10}; c.fill=fill("FF111113"); c.alignment={vertical:"middle",horizontal:"center",wrapText:true}; });
+    h.filas.forEach((f,i)=>{ const r = ws.getRow(5+i); r.values = f;
+      (h.dinero||[]).forEach(j=>{ const c=r.getCell(j+1); if (typeof c.value==="number") c.numFmt='"$" #,##0'; });
+      for (let k=1;k<=h.columnas.length;k++) r.getCell(k).border={bottom:{style:"thin",color:{argb:"FFE0E0E6"}}}; });
+    h.columnas.forEach((c,i)=>{ const largo = Math.max(c.length, ...h.filas.slice(0,200).map(f=>String(f[i]??"").length)); ws.getColumn(i+1).width = Math.min(44, Math.max(9, largo+2)); });
+    if (h.filas.length) ws.autoFilter = {from:{row:4,column:1}, to:{row:4+h.filas.length, column:h.columnas.length}};
+  });
+  const buf = await wb.xlsx.writeBuffer();
+  guardar(`${D.archivo}_${sello37()}.xlsx`, new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+}
+async function exportarPDF37(D){
+  await loadLibs("pdf");
+  const { jsPDF } = window.jspdf, doc = new jsPDF({orientation:"landscape", unit:"pt", format:"a4"});
+  const plata = v => typeof v==="number" ? "$ "+Math.round(v).toLocaleString("es-AR") : v;
+  D.hojas.forEach((h,n)=>{
+    if (n) doc.addPage();
+    doc.setFontSize(14); doc.text("Hey Blackk · "+D.titulo+" · "+h.nombre, 40, 40);
+    doc.setFontSize(8.5); doc.setTextColor(95); doc.text(pieAct37(D), 40, 56); doc.setTextColor(0);
+    doc.autoTable({ startY: 66, head:[h.columnas], body: h.filas.map(f=>f.map((v,j)=>(h.dinero||[]).includes(j) ? plata(v) : (v==null?"":String(v)))),
+      styles:{fontSize:7.5, cellPadding:3}, headStyles:{fillColor:[17,17,19]}, alternateRowStyles:{fillColor:[246,246,248]}, margin:{left:30,right:30} });
+  });
+  const total = doc.getNumberOfPages(); for (let i=1;i<=total;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(120); doc.text(`Página ${i} de ${total}`, doc.internal.pageSize.getWidth()-90, doc.internal.pageSize.getHeight()-16); }
+  guardar(`${D.archivo}_${sello37()}.pdf`, doc.output("blob"));
+}
+/** Barra de avance simple (partes con color y leyenda). */
+function barraPartes(partes){
+  const tot = partes.reduce((a,p)=>a+(p.v||0),0); if (!tot) return null;
+  return el("div",{class:"grid"},
+    el("div",{class:"barra-partes",role:"img","aria-label":partes.map(p=>`${p.t} ${u36(p.v)}`).join(", ")}, partes.filter(p=>p.v).map(p=>el("i",{style:`width:${(p.v/tot*100).toFixed(1)}%;background:${p.c}`,title:`${p.t}: ${u36(p.v)}`}))),
+    el("div",{class:"row leyenda"}, partes.filter(p=>p.v).map(p=>el("span",{}, el("i",{class:"dot",style:`background:${p.c}`}), ` ${p.t} ${u36(p.v)} (${Math.round(p.v/tot*100)} %)`))));
+}
+const top5 = (titulo, filas) => filas.length ? el("div",{class:"card"}, el("h3",{text:titulo}), el("ol",{class:"top5"}, filas.slice(0,5))) : null;
+
 /* ---------------- CLIENTES Y PEDIDOS ---------------- */
-const CF = { tipo:"", q:"", orden:"estado", estado:"" };
 async function vClientes(main){
   const body = el("div",{class:"stack"}); main.append(body);
   const cargar = async ()=>{
@@ -2169,50 +2247,40 @@ function pintarClientes(body, D, recargar){
   const ba = barraSeccion(D.audio, "Clientes y pedidos"); if (ba) body.append(ba);
   if (!R.clientes) return;
   body.append(el("div",{class:"card"}, el("div",{class:"hkpis"},
-    hk("Clientes con pedido", String(R.clientes)), hk("Unidades pedidas", u36(R.pedido)), hk("Entregadas", u36(R.entregado), R.separado?u36(R.separado)+" separadas":""),
-    hk("Pendientes", u36(R.pendiente), "", R.pendiente?"neg":""), hk("Cumplimiento", (R.cumplimiento||0)+" %"))));
-  if ((R.porTipo||[]).length > 1) body.append(el("div",{class:"row"}, R.porTipo.map(t=>el("span",{class:"pill",text:`${t.tipo}s: ${t.clientes} · ${u36(t.pendiente)} pendientes · ${t.cumplimiento||0} %`}))));
+    hk("Pedido", u36(R.pedido), R.monto?moneyK(R.monto):""), hk("Se llevó / despachado", u36(R.despachado), (R.avance||0)+" % del pedido"),
+    R.separado ? hk("Separado", u36(R.separado), "en sus depósitos") : null, R.pendiente ? hk("Pendiente", u36(R.pendiente), "", "neg") : null,
+    R.pagado!=null ? hk("Pagó", moneyK(R.pagado), R.pctPagado!=null?R.pctPagado+" % del total":"") : null, R.faltaPagar ? hk("Falta pagar", moneyK(R.faltaPagar), "de lo que corresponde a hoy", "neg") : null),
+    el("h3",{style:"margin:12px 0 6px",text:"Avance de despacho"}),
+    barraPartes([{t:"Despachado",v:R.despachado,c:"#16A34A"},{t:"Separado",v:R.separado,c:"#2563EB"},{t:"Pendiente",v:Math.max(0,R.pendiente-R.separado),c:"#D97706"}]),
+    R.pagado!=null && R.clientesConPago.length < R.clientes ? el("p",{class:"hint",text:"Pagos: solo se suman los clientes que tienen «Abonado» cargado en su hoja ("+R.clientesConPago.join(", ")+")."}) : null));
+  // Clientes (son pocos: una fila compacta por cliente; tocá para ver el detalle resumido)
+  body.append(el("div",{class:"card"}, el("h3",{text:"Por cliente"}),
+    el("div",{class:"lista-cli"}, D.clientes.filter(c=>c.seCuenta).map(c=>{ const [ic,txt,cls] = SEM36[c.estado]||["","",""];
+      return el("button",{class:"cli37",type:"button",onclick:()=>detalleCliente(c)},
+        el("b",{text:c.nombre}), el("span",{class:"pill "+cls,text:ic+" "+txt}),
+        el("span",{class:"mini-barra","aria-hidden":"true"}, el("i",{style:`width:${Math.min(100,c.avance||0)}%`})),
+        el("span",{class:"hint",text:`${u36(c.despachado)} de ${u36(c.pedido)} · faltan ${u36(c.pendiente)}${c.faltaPagar?" · debe "+moneyK(c.faltaPagar):""}`})); }))));
+  body.append(top5("📦 Top 5 · más mercadería pendiente", R.topPendiente.map(c=>el("li",{}, el("b",{text:c.nombre}), ` · ${u36(c.pendiente)} de ${u36(c.pedido)}`))));
+  const ts = top5("💰 Top 5 · más saldo por pagar", R.topSaldo.map(c=>el("li",{}, el("b",{text:c.nombre}), ` · falta ${moneyK(c.faltaPagar)} · pagó ${moneyK(c.pagado)}${c.pctPagado!=null?" ("+c.pctPagado+" %)":""}`)));
+  if (ts) body.append(ts);
   if ((R.alertas||[]).length || (R.recomendaciones||[]).length) body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas y prioridades"}),
-    el("ul",{class:"alertas-rrhh"}, R.alertas.map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
-      R.recomendaciones.map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
-  // Filtros
-  const ftipo = el("select",{"aria-label":"Tipo"}, el("option",{value:"",text:"Todos"}), ...["Franquicia","Mayorista"].filter(t=>D.clientes.some(c=>c.tipo===t)).map(t=>el("option",{value:t,text:t+"s",selected:CF.tipo===t})));
-  const fest = el("select",{"aria-label":"Estado"}, el("option",{value:"",text:"Todos"}), ...Object.keys(SEM36).filter(k=>D.clientes.some(c=>c.estado===k)).map(k=>el("option",{value:k,text:SEM36[k][1],selected:CF.estado===k})));
-  const ford = el("select",{"aria-label":"Ordenar"}, ...[["estado","Por estado (atrasados primero)"],["pendiente","Mayor cantidad pendiente"],["antiguedad","Primera entrega más antigua"],["nombre","Nombre"]].map(([v,t])=>el("option",{value:v,text:t,selected:CF.orden===v})));
-  const fq = el("input",{type:"search",placeholder:"Buscar cliente o modelo","aria-label":"Buscar",value:CF.q});
-  const tabla = el("div");
-  const ORD = {atrasado:0, pendiente:1, parcial:2, completo:3};
-  const pintar = ()=>{ Object.assign(CF,{tipo:ftipo.value, estado:fest.value, orden:ford.value, q:fq.value.trim()}); tabla.textContent="";
-    const q = nh(CF.q);
-    let L = D.clientes.filter(c=>(!CF.tipo||c.tipo===CF.tipo) && (!CF.estado||c.estado===CF.estado) && (!q || nh(c.nombre).includes(q) || c.items.some(x=>nh(x.producto).includes(q)||nh(x.codigo).includes(q))));
-    L.sort((a,b)=> CF.orden==="pendiente" ? b.pendiente-a.pendiente : CF.orden==="nombre" ? a.nombre.localeCompare(b.nombre) : CF.orden==="antiguedad" ? String(a.primeraEntrega||"9").localeCompare(String(b.primeraEntrega||"9")) : (ORD[a.estado]-ORD[b.estado]) || b.pendiente-a.pendiente);
-    const conMonto = L.some(c=>c.monto), conSaldo = L.some(c=>c.pendienteFacturar);
-    const tb = el("tbody",{}, L.map(c=>{ const [ic,txt,cls] = SEM36[c.estado]||["","",""];
-      return el("tr",{class:"clk",tabindex:"0",onclick:()=>detalleCliente(c),onkeydown:e=>{ if (e.key==="Enter") detalleCliente(c); }},
-        el("td",{}, el("b",{text:c.nombre})), el("td",{text:c.tipo}), el("td",{class:"n",text:u36(c.pedido)}), el("td",{class:"n",text:u36(c.entregado+c.separado)}),
-        el("td",{class:"n",text:c.pendiente?u36(c.pendiente):""}), el("td",{}, el("span",{class:"pill "+cls,text:ic+" "+txt})), conSaldo ? el("td",{class:"n",text:c.pendienteFacturar?moneyK(c.pendienteFacturar):""}) : conMonto ? el("td",{class:"n",text:c.monto?moneyK(c.monto):""}) : null); }));
-    tabla.append(el("div",{class:"tablewrap"}, el("table",{}, el("thead",{}, el("tr",{}, ...["Cliente","Tipo","Pedidas","Entregadas","Pendientes","Estado"].concat(conSaldo?["Saldo sin facturar"]:conMonto?["Monto del pedido"]:[]).map((x,i)=>el("th",{class:i>1&&i!==5?"n":null,text:x})))), tb)));
-  };
-  [ftipo, fest, ford].forEach(x=>x.onchange=pintar); fq.oninput = pintar;
-  body.append(el("div",{class:"card"}, el("h3",{text:"Pedidos por cliente"}),
-    el("div",{class:"row filtros"}, el("label",{class:"f inline"},"Tipo",ftipo), el("label",{class:"f inline"},"Estado",fest), el("label",{class:"f inline"},"Ordenar",ford), el("label",{class:"f inline"},"Buscar",fq)),
-    tabla, el("p",{class:"hint",text:"Tocá un cliente para ver su pedido modelo por modelo. Entregadas incluye lo separado en su depósito. Saldo sin facturar = monto del pedido − lo facturado en las hojas «SE LLEVÓ». Los pagos no figuran en la planilla."})));
+    el("ul",{class:"alertas-rrhh"}, R.alertas.slice(0,5).map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
+      R.recomendaciones.slice(0,3).map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
+  body.append(el("div",{class:"card"}, botonesDescarga("clientes","todos los clientes, por modelo y remitos")));
   if (S.user && S.user.rol==="admin") body.append(editorTipos(D.clientes, recargar));
-  pintar();
 }
-const nh = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
 function detalleCliente(c){
   const [ic,txt,cls] = SEM36[c.estado]||["","",""];
-  const filas = c.items.map(x=>el("tr",{}, el("td",{}, x.producto, el("div",{class:"hint mono",text:x.codigo})), el("td",{class:"n",text:x.pedido}), el("td",{class:"n",text:(x.entregado+x.separado)||""}),
-    el("td",{class:"n"}, x.pendiente ? el("b",{text:x.pendiente}) : ""), el("td",{text:[x.ultimaEntrega?"últ. entrega "+fmtF(x.ultimaEntrega).slice(0,5):"", x.pendiente&&x.listaEl?"lista ~"+fmtF(x.listaEl).slice(0,5):"", x.pendiente&&x.stockLima?"stock Lima "+x.stockLima:""].filter(Boolean).join(" · ")})));
   const m = modal(el("div",{class:"grid"},
     el("div",{class:"row"}, el("h2",{style:"margin:0",text:c.nombre}), el("span",{class:"pill "+cls,text:ic+" "+txt}), el("span",{class:"pill",text:c.tipo})),
-    el("div",{class:"hkpis"}, hk("Pedidas",u36(c.pedido)), hk("Entregadas",u36(c.entregado),c.separado?u36(c.separado)+" separadas":""), c.pendiente?hk("Faltan",u36(c.pendiente),"","neg"):null, c.monto?hk("Monto del pedido",moneyK(c.monto)):null, c.facturado?hk("Facturado",moneyK(c.facturado)):null, c.pendienteFacturar?hk("Saldo sin facturar",moneyK(c.pendienteFacturar)):null),
+    el("div",{class:"hkpis"}, hk("Pedido",u36(c.pedido), c.montoTotal?moneyK(c.montoTotal):""), hk("Se llevó",u36(c.despachado), c.montoDespachado?moneyK(c.montoDespachado):""),
+      c.separado?hk("Separado",u36(c.separado)):null, c.pendiente?hk("Pendiente",u36(c.pendiente),"","neg"):null,
+      c.pagado!=null?hk("Pagó",moneyK(c.pagado),c.pctPagado!=null?c.pctPagado+" % del total":""):null, c.faltaPagar?hk("Falta pagar",moneyK(c.faltaPagar),c.exigible?"a hoy corresponde "+moneyK(c.exigible):"","neg"):null),
     c.entregaEstimada && c.pendiente ? el("p",{class:"lead",text:`Entrega total estimada: ${fmtF(c.entregaEstimada)}${c.queHacer?" · "+c.queHacer:""}`}) : null,
     c.separableYa ? el("div",{class:"notice ok",text:`👉 Hay ${u36(c.separableYa)} de lo pendiente con stock en HB Lima: se pueden separar ya.`}) : null,
-    (c.entregasPorFecha||[]).length ? el("p",{class:"hint",text:"Entregas: "+c.entregasPorFecha.map(x=>`${fmtF(x.fecha).slice(0,5)} (${u36(x.unidades)})`).join(" · ")}) : null,
-    c.difDetalle ? el("p",{class:"hint",text:"ℹ️ "+c.difDetalle}) : null,
-    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Modelo","Pedidas","Entregadas","Faltan",""].map((x,i)=>el("th",{class:i&&i<4?"n":null,text:x})))), el("tbody",{}, filas))),
+    (c.remitos||[]).length ? el("p",{class:"hint",text:"Se llevó: "+c.remitos.map(r=>`${r.fecha?fmtF(r.fecha).slice(0,5)+" · ":""}${u36(r.unidades)}`).join(" · ")}) : null,
+    (c.topModelos||[]).length ? el("div",{}, el("h3",{text:"Top 5 modelos pendientes"}), el("ol",{class:"top5"}, c.topModelos.map(x=>el("li",{}, el("b",{text:x.producto || [x.modelo,x.talle].filter(Boolean).join(" ")}), ` · faltan ${u36(x.pendiente)} de ${u36(x.pedido)}`)))) : null,
+    el("p",{class:"hint",text:"El detalle completo de todos los modelos está en «Descargar Excel / PDF»."}),
     el("button",{class:"btn",type:"button",text:"Cerrar",onclick:()=>m.cerrar()})));
 }
 function editorTipos(L, recargar){
@@ -2223,7 +2291,6 @@ function editorTipos(L, recargar){
 }
 
 /* ---------------- PRODUCCIÓN ---------------- */
-const PF = { q:"", taller:"", estado:"" };
 async function vProduccion(main){
   const body = el("div",{class:"stack"}); main.append(body);
   const cargar = async ()=>{
@@ -2233,50 +2300,49 @@ async function vProduccion(main){
   };
   cargar();
 }
-const EST_P = {completo:["🟢","Completo","ok"], parcial:["🟡","Parcial","warn"], pendiente:["⚪","Pendiente",""], atrasado:["🔴","Atrasado","bad"]};
+const EST_T = {llegado:["🟢","Llegado","ok"], en_produccion:["🟡","En producción","warn"], por_llegar:["⚪","Por llegar",""], atrasado:["🔴","Atrasado","bad"]};
 function pintarProduccion(body, D, recargar){
-  const R = D.resumen;
+  const R = D.resumen, S = R.stock, F = R.falta, T = R.taller;
   body.append(filaActualizacion(D, recargar));
   const ba = barraSeccion(D.audio, "Producción"); if (ba) body.append(ba);
-  if (!R.planificado && !R.faltaFabricar) return;
-  body.append(el("div",{class:"card"}, el("div",{class:"hkpis"},
-    hk("Planificadas", u36(R.planificado)), hk("Ingresadas al depósito", u36(R.ingresado)), R.enProceso?hk("En talleres", u36(R.enProceso)):null, R.sinIniciar?hk("Sin taller asignado", u36(R.sinIniciar)):null,
-    R.faltaFabricar?hk("Falta fabricar p/ pedidos", u36(R.faltaFabricar), R.paraMinimo?u36(R.paraMinimo)+" para el mínimo":"", "neg"):null, hk("Avance", (R.avance||0)+" %")),
-    el("div",{class:"barra-avance",role:"img","aria-label":`Avance ${R.avance||0} %`}, el("i",{style:`width:${Math.min(100,R.avance||0)}%`}))));
   if ((R.alertas||[]).length || (R.recomendaciones||[]).length) body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas y prioridades"}),
-    el("ul",{class:"alertas-rrhh"}, R.alertas.map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
-      R.recomendaciones.map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
-  const TL = (R.talleres||[]).filter(t=>t.planificado);
-  if (TL.length) body.append(el("div",{class:"card"}, el("h3",{text:"Por taller"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"},
-    el("thead",{}, el("tr",{}, ...["Taller","Planificado","Ingresado","Falta","Avance","Atrasados","Próxima fecha"].map((x,i)=>el("th",{class:i&&i<6?"n":null,text:x})))),
-    el("tbody",{}, TL.map(t=>el("tr",{}, el("td",{text:t.taller}), el("td",{class:"n",text:t.planificado}), el("td",{class:"n",text:t.ingresado||""}), el("td",{class:"n",text:t.faltante||""}),
-      el("td",{class:"n",text:t.avance!=null?t.avance+" %":""}), el("td",{class:"n"}, t.atrasadas?el("span",{class:"pill bad",text:String(t.atrasadas)}):""), el("td",{text:t.proxima?fmtF(t.proxima):""}))))))));
-  // Artículos con filtros
-  const est = x => x.atrasado ? "atrasado" : x.estado;
-  const ftal = el("select",{"aria-label":"Taller"}, el("option",{value:"",text:"Todos"}), ...TL.map(t=>el("option",{value:t.taller,text:t.taller,selected:PF.taller===t.taller})));
-  const fest = el("select",{"aria-label":"Estado"}, el("option",{value:"",text:"Todos"}), ...Object.keys(EST_P).filter(k=>D.lineas.some(x=>est(x)===k)).map(k=>el("option",{value:k,text:EST_P[k][1],selected:PF.estado===k})));
-  const fq = el("input",{type:"search",placeholder:"Buscar modelo o SKU","aria-label":"Buscar modelo",value:PF.q});
-  const tabla = el("div");
-  const pintar = ()=>{ Object.assign(PF,{taller:ftal.value, estado:fest.value, q:fq.value.trim()}); tabla.textContent=""; const q = nh(PF.q);
-    const L = D.lineas.filter(x=>(!PF.taller||x.taller===PF.taller) && (!PF.estado||est(x)===PF.estado) && (!q||nh(x.producto+" "+x.nombreTienda+" "+x.sku).includes(q)))
-      .sort((a,b)=>(a.atrasado?0:1)-(b.atrasado?0:1) || b.faltante-a.faltante);
-    tabla.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"},
-      el("thead",{}, el("tr",{}, ...["Modelo","Taller","Planificado","Ingresado","Falta","Estado","Fecha"].map((x,i)=>el("th",{class:i>1&&i<5?"n":null,text:x})))),
-      el("tbody",{}, L.map(x=>{ const [ic,t,c] = EST_P[est(x)]||["","",""]; const crit = x.faltante && x.planificado && x.faltante/x.planificado>=0.5;
-        return el("tr",{}, el("td",{}, x.nombreTienda||x.producto, el("div",{class:"hint mono",text:[x.sku, x.ot].filter(Boolean).join(" · ")})), el("td",{text:x.taller}),
-          el("td",{class:"n",text:x.planificado}), el("td",{class:"n",text:x.ingresado||""}), el("td",{class:"n"}, x.faltante ? el("b",{class:crit?"neg":null,text:x.faltante}) : ""),
-          el("td",{}, el("span",{class:"pill "+c,text:ic+" "+t})), el("td",{text:x.fechaPrometida?"prom. "+fmtF(x.fechaPrometida):x.ultimaLlegada?"llegó "+fmtF(x.ultimaLlegada):""})); })))));
-  };
-  [ftal, fest].forEach(x=>x.onchange=pintar); fq.oninput = pintar;
-  body.append(el("div",{class:"card"}, el("h3",{text:"Artículos (INGRESO)"}), el("div",{class:"row filtros"}, el("label",{class:"f inline"},"Taller",ftal), el("label",{class:"f inline"},"Estado",fest), el("label",{class:"f inline"},"Buscar",fq)), tabla));
-  pintar();
-  const FB = D.fabricar||[];
-  if (FB.length) body.append(el("details",{class:"card",open:FB.some(x=>x.faltanPedidos)}, el("summary",{text:`🧵 Falta fabricar (${FB.length} talles)`}), el("div",{class:"tablewrap"}, el("table",{class:"compact"},
-    el("thead",{}, el("tr",{}, ...["Producto","Talle","Para pedidos","Para el mínimo","OT","Estado","Prioridad"].map((x,i)=>el("th",{class:i===2||i===3?"n":null,text:x})))),
-    el("tbody",{}, FB.slice().sort((a,b)=>b.faltanPedidos-a.faltanPedidos).map(x=>el("tr",{}, el("td",{text:x.producto||x.sku}), el("td",{text:x.talle}), el("td",{class:"n"}, x.faltanPedidos?el("b",{text:x.faltanPedidos}):""), el("td",{class:"n",text:x.paraMinimo||""}),
-      el("td",{text:x.ot||""}), el("td",{text:x.estadoProduccion}), el("td",{}, x.prioridad?el("span",{class:"pill "+(/URGENTE/i.test(x.prioridad)?"bad":"warn"),text:x.prioridad}):""))))))));
-  const OT = (D.ots||[]).filter(o=>!o.terminada);
-  if (OT.length) body.append(el("div",{class:"card"}, el("h3",{text:"OTs en curso"}), el("ul",{class:"lista-avisos"}, OT.map(o=>el("li",{}, el("b",{text:`${o.ot} · ${o.prenda||o.sku}`}), ` · ${o.cantidad} u · ${o.taller||"sin taller"} · ${o.estado}${o.paso?" → "+o.paso:""}`, o.atrasada?el("span",{class:"pill bad",text:"atrasada"}):null)))));
+    el("ul",{class:"alertas-rrhh"}, R.alertas.slice(0,5).map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
+      R.recomendaciones.slice(0,3).map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
+  // ---- STOCK REAL DE LIMA
+  if (S) body.append(el("div",{class:"card"}, el("h2",{text:"🏬 Stock real de Lima"}),
+    el("div",{class:"hkpis"}, hk("Stock físico", u36(S.fisico)), hk("Comprometido", u36(S.comprometido), "por pedidos de clientes"), hk("Real (libre)", u36(S.libre), "para vender"), S.faltante ? hk("Falta para pedidos", u36(S.faltante), "", "neg") : null),
+    barraPartes([{t:"Libre",v:S.libre,c:"#16A34A"},{t:"Comprometido",v:S.comprometido,c:"#D97706"}]),
+    el("div",{class:"split"},
+      S.topLibre.length ? el("div",{}, el("h3",{text:"Top 5 · más stock libre"}), el("ol",{class:"top5"}, S.topLibre.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.libre)} libres`)))) : null,
+      S.topMenos.length ? el("div",{}, el("h3",{text:"Top 5 · menos stock libre"}), el("ol",{class:"top5"}, S.topMenos.map(m=>el("li",{}, el("b",{text:m.modelo}), m.faltante ? ` · faltan ${u36(m.faltante)}` : ` · ${u36(m.libre)} libres`)))) : null),
+    el("p",{class:"hint",text:"Real (libre) = lo que le queda a Lima después de cubrir lo que piden los clientes («Stock Lima final» de STOCK vs Pedidos)."}),
+    botonesDescarga("stock","por modelo, color y talle")));
+  // ---- QUÉ FALTA PRODUCIR
+  if (F) body.append(el("div",{class:"card"}, el("h2",{text:"🧵 Qué falta producir"}),
+    el("div",{class:"hkpis"}, hk("Total a producir", u36(F.total), (F.pctPlanificado||0)+" % de lo planificado", "neg"), hk("Para pedidos", u36(F.paraPedidos)), hk("Para el stock mínimo", u36(F.paraMinimo)), F.sinOt ? hk("Talles sin OT", String(F.sinOt), "", "neg") : null),
+    F.top.length ? el("div",{}, el("h3",{text:"Top 5 · más urgente o mayor faltante"}), el("ol",{class:"top5"}, F.top.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.pedidos+m.minimo)}`, m.urgente?el("span",{class:"pill bad",text:"urgente"}):null, m.taller?el("span",{class:"hint",text:" · "+m.taller}):null)))) : null,
+    botonesDescarga("falta","modelo, talle, cantidad y taller")));
+  // ---- PEDIDOS DE TALLER
+  if (T){ const E = T.estados;
+    body.append(el("div",{class:"card"}, el("h2",{text:"🚚 Pedidos de taller"}),
+      el("div",{class:"hkpis"}, hk("Llegaron", u36(T.llegadas), `${T.conLlegada} pedidos`), E.en_produccion.unidades ? hk("En producción", u36(E.en_produccion.unidades), `${E.en_produccion.pedidos} pedidos`) : null,
+        E.por_llegar.unidades ? hk("Por llegar", u36(E.por_llegar.unidades), `${E.por_llegar.pedidos} sin taller asignado`) : null, E.atrasado.pedidos ? hk("Atrasados", String(E.atrasado.pedidos), u36(E.atrasado.unidades)+" sin llegar", "neg") : null),
+      barraPartes([{t:"Llegado",v:T.llegadas,c:"#16A34A"},{t:"En producción",v:E.en_produccion.unidades,c:"#D97706"},{t:"Atrasado",v:E.atrasado.unidades,c:"#DC2626"},{t:"Por llegar",v:E.por_llegar.unidades,c:"#9CA3AF"}]),
+      el("div",{class:"split"},
+        T.ultimos.length ? el("div",{}, el("h3",{text:"Últimos que llegaron"}), el("ol",{class:"top5"}, T.ultimos.map(x=>el("li",{}, el("b",{text:x.modelo}), ` · ${u36(x.cantidad)} · ${x.taller} · ${fmtF(x.fecha).slice(0,5)}`)))) : null,
+        T.proximos.length ? el("div",{}, el("h3",{text:"Próximos a llegar"}), el("ol",{class:"top5"}, T.proximos.map(x=>{ const [ic,t,c]=EST_T[x.estado]; return el("li",{}, el("b",{text:x.modelo}), ` · faltan ${u36(x.pendiente)} · ${x.taller}${x.fecha?" · "+fmtF(x.fecha).slice(0,5):""} `, el("span",{class:"pill "+c,text:ic+" "+t})); }))) : null),
+      el("h3",{text:"Talleres (tocá uno para ver su detalle)"}),
+      el("div",{class:"row chips-taller"}, T.talleres.filter(t=>t.pedido).slice(0,10).map(t=>el("button",{class:"btn sm"+(t.atrasados?" danger":""),type:"button",onclick:()=>detalleTallerUI(t.taller)}, `${t.taller} · ${t.pedido?Math.round(t.llegado/t.pedido*100):0} %${t.falta?" · faltan "+t.falta:""}`))),
+      botonesDescarga("taller","todos los pedidos de taller")));
+  }
+}
+async function detalleTallerUI(taller){
+  let d; try{ d = await apiS("detalleTaller", taller); }catch(e){ return toast(msgErr(e)); }
+  const m = modal(el("div",{class:"grid"}, el("h2",{style:"margin:0",text:"🧵 "+d.taller}),
+    el("div",{class:"hkpis"}, hk("Pedido",u36(d.pedido),`${d.pedidos} pedidos`), hk("Llegó",u36(d.llegado)), d.falta?hk("Falta",u36(d.falta),"","neg"):null),
+    el("ol",{class:"top5"}, d.lineas.map(x=>{ const [ic,t,c]=EST_T[x.estado]; return el("li",{}, el("b",{text:x.modelo}), ` · pedido ${x.pedido} · llegó ${x.llegado}${x.falta?" · falta "+x.falta:""}${x.ultima?" · últ. "+fmtF(x.ultima).slice(0,5):""}${x.prometida?" · prom. "+fmtF(x.prometida).slice(0,5):""} `, el("span",{class:"pill "+c,text:ic+" "+t})); })),
+    d.masDe8 ? el("p",{class:"hint",text:"Hay más pedidos de este taller: están en «Descargar Excel / PDF»."}) : null,
+    el("button",{class:"btn",type:"button",text:"Cerrar",onclick:()=>m.cerrar()})));
 }
 
 /* ---------------- PERMISOS DE JEFES (solo administración) ---------------- */
@@ -2306,11 +2372,13 @@ function cardsControlResumen(K){
   const out = [];
   const C = K.clientes36, P = K.produccion36;
   if (C && C.clientes) out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"📦 Clientes y pedidos"}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Ver sección",onclick:()=>ir("clientes")})),
-    el("div",{class:"hkpis"}, hk("Pedidas",u36(C.pedido)), hk("Entregadas",u36(C.entregado)), C.pendiente?hk("Pendientes",u36(C.pendiente),"","neg"):null, hk("Cumplimiento",(C.cumplimiento||0)+" %")),
-    (C.alertas||[]).length ? el("ul",{class:"lista-avisos"}, C.alertas.map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
-  if (P && (P.planificado || P.faltaFabricar)) out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"🧵 Producción"}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Ver sección",onclick:()=>ir("produccion")})),
-    el("div",{class:"hkpis"}, hk("Planificadas",u36(P.planificado)), hk("Ingresadas",u36(P.ingresado)), P.faltaFabricar?hk("Falta fabricar",u36(P.faltaFabricar),"","neg"):null, hk("Avance",(P.avance||0)+" %")),
-    (P.alertas||[]).length ? el("ul",{class:"lista-avisos"}, P.alertas.map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
+    el("div",{class:"hkpis"}, hk("Despachado",u36(C.despachado),(C.avance||0)+" %"), C.separado?hk("Separado",u36(C.separado)):null, C.pendiente?hk("Pendiente",u36(C.pendiente),"","neg"):null,
+      C.pagado!=null?hk("Pagó",moneyK(C.pagado)):null, C.faltaPagar?hk("Falta pagar",moneyK(C.faltaPagar),"","neg"):null),
+    (C.alertas||[]).length ? el("ul",{class:"lista-avisos"}, C.alertas.slice(0,3).map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
+  if (P && (P.planificado || P.stockFisico)) out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"🧵 Producción"}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Ver sección",onclick:()=>ir("produccion")})),
+    el("div",{class:"hkpis"}, P.stockLibre!=null?hk("Stock real Lima",u36(P.stockLibre),"libre"):null, P.faltaProducir?hk("Falta producir",u36(P.faltaProducir),"","neg"):null,
+      P.taller?hk("Taller: llegó",u36(P.taller.llegado)):null, P.taller&&P.taller.enProduccion?hk("En producción",u36(P.taller.enProduccion)):null, P.taller&&P.taller.porLlegar?hk("Por llegar",u36(P.taller.porLlegar)):null),
+    (P.alertas||[]).length ? el("ul",{class:"lista-avisos"}, P.alertas.slice(0,3).map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
   return out;
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
@@ -2343,33 +2411,59 @@ const VOZ = {
     for (const l of ["es-ar","es-419","es-us","es-mx","es-es"]){ const c = es.filter(v=>norm(v.lang)===l); if (c.length) return buena(c); }
     return es.length ? buena(es) : null;
   },
-  /** Si no hay una voz del género elegido, se aproxima con el tono. */
-  /** Si el teléfono no tiene una voz del género elegido (lo habitual en Android: una sola voz femenina por idioma),
-      la masculina se logra bajando bastante el tono y apenas la velocidad. */
-  pitch(voz){ const g = this.genero(), gv = this.generoDe(voz); if (gv===g) return 1; if (g==="masculina") return 0.55; return gv==="masculina" ? 1.35 : 1.05; },
-  ajusteRate(voz){ const g = this.genero(), gv = this.generoDe(voz); return g==="masculina" && gv!=="masculina" ? 0.95 : 1; },
-  activa:null, onEstado:null,
-  hablar(texto, onFin){
-    if (!this.soporta()) return false;
-    this.detener();
-    const voz = this.mejorVoz(), rate = this.rate()*this.ajusteRate(voz), pitch = this.pitch(voz);
-    const partes = String(texto).match(/[^.!?]+[.!?]+["»]?\s*|[^.!?]+$/g) || [String(texto)];   // por oraciones: algunos navegadores cortan los textos largos
-    const ses = { onFin, i:0 }; this.activa = ses;
-    const siguiente = () => {
-      if (this.activa !== ses) return;
-      if (ses.i >= partes.length){ this.activa=null; if (this.onEstado) this.onEstado(false); if (onFin) onFin(); return; }
-      const u = new SpeechSynthesisUtterance(partes[ses.i++]);
-      u.lang = voz ? voz.lang : "es-AR"; if (voz) u.voice = voz; u.rate = rate; u.pitch = pitch;
-      u.onend = siguiente; u.onerror = e => { if (e && (e.error==="interrupted"||e.error==="canceled")) return; siguiente(); };
-      try{ speechSynthesis.speak(u); }catch(e){ siguiente(); }
-    };
-    if (this.onEstado) this.onEstado(true);
-    siguiente();
+  /* 3.7 · En Android, Chrome reproduce siempre la voz predeterminada del sistema para el idioma, aunque se elija otra: el género del
+     nombre de la voz no es confiable. Ahí la voz masculina se logra siempre con el tono (más grave y apenas más lenta). */
+  android: /Android/i.test(navigator.userAgent||""),
+  generoReal(voz){ return this.android ? null : this.generoDe(voz); },
+  pitch(voz){ const g = this.genero(), gv = this.generoReal(voz); if (gv===g) return 1; if (g==="masculina") return this.android ? 0.42 : 0.55; return gv==="masculina" ? 1.35 : 1.04; },
+  ajusteRate(voz){ const g = this.genero(), gv = this.generoReal(voz); return g==="masculina" && gv!=="masculina" ? 0.94 : 1; },
+  /* Fluidez: bloques largos (varias oraciones juntas, hasta ~260 caracteres) en lugar de una oración por vez: menos cortes entre frases. */
+  bloques(texto){
+    const ora = String(texto).replace(/\s+/g," ").match(/[^.!?;]+[.!?;]+["»]?\s*|[^.!?;]+$/g) || [String(texto)], out = [];
+    let b = ""; ora.forEach(o=>{ if ((b+o).length > 260 && b){ out.push(b.trim()); b = o; } else b += o; }); if (b.trim()) out.push(b.trim());
+    return out;
+  },
+  activa:null, onEstado:null, neuralOk:null, _audio:null,
+  /* 3.7 · Voz neural del servidor (Google Cloud Text-to-Speech, si la administración cargó la clave en el servidor): suena natural, con
+     voz de hombre o de mujer reales. Si no está configurada o falla, se usa la voz del teléfono sin cortar la lectura. */
+  async neural(texto, ses){
+    if (this.neuralOk === false || typeof apiS !== "function" || !S.token) return false;
+    let r; try{ r = await apiS("vozNeural", texto, this.genero(), this.velocidad()); }catch(e){ return false; }
+    if (!r || !r.disponible){ this.neuralOk = false; return false; }
+    this.neuralOk = true;
+    if (this.activa !== ses) return true;
+    const bin = Uint8Array.from(atob(r.audio), c=>c.charCodeAt(0)), url = URL.createObjectURL(new Blob([bin],{type:"audio/mpeg"}));
+    const a = ses.audio; a.src = url; this._audio = a;
+    const fin = () => { URL.revokeObjectURL(url); if (this.activa !== ses) return; this.activa = null; this._audio = null; if (this.onEstado) this.onEstado(false); if (ses.onFin) ses.onFin(); };
+    a.onended = fin; a.onerror = fin;
+    try{ await a.play(); }catch(e){ URL.revokeObjectURL(url); this._audio = null; return false; }
     return true;
   },
-  detener(){ this.activa=null; this._pausa=false; try{ speechSynthesis.cancel(); }catch(e){} if (this.onEstado) this.onEstado(false); },
-  pausar(){ try{ speechSynthesis.pause(); this._pausa=true; }catch(e){} },
-  reanudar(){ try{ speechSynthesis.resume(); this._pausa=false; }catch(e){} },
+  hablar(texto, onFin){
+    if (!this.soporta() && this.neuralOk !== true) return false;
+    this.detener();
+    const ses = { onFin, i:0, audio: (typeof Audio!=="undefined" ? new Audio() : null) }; this.activa = ses;   // el <audio> se crea en el toque (permiso de reproducción)
+    if (this.onEstado) this.onEstado(true);
+    const local = () => {
+      if (this.activa !== ses) return;
+      if (!this.soporta()){ this.activa=null; if (this.onEstado) this.onEstado(false); return; }
+      const voz = this.mejorVoz(), rate = this.rate()*this.ajusteRate(voz), pitch = this.pitch(voz), partes = this.bloques(texto);
+      const siguiente = () => {
+        if (this.activa !== ses) return;
+        if (ses.i >= partes.length){ this.activa=null; if (this.onEstado) this.onEstado(false); if (onFin) onFin(); return; }
+        const u = new SpeechSynthesisUtterance(partes[ses.i++]);
+        u.lang = voz ? voz.lang : "es-AR"; if (voz) u.voice = voz; u.rate = rate; u.pitch = pitch;
+        u.onend = siguiente; u.onerror = e => { if (e && (e.error==="interrupted"||e.error==="canceled")) return; siguiente(); };
+        try{ speechSynthesis.speak(u); }catch(e){ siguiente(); }
+      };
+      siguiente();
+    };
+    if (ses.audio && this.neuralOk !== false && S.token) this.neural(texto, ses).then(ok=>{ if (!ok) local(); }); else local();
+    return true;
+  },
+  detener(){ this.activa=null; this._pausa=false; try{ speechSynthesis.cancel(); }catch(e){} if (this._audio){ try{ this._audio.pause(); }catch(e){} this._audio=null; } if (this.onEstado) this.onEstado(false); },
+  pausar(){ try{ if (this._audio) this._audio.pause(); else speechSynthesis.pause(); this._pausa=true; }catch(e){} },
+  reanudar(){ try{ if (this._audio) this._audio.play(); else speechSynthesis.resume(); this._pausa=false; }catch(e){} },
   pausado(){ return !!this._pausa; }
 };
 try{ if (VOZ.soporta()){ speechSynthesis.getVoices(); speechSynthesis.addEventListener("voiceschanged", ()=>{}); } }catch(e){}
