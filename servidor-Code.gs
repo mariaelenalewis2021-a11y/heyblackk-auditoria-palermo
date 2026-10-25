@@ -159,7 +159,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -450,13 +450,15 @@ function resumenHoy(token) {
   if (ve('cierre') || ve('kpi')) {
     // 3.3: un día cargado en $0 también es un cierre (sin ventas); solo los días sin fila son "sin cierre".
     const c = tAll_('Cierres').filter(x => x.total >= 0).sort((a, b) => a.fecha.localeCompare(b.fecha)), u = c[c.length - 1];
-    out.cierre = u ? { fecha: u.fecha, total: u.total } : null;
+    out.cierre = u ? { fecha: u.fecha, total: u.total, vsDia: vsMismoDia37_(c, u) } : null;
     const desde = new Date(hoy + 'T12:00:00Z'); desde.setUTCDate(desde.getUTCDate() - 14);
     const con = {}; c.forEach(x => { con[x.fecha] = 1; });
     // 3.3: los feriados confirmados cerrados y las excepciones no cuentan; un feriado sin confirmar tampoco es "pendiente" (queda "a confirmar").
     const cal = calendario_(cfg);
     out.diasSinCierre = diasOperativosEntre_(desde.toISOString().slice(0, 10), hoy, cfg.diasOperativos).filter(d => d < hoy && !con[d] && !cal.cerrado(d) && !cal.sinConfirmar(d)).length;
-    out.mes = { total: c.filter(x => x.fecha.slice(0, 7) === hoy.slice(0, 7)).reduce((a, x) => a + x.total, 0), objetivo: (cfg.objetivos || {})[hoy.slice(0, 7)] || null };
+    const cm = c.filter(x => x.fecha.slice(0, 7) === hoy.slice(0, 7));
+    out.mes = { total: cm.reduce((a, x) => a + x.total, 0), dias: cm.filter(x => x.total > 0).length, objetivo: (cfg.objetivos || {})[hoy.slice(0, 7)] || null };
+    out.clima = clima37_();   // 3.7: pronóstico + aviso de lluvia (la venta puede ser menor)
     const fp = feriadosPanel_(cfg);
     out.feriados = { proximos: fp.proximos, pendientes: fp.pendientes, sync: fp.sync ? { ok: fp.sync.ok, ts: fp.sync.ts, ultimaOk: fp.sync.ultimaOk || (fp.sync.ok ? fp.sync.ts : null), fuente: fp.sync.nombreFuente || fp.sync.fuente || null } : null };
   }
@@ -707,6 +709,100 @@ function cambiarRol(token, uid, rol, permisos) {
   });
 }
 
+/* =================== 3.7 · Voz neural (opcional): Google Cloud Text-to-Speech =================== */
+/* Se activa sola cuando la administración guarda la clave en Propiedades del script (TTS_KEY). La clave vive solo en el servidor:
+   nunca viaja al teléfono. Sin clave, la app usa la voz del teléfono. Voces por defecto: es-US-Neural2-B (hombre) y es-US-Neural2-A (mujer);
+   se pueden cambiar con TTS_VOZ_M / TTS_VOZ_F. */
+function vozNeural(token, texto, genero, vel) {
+  sesion_(token);
+  const key = PROPS.getProperty('TTS_KEY'); if (!key) return { disponible: false };
+  const t = String(texto || '').replace(/\s+/g, ' ').trim().slice(0, 9000); if (!t) return { disponible: false };
+  const voz = genero === 'masculina' ? (PROPS.getProperty('TTS_VOZ_M') || 'es-US-Neural2-B') : (PROPS.getProperty('TTS_VOZ_F') || 'es-US-Neural2-A');
+  const rate = { lenta: 0.92, normal: 1.06, rapida: 1.2 }[vel] || 1.06;
+  const ora = t.match(/[^.!?]+[.!?]+\s*|[^.!?]+$/g) || [t], partes = []; let b = '';
+  ora.forEach(o => { if (Utilities.newBlob(b + o).getBytes().length > 4500 && b) { partes.push(b); b = o; } else b += o; }); if (b) partes.push(b);
+  let bytes = [];
+  for (let i = 0; i < partes.length; i++) {
+    const r = UrlFetchApp.fetch('https://texttospeech.googleapis.com/v1/text:synthesize', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'X-Goog-Api-Key': key }, payload: JSON.stringify({ input: { text: partes[i] }, voice: { languageCode: voz.slice(0, 5), name: voz }, audioConfig: { audioEncoding: 'MP3', speakingRate: rate } }) });
+    if (r.getResponseCode() !== 200) { console.warn('vozNeural HTTP ' + r.getResponseCode()); return { disponible: false, error: 'HTTP ' + r.getResponseCode() }; }
+    bytes = bytes.concat(Utilities.base64Decode(JSON.parse(r.getContentText()).audioContent));
+  }
+  return { disponible: true, voz: voz, audio: Utilities.base64Encode(bytes) };
+}
+/* =================== 3.7 · Clima (Open-Meteo: servicio público y gratuito, sin clave) =================== */
+/* Pronóstico de la sucursal (por sus coordenadas de la hoja Sucursales) y, con el historial de lluvias, cuánto cambia la venta
+   en los días de lluvia frente a los secos (comparando cada día contra el promedio de su mismo día de la semana). */
+const WMO37_ = { 0: ['☀️', 'despejado'], 1: ['🌤️', 'mayormente despejado'], 2: ['⛅', 'parcialmente nublado'], 3: ['☁️', 'nublado'], 45: ['🌫️', 'niebla'], 48: ['🌫️', 'niebla'],
+  51: ['🌦️', 'llovizna'], 53: ['🌦️', 'llovizna'], 55: ['🌧️', 'llovizna intensa'], 56: ['🌧️', 'llovizna helada'], 57: ['🌧️', 'llovizna helada'], 61: ['🌦️', 'lluvia débil'], 63: ['🌧️', 'lluvia'], 65: ['🌧️', 'lluvia fuerte'],
+  66: ['🌧️', 'lluvia helada'], 67: ['🌧️', 'lluvia helada'], 71: ['🌨️', 'nieve'], 73: ['🌨️', 'nieve'], 75: ['🌨️', 'nieve'], 80: ['🌦️', 'chaparrones'], 81: ['🌧️', 'chaparrones'], 82: ['⛈️', 'chaparrones fuertes'],
+  95: ['⛈️', 'tormenta'], 96: ['⛈️', 'tormenta con granizo'], 99: ['⛈️', 'tormenta con granizo'] };
+function clima37Lugar_() {
+  let s = null; try { const L = sucursales_().filter(x => x.activa && x.lat != null && x.lng != null); s = L.find(x => /palermo/i.test(x.nombre)) || L[0] || null; } catch (e) {}
+  return s ? { nombre: s.nombre, lat: s.lat, lng: s.lng, dias: s.dias } : { nombre: 'Palermo', lat: -34.5889, lng: -58.4306, dias: cfg_().diasOperativos };
+}
+function clima37Get_(url) {
+  const r = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true, validateHttpsCertificates: true, headers: { Accept: 'application/json' } });
+  if (r.getResponseCode() !== 200) throw new Error('HTTP ' + r.getResponseCode());
+  return JSON.parse(r.getContentText());
+}
+const esLluvia37_ = d => (d.prob != null && d.prob >= 60) || d.mm >= 3 || ([61, 63, 65, 80, 81, 82, 95, 96, 99].indexOf(d.code) >= 0 && (d.prob == null || d.prob >= 50));
+/** Impacto histórico de la lluvia en la venta (últimos ~6 meses). Se recalcula cada 12 h. null si no hay días suficientes. */
+function impactoLluvia37_(P) {
+  const k = 'CLIMA37_IMP', c = CACHE.get(k); if (c) return JSON.parse(c);
+  const hoy = hoy_(), fin = sumarDias_(hoy, -6), ini = sumarDias_(hoy, -186);
+  const j = clima37Get_('https://archive-api.open-meteo.com/v1/archive?latitude=' + P.lat + '&longitude=' + P.lng + '&start_date=' + ini + '&end_date=' + fin + '&daily=precipitation_sum&timezone=America%2FArgentina%2FBuenos_Aires');
+  const mm = {}; (j.daily && j.daily.time || []).forEach((t, i) => { mm[t] = Number(j.daily.precipitation_sum[i]); });
+  const C = tAll_('Cierres').filter(x => x.total > 0 && mm[x.fecha] != null && !isNaN(mm[x.fecha]));
+  const secos = C.filter(x => mm[x.fecha] < 0.5), prom = {};
+  secos.forEach(x => { const d = dow_(x.fecha); (prom[d] = prom[d] || []).push(x.total); });
+  const base = d => prom[d] && prom[d].length >= 2 ? prom[d].reduce((a, b) => a + b, 0) / prom[d].length : null;
+  const lluv = C.filter(x => mm[x.fecha] >= 2 && base(dow_(x.fecha)));
+  let out = null;
+  if (lluv.length >= 4 && secos.length >= 10) {
+    const ratio = lluv.reduce((a, x) => a + x.total / base(dow_(x.fecha)), 0) / lluv.length;
+    out = { pct: Math.round((ratio - 1) * 100), diasLluvia: lluv.length, diasSecos: secos.length, desde: ini };
+  }
+  CACHE.put(k, JSON.stringify(out), 43200);
+  return out;
+}
+/** Pronóstico de hoy y los 3 días siguientes + aviso si llueve uno de los próximos días de apertura (hasta 4 días). Caché 1 h. Nunca rompe el panel: ante un error devuelve null. */
+function clima37_() {
+  try {
+    const c = CACHE.get('CLIMA37'); if (c) return JSON.parse(c);
+    const P = clima37Lugar_(), cfg = cfg_(), cal = calendario_(cfg);
+    const j = clima37Get_('https://api.open-meteo.com/v1/forecast?latitude=' + P.lat + '&longitude=' + P.lng +
+      '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum&timezone=America%2FArgentina%2FBuenos_Aires&forecast_days=5');
+    const D = j.daily || {}, dias = (D.time || []).map((t, i) => {
+      const code = Number(D.weather_code[i]), w = WMO37_[code] || ['🌡️', ''];
+      const d = { fecha: t, max: Math.round(D.temperature_2m_max[i]), min: Math.round(D.temperature_2m_min[i]), prob: D.precipitation_probability_max[i] == null ? null : Math.round(D.precipitation_probability_max[i]),
+        mm: Math.round((Number(D.precipitation_sum[i]) || 0) * 10) / 10, code: code, emoji: w[0], desc: w[1] };
+      d.lluvia = esLluvia37_(d); d.abre = P.dias.indexOf(dow_(t)) >= 0 && !feriadoSuc_(cal, P.nombre, t);
+      return d;
+    });
+    let imp = null; try { imp = impactoLluvia37_(P); } catch (e) {}
+    const hoy = hoy_(), ll = dias.find(d => d.lluvia && d.abre);
+    let aviso = null;
+    if (ll) {
+      const cuando = ll.fecha === hoy ? 'Hoy' : ll.fecha === sumarDias_(hoy, 1) ? 'Mañana' : 'El ' + NOMBRE_DIA[dow_(ll.fecha)];
+      aviso = { fecha: ll.fecha, cuando: cuando, prob: ll.prob, mm: ll.mm,
+        texto: cuando + ' se espera ' + ll.desc + (ll.prob != null ? ' (' + ll.prob + ' % de probabilidad)' : '') + ': la venta del local puede ser menor' +
+          (imp && imp.pct < 0 ? ' (en los días de lluvia de los últimos meses vendiste ' + Math.abs(imp.pct) + ' % menos que un día seco)' : '') + '.',
+        accion: 'Reforzá WhatsApp, Instagram y la venta online ese día, y avisá a las clientas habituales de alguna promo o novedad.' };
+    }
+    const out = { lugar: P.nombre, dias: dias.slice(0, 4), aviso: aviso, impacto: imp, fuente: 'Open-Meteo', ts: new Date().toISOString() };
+    CACHE.put('CLIMA37', JSON.stringify(out), 3600);
+    return out;
+  } catch (e) { try { CACHE.put('CLIMA37', 'null', 1800); } catch (x) {} return null; }
+}
+/** Comparación del último cierre contra el promedio de su mismo día de la semana (últimas 4 apariciones con venta). */
+function vsMismoDia37_(c, u) {
+  if (!u) return null;
+  const prev = c.filter(x => x.fecha < u.fecha && x.total > 0 && dow_(x.fecha) === dow_(u.fecha)).slice(-4);
+  if (prev.length < 2) return null;
+  const p = prev.reduce((a, x) => a + x.total, 0) / prev.length;
+  return { promedio: Math.round(p), pct: Math.round((u.total / p - 1) * 100), n: prev.length };
+}
 /* =================== 3.4 · Sucursales (hoja editable por jefes) =================== */
 /* La hoja "Sucursales" se edita a mano en la planilla (o desde la app): no tiene columna JSON, se lee celda por celda.
    Si una sucursal tiene datos incompletos, nadie de esa sucursal puede fichar automáticamente: se avisa en pantalla. */
@@ -1859,7 +1955,7 @@ function getKPIs(token, desde, hasta) {
   // 3.6: clientes y producción, solo si el jefe tiene esas secciones habilitadas (lo que no tiene permiso ni se lee).
   let cliR = null, proR = null, cliL = [];
   if (s.perms.indexOf('clientes') >= 0 || s.perms.indexOf('produccion') >= 0) { try { const D = control_(false); if (s.perms.indexOf('clientes') >= 0) { cliR = resumenClientes_(D); cliL = D.clientes.filter(c => c.seCuenta !== false); } if (s.perms.indexOf('produccion') >= 0) proR = resumenProduccion_(D); } catch (e) {} }
-  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR });
+  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR, clima: comercial && !comercial.sinDatos ? clima37_() : null });
   return {
     desde: desde, hasta: hasta, auditoriasN: audN, params: params_(),
     acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio,
@@ -2287,6 +2383,8 @@ function audio_(u, com, aud, ctx) {
   const nPend = (fer.pendientes || []).length;
   const ferProx = prox ? 'Atención, ' + fechaHablada_(prox.fecha) + ' es feriado, ' + prox.nombre + ', hay que confirmar si Palermo abre.' : '';
   const ferPend = nPend ? (nPend === 1 ? 'Hay un feriado pendiente de confirmar si el local abrió.' : 'Hay ' + palabras_(nPend) + ' feriados pendientes de confirmar si el local abrió.') : '';
+  // 3.7 · Clima: solo si se espera lluvia un día de apertura (la venta puede ser menor) y qué hacer.
+  const cli = ctx.clima && ctx.clima.aviso, climaTxt = cli ? hablar_(cli.texto.replace(/ \((\d+) % de probabilidad\)/, ', con $1 % de probabilidad,')) + ' ' + cli.accion : '';
   // ---- Comercial
   const C = [], Cg = [];
   if (!com.sinDatos) {
@@ -2353,12 +2451,12 @@ function audio_(u, com, aud, ctx) {
   // ---- Armado
   const intro = t => hola + t + ' ';
   const seccion = (titulo, partes) => partes.filter(Boolean).length ? limpiar(intro(titulo) + partes.filter(Boolean).join(' ')) : '';
-  const comercial = seccion('te cuento los indicadores comerciales de Palermo.', C.concat(F, E, [ferProx]));
+  const comercial = seccion('te cuento los indicadores comerciales de Palermo.', C.concat(F, E, [ferProx, climaTxt]));
   const auditoria = seccion('te cuento los indicadores de auditoría de Palermo.', A.concat(recA));
   const acciones = seccion('te cuento las acciones comerciales para Palermo.', X);
   const rrhh = seccion('te cuento el panorama de recursos humanos de los últimos treinta días.', R);
   const cuerpo = [];
-  if (Cg.length || bajoTxt || Fg.length || Eg.length || ferProx) cuerpo.push(Cg.concat([bajoTxt], Fg, Eg, [ferProx]).filter(Boolean).join(' '));
+  if (Cg.length || bajoTxt || Fg.length || Eg.length || ferProx || climaTxt) cuerpo.push(Cg.concat([bajoTxt], Fg, Eg, [ferProx, climaTxt]).filter(Boolean).join(' '));
   if (A.length) cuerpo.push('Ahora, auditoría. ' + A.slice(0, 3).join(' ') + (recA.length ? ' ' + recA[0] : ''));
   const cr = ctx.clientes, pr = ctx.produccion;
   if (cr && cr.clientes) { const top = (ctx.clientesLista || []).filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente)[0];
