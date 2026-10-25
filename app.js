@@ -789,7 +789,7 @@ async function jornada(body, j){
   if (j.vacacionesNovedades) card.append(el("div",{class:"notice ok"}, `📬 ${j.vacacionesNovedades===1?"Tenés 1 solicitud de vacaciones resuelta":"Tenés "+j.vacacionesNovedades+" solicitudes de vacaciones resueltas"}. `, el("button",{class:"btn sm",type:"button",text:"Ver",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }})));
   if (j.habilitado && !j.abiertaAnterior) estadoPermisoGeo().then(p=>{ if (!card.isConnected) return;
     const amb = entornoGeo();
-    if (p==="denied" || amb.webview || amb.iframe) bloqueAyudaGeo({error: amb.webview?"no_soportado":"sin_permiso", amb}, true).then(b=>{ if (card.isConnected) card.insertBefore(b, card.querySelector(".fbtns")); });
+    if (p==="denied" || amb.webview || amb.iframe) bloqueAyudaGeo({error: amb.webview?"no_soportado":"sin_permiso", amb}, true, g=>{ if (g.error) return toast("La ubicación sigue sin responder: probá de nuevo."); toast("✅ Ubicación habilitada. Ya podés fichar."); jornada(body, F.j); }).then(b=>{ if (card.isConnected) card.insertBefore(b, card.querySelector(".fbtns")); });
     else if (p==="prompt" && !lsGet("hb36_geo_ok")) card.insertBefore(el("div",{class:"notice",text:"📍 La primera vez el teléfono te va a preguntar por la ubicación: elegí «Permitir» (o «Mientras se usa la app»). Si querés, probala antes con «Probar mi ubicación»."}), card.querySelector(".fbtns"));
   });
   card.append(el("div",{class:"row"},
@@ -844,8 +844,11 @@ function botonProbar(body){
   const b = el("button",{class:"btn",type:"button",text:"📡 Probar mi ubicación",onclick:()=>{
     const pGeo = ubicacion();   // en el mismo toque
     spinBtn(b,"Buscando tu ubicación…"); out.textContent="";
-    pGeo.then(async geo=>{
-      if (geo.error){ unspin(b); out.append(await bloqueAyudaGeo(geo, true)); return; }
+    pGeo.then(resultado);
+  }});
+  const resultado = async geo=>{
+      out.textContent="";
+      if (geo.error){ unspin(b); out.append(await bloqueAyudaGeo(geo, true, resultado)); const n = out.querySelector("geolocation"); if (n) setTimeout(()=>n.scrollIntoView({block:"center", behavior:"smooth"}), 50); return; }
       let v; try{ v = await api("probarUbicacion", F.token, geo); }catch(e){ unspin(b); out.append(el("div",{class:"notice bad",text:"📍 La ubicación del teléfono funciona, pero no pudimos consultar al servidor: "+msgErr(e)})); return; }
       unspin(b);
       const prec = geo.acc!=null ? ` · precisión ±${Math.round(geo.acc)} m` : "";
@@ -854,12 +857,11 @@ function botonProbar(body){
       else if (v.motivo==="precision") out.append(el("div",{class:"notice warn",text:`📍 La ubicación funciona, pero es poco precisa (±${v.precision} m; se necesita ${v.precisionMax||100} m o menos). Activá «precisión alta» y acercate a una ventana.`}));
       else if (v.motivo==="sucursal_incompleta") out.append(el("div",{class:"notice warn",text:`📍 La ubicación funciona, pero a ${v.sucursal} le falta cargar: ${(v.faltan||[]).join(", ")}. Avisá a un jefe.`}));
       else out.append(el("div",{class:"notice warn",text:"📍 La ubicación funciona, pero no se pudo validar contra la sucursal."}));
-    });
-  }});
+  };
   return el("div",{class:"probar"}, b, out);
 }
 /* Ayuda según el caso: permiso bloqueado (1), GPS apagado / sin señal (2), tiempo agotado (3), navegador interno de otra app, iframe, página no segura. */
-async function bloqueAyudaGeo(geo, corto){
+async function bloqueAyudaGeo(geo, corto, alUbicar){
   const amb = geo.amb || entornoGeo(), perm = await estadoPermisoGeo();
   const box = el("div",{class:"notice "+(geo.error==="tiempo_agotado"?"warn":"bad")+" ayuda-geo"});
   const pasos = L => el("ol",{class:"pasos"}, ...L.map(t=>el("li",{text:t})));
@@ -879,6 +881,9 @@ async function bloqueAyudaGeo(geo, corto){
   if (geo.error==="inseguro"){ box.append(el("b",{text:"La página no está abierta con una dirección segura (https), y así el teléfono no da la ubicación."}), el("a",{class:"btn primary",href:urlApp.replace(/^http:/,"https:"),text:"Abrir la dirección segura"})); return box; }
   if (geo.error==="sin_permiso"){
     box.append(el("b",{text: perm==="denied" ? "La ubicación está BLOQUEADA para esta página: por eso el teléfono no te muestra el pedido de permiso." : "Se rechazó el permiso de ubicación."}));
+    const nativo = botonGeoNativo(alUbicar);
+    if (nativo) box.append(el("div",{class:"geo-nativo"}, el("span",{text:"👉 Tocá este botón de Chrome y elegí «Permitir»: vuelve a habilitar la ubicación sin entrar a la configuración."}), nativo),
+      el("p",{class:"hint",style:"margin:0",text:"Si no aparece la opción, seguí estos pasos:"}));
     if (amb.ios) box.append(pasos(["Ajustes → Privacidad y seguridad → Localización: activala.", "En la lista, elegí Safari (o la app instalada) → «Al usar la app» y activá «Ubicación exacta».", "Volvé acá y tocá «Reintentar»."]));
     else box.append(pasos(perm==="denied" ? ["En Chrome tocá el candado 🔒 (o el ícono de ajustes) a la izquierda de la dirección → Permisos → Ubicación → Permitir.", "Si sigue sin andar: Ajustes del celular → Apps → Chrome → Permisos → Ubicación → «Permitir solo mientras se usa la app».", "Si usás la app instalada en la pantalla de inicio: el permiso es de Chrome, no de la app (por eso «Hey Blackk» no aparece en Permisos). Abrí Chrome → menú ⋮ → Configuración → Configuración de sitios → Ubicación → buscá «"+location.host+"» → Permitir.", "Volvé acá, recargá la página y tocá «Reintentar»."]
       : ["Tocá «Reintentar» y, cuando el teléfono pregunte, elegí «Permitir».", "Si no aparece el pedido: tocá el candado 🔒 de la barra de dirección → Permisos → Ubicación → Permitir.", "Si tampoco: Ajustes del celular → Apps → Chrome → Permisos → Ubicación → «Permitir solo mientras se usa la app» (si Chrome no tiene permiso del celular, la página no puede ni preguntar).", "Si usás la app instalada en la pantalla de inicio: el permiso es de Chrome, no de la app. En Chrome: menú ⋮ → Configuración → Configuración de sitios → Ubicación → «"+location.host+"» → Permitir."]));
@@ -891,6 +896,18 @@ async function bloqueAyudaGeo(geo, corto){
   }
   if (!corto && perm) box.append(el("p",{class:"aviso",style:"margin:6px 0 0",text:"Estado del permiso en este navegador: "+({granted:"permitido",prompt:"pregunta cada vez",denied:"bloqueado"}[perm]||perm)+"."}));
   return box;
+}
+/* Botón nativo de ubicación de Chrome (<geolocation>, Chrome 144+). Es el único modo de que una página vuelva a pedir un permiso
+   que quedó bloqueado: el navegador muestra su propio botón y, al tocarlo, ofrece re-habilitar la ubicación. */
+function botonGeoNativo(alUbicar){
+  if (!("HTMLGeolocationElement" in window) || typeof alUbicar !== "function") return null;
+  const g = document.createElement("geolocation");
+  g.setAttribute("accuracymode","precise");
+  g.className = "geo-el";
+  g.addEventListener("location", e=>{ const t = e.target;
+    if (t.position){ lsSet("hb36_geo_ok",1); alUbicar({lat:t.position.coords.latitude, lng:t.position.coords.longitude, acc:t.position.coords.accuracy}); }
+    else if (t.error) alUbicar({error: t.error.code===1?"sin_permiso":t.error.code===3?"tiempo_agotado":"no_disponible", codigo:t.error.code, amb:entornoGeo()}); });
+  return g;
 }
 function copiarTexto(t){ try{ navigator.clipboard.writeText(t).then(()=>toast("Enlace copiado. Pegalo en Chrome."), ()=>toast(t)); }catch(e){ toast(t); } }
 /* Ubicación que no valida: mensaje claro + reintentar + fichaje manual con motivo (lo aprueba un jefe). */
@@ -907,7 +924,7 @@ function pantallaRechazo(body, tipo, v, geo){
   else if (v.motivo==="precision") card.append(el("p",{class:"lead",text:`El GPS marca con un margen de ±${v.precision} m (se necesita ${v.precisionMax||100} m o menos). El fichaje no se registró.`}),
     el("ol",{class:"pasos"}, ...["Activá la ubicación con «precisión alta» (o «ubicación precisa»).", "Acercate a una ventana o a la puerta del local y esperá unos segundos.", "Tocá «Reintentar»."].map(t=>el("li",{text:t}))));
   else if (v.motivo==="sucursal_incompleta") card.append(el("p",{class:"lead",text:`A ${v.sucursal} le falta: ${(v.faltan||[]).join(", ")}. Avisá a un jefe para que lo complete. Mientras tanto podés pedir un fichaje manual.`}));
-  else if (errGeo){ card.append(el("p",{class:"lead",text:"Sin ubicación el fichaje no se registra. Seguí estos pasos:"})); bloqueAyudaGeo(geo||v, false).then(b=>card.insertBefore(b, filaBtns)); }
+  else if (errGeo){ card.append(el("p",{class:"lead",text:"Sin ubicación el fichaje no se registra. Seguí estos pasos:"})); bloqueAyudaGeo(geo||v, false, g=>seguirFichar(body, tipo, Promise.resolve(g), null)).then(b=>card.insertBefore(b, filaBtns)); }
   const reintentar = el("button",{class:"btn primary big-btn",type:"button",text:"Reintentar",onclick:()=>{
     const pGeo = ubicacion();   // se vuelve a pedir en este mismo toque
     seguirFichar(body, tipo, pGeo, reintentar);
