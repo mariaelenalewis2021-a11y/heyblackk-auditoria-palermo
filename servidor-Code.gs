@@ -390,7 +390,8 @@ function publico_(u) {
   return { id: u.id, legajo: u.legajo, nombre: u.nombre, sector: u.sector, rol: u.rol, estado: u.estado, registraIngreso: !!u.registraIngreso,
     fechaIngreso: u.fechaIngreso || '', fechaBaja: u.fechaBaja || '', bajaPor: u.bajaPor || '', motivoBaja: u.motivoBaja || '',
     permisos: permisos_(u), permisosPersonalizados: Array.isArray(u.permisos), creado: u.creado || '', bloqueado: !!u.bloqueadoPin, largoPin: largoPin_(u.rol),
-    sucursal: sucDe_(u), horasEsperadas: u.horasEsperadas || null, horario: u.horario || null, vacacionesAnuales: u.vacacionesAnuales || null };
+    sucursal: sucDe_(u), horasEsperadas: u.horasEsperadas || null, horario: u.horario || null, vacacionesAnuales: u.vacacionesAnuales || null,
+    contrato: (() => { try { return contrato_(u, sucursales_().find(x => normSuc_(x.nombre) === normSuc_(sucDe_(u)))); } catch (e) { return null; } })() };
 }
 function sesion_(token, perm, necesitaElev) {
   if (!token || !/^[0-9a-f-]{36}$/.test(String(token))) throw new Error('AUTH');
@@ -424,7 +425,7 @@ function resumenHoy(token) {
     // 3.4: lo esperado se calcula por sucursal (sus días de apertura y feriados); quien está de vacaciones no se espera (no es falta).
     const porSuc = sucs.filter(x => x.activa).map(x => {
       const del = fichan.filter(u => normSuc_(sucDe_(u)) === normSuc_(x.nombre)), abre = x.dias.indexOf(dow_(hoy)) >= 0 && !feriadoSuc_(calHoy, x.nombre, hoy);
-      const espera = abre ? del.filter(u => !vac(u.id, hoy)) : [];
+      const espera = abre ? del.filter(u => !vac(u.id, hoy) && opsDe_(u, x).indexOf(dow_(hoy)) >= 0) : [];   // 3.7: según la contratación de cada una
       return { nombre: x.nombre, abre: abre, entradas: del.filter(u => ent[u.id]).length, esperadas: espera.length, incompleta: x.incompleta.length > 0 };
     }).filter(x => x.esperadas || x.entradas || x.incompleta);
     const enVac = fichan.filter(u => vac(u.id, hoy));
@@ -597,11 +598,14 @@ function altaEmpleado(token, d) {
     const suc = sucursalValida_(d.sucursal);
     const asignado = d.pin != null && String(d.pin) !== '';
     const pin = asignado ? pinValido_(d.pin, largoPin_(rol)) : pinAleatorio_(largoPin_(rol)), salt = Utilities.getUuid();
-    const u = { id: nuevoId_('U'), legajo: legajo, nombre: nombre, sector: txt_(d.sector, 40), rol: rol, estado: 'activo', sucursal: suc, horasEsperadas: horasEsperadas_(d.horasEsperadas),
+    const hor = horario_(d.horario);   // 3.7: contratación (días + horario) desde el alta
+    const u = { id: nuevoId_('U'), legajo: legajo, nombre: nombre, sector: txt_(d.sector, 40), rol: rol, estado: 'activo', sucursal: suc, horario: hor,
+      horasEsperadas: horasEsperadas_(d.horasEsperadas) || (hor ? { tipo: 'dia', horas: Math.round(minHorario_(hor) / 60 * 100) / 100 } : null),
+      vacacionesAnuales: Number(d.vacacionesAnuales) > 0 ? Math.min(60, Math.round(Number(d.vacacionesAnuales))) : null,
       registraIngreso: d.registraIngreso !== false, fechaIngreso: fechaOk_(d.fechaIngreso) || hoy_(), salt: salt, pinHash: hashPin_(pin, salt),
       ver: 1, creado: new Date().toISOString(), creadoPor: s.user.nombre };
     guardarUsuario_(u, true);
-    log_(s, 'alta_empleado', 'ok', u.id, nombre + ' · ' + legajo + ' · ' + rol + ' · ' + suc + (asignado ? ' · PIN asignado por jefe' : ' · PIN generado'));
+    log_(s, 'alta_empleado', 'ok', u.id, nombre + ' · ' + legajo + ' · ' + rol + ' · ' + suc + (hor ? ' · ' + (hor.dias ? diasTxt_(hor.dias) : 'días de la sucursal') + ' ' + hor.entrada + '-' + hor.salida : '') + (asignado ? ' · PIN asignado por jefe' : ' · PIN generado'));
     return { user: publico_(u), pinInicial: asignado ? null : pin };
   });
 }
@@ -610,14 +614,14 @@ function editarEmpleado(token, uid, d) {
   d = d || {};
   return lock_(() => {
     const u = usuarios_().find(x => x.id === uid); if (!u) throw new Error('Empleado no encontrado.');
-    const resumen = x => [x.nombre, x.sector, x.registraIngreso, x.fechaIngreso, sucDe_(x), x.horasEsperadas ? x.horasEsperadas.horas + ' h/' + x.horasEsperadas.tipo : 'sin horas esperadas', x.horario ? x.horario.entrada + '-' + x.horario.salida : 'sin horario', x.vacacionesAnuales ? x.vacacionesAnuales + ' días de vacaciones' : ''].join(' / ');
+    const resumen = x => [x.nombre, x.sector, x.registraIngreso, x.fechaIngreso, sucDe_(x), x.horasEsperadas ? x.horasEsperadas.horas + ' h/' + x.horasEsperadas.tipo : 'sin horas esperadas', x.horario ? (x.horario.dias ? diasTxt_(x.horario.dias) + ' ' : '') + x.horario.entrada + '-' + x.horario.salida : 'sin horario', x.vacacionesAnuales ? x.vacacionesAnuales + ' días de vacaciones' : ''].join(' / ');
     const antes = resumen(u);
     if (d.nombre != null) u.nombre = txt_(d.nombre, 60) || u.nombre;
     if (d.sucursal != null) u.sucursal = sucursalValida_(d.sucursal);
     if (d.horasEsperadas !== undefined) u.horasEsperadas = horasEsperadas_(d.horasEsperadas);
-    if (d.horario !== undefined) {   // 3.5: horario habitual (para tardanzas y salidas anticipadas del Panorama RRHH)
-      if (!d.horario || (!d.horario.entrada && !d.horario.salida)) u.horario = null;
-      else { const e = horaOk_(d.horario.entrada), x = horaOk_(d.horario.salida); if (!e || !x || x <= e) throw new Error('Horario inválido: cargá entrada y salida (HH:MM), con la salida después de la entrada.'); u.horario = { entrada: e, salida: x }; }
+    if (d.horario !== undefined) {   // 3.7: contratación (días + horario); la carga por día sale del horario si no se cargó otra
+      u.horario = horario_(d.horario);
+      if (u.horario && !d.horasEsperadas) u.horasEsperadas = { tipo: 'dia', horas: Math.round(minHorario_(u.horario) / 60 * 100) / 100 };
     }
     if (d.vacacionesAnuales !== undefined) { const v = Number(d.vacacionesAnuales); u.vacacionesAnuales = isFinite(v) && v > 0 ? Math.min(60, Math.round(v)) : null; }
     if (d.sector != null) u.sector = txt_(d.sector, 40);
@@ -641,6 +645,70 @@ function horasEsperadas_(h) {
   if (!isFinite(horas) || horas <= 0) return null;
   if (horas > (tipo === 'dia' ? 16 : 80)) throw new Error(tipo === 'dia' ? 'Las horas esperadas por día no pueden superar 16.' : 'Las horas esperadas por semana no pueden superar 80.');
   return { tipo: tipo, horas: Math.round(horas * 100) / 100 };
+}
+/* 3.7 · Contratación de cada persona: días que trabaja + horario (entrada y salida). De ahí salen la carga por día, semana y mes,
+   los días en que se la espera (no los de la sucursal) y lo esperado contra lo fichado. dias = null → los días de apertura de su sucursal. */
+function horario_(h) {
+  if (!h || (!h.entrada && !h.salida)) return null;
+  const e = horaOk_(h.entrada), x = horaOk_(h.salida);
+  if (!e || !x || x <= e) throw new Error('Horario inválido: cargá entrada y salida (HH:MM), con la salida después de la entrada.');
+  let dias = null;
+  if (Array.isArray(h.dias) && h.dias.length) {
+    dias = h.dias.map(Number).filter((d, i, A) => d >= 0 && d <= 6 && Math.floor(d) === d && A.indexOf(d) === i).sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+    if (!dias.length) throw new Error('Elegí al menos un día de trabajo.');
+  }
+  return { entrada: e, salida: x, dias: dias };
+}
+const minHorario_ = h => h ? Math.round(minDe_(h.salida) - minDe_(h.entrada)) : 0;
+/** Días de la semana en que se espera a la persona: los de su contratación o, si no tiene, los de apertura de su sucursal. */
+function opsDe_(u, suc) {
+  if (u && u.horario && Array.isArray(u.horario.dias) && u.horario.dias.length) return u.horario.dias;
+  return suc && suc.dias ? suc.dias : cfg_().diasOperativos;
+}
+/** 3.7 · Carga inicial (una sola vez, desde el editor) de las contrataciones informadas por la administración (25-oct-2026).
+    Solo completa a quien todavía no tiene horario; nunca pisa uno cargado. Queda en el Historial. Devuelve qué hizo con cada persona. */
+const CONTRATOS37_ = [
+  { re: /^ivana\b/i, suc: /lima/i, h: { entrada: '11:00', salida: '17:00', dias: [1, 2, 3, 4, 5] } },
+  { re: /^adri[aá]n\b/i, suc: /lima/i, h: { entrada: '11:00', salida: '17:00', dias: [1, 2, 3, 4, 5] } },
+  { re: /^florencia\b/i, suc: /lima/i, h: { entrada: '11:00', salida: '17:00', dias: [0, 1, 2, 3, 4, 6] } },
+  { re: /^isabel+a\b/i, suc: /lima/i, h: { entrada: '12:30', salida: '17:00', dias: [1, 2, 3, 4, 5] } },
+  { re: /./, suc: /palermo/i, soloEmpleado: true, h: { entrada: '14:00', salida: '20:00', dias: null } }];
+function aplicarContratos37() {
+  const out = [];
+  lock_(() => {
+    usuarios_().filter(u => u.estado === 'activo' && u.registraIngreso).forEach(u => {
+      const c = CONTRATOS37_.find(k => k.re.test(String(u.nombre || '').trim()) && k.suc.test(sucDe_(u)) && (!k.soloEmpleado || u.rol === 'empleado'));
+      if (!c) { out.push(u.nombre + ' (' + sucDe_(u) + '): sin dato informado'); return; }
+      if (u.horario) { out.push(u.nombre + ': ya tenía horario, no se toca'); return; }
+      u.horario = horario_(c.h); u.horasEsperadas = { tipo: 'dia', horas: Math.round(minHorario_(u.horario) / 60 * 100) / 100 };
+      guardarUsuario_(u);
+      const t = (u.horario.dias ? diasTxt_(u.horario.dias) : 'días de la sucursal') + ' ' + u.horario.entrada + '-' + u.horario.salida;
+      log_(null, 'contratacion_inicial', 'ok', u.id, u.nombre + ' · ' + t);
+      out.push(u.nombre + ' (' + sucDe_(u) + '): ' + t);
+    });
+  });
+  Logger.log('CONTRATOS37 ' + JSON.stringify(out));
+  return out;
+}
+/** Carga horaria de la contratación en un mes (AAAA-MM): días a trabajar sin feriados de su sucursal ni vacaciones aprobadas. */
+function cargaMes_(u, mes, suc, cal, vac) {
+  if (!u.horario) return null;
+  const ops = opsDe_(u, suc), md = minHorario_(u.horario), ini = mes + '-01', fin = sumarDias_(sumarDias_(ini, 32).slice(0, 8) + '01', -1);
+  let dias = 0;
+  for (let d = ini; d <= fin; d = sumarDias_(d, 1)) {
+    if (ops.indexOf(dow_(d)) < 0) continue;
+    if (u.fechaIngreso && d < u.fechaIngreso) continue;
+    if (cal && feriadoSuc_(cal, sucDe_(u), d)) continue;
+    if (vac && vac(u.id, d)) continue;
+    dias++;
+  }
+  return { mes: mes, dias: dias, minutos: dias * md };
+}
+function contrato_(u, suc) {
+  if (!u.horario) return null;
+  const ops = opsDe_(u, suc), md = minHorario_(u.horario);
+  return { entrada: u.horario.entrada, salida: u.horario.salida, dias: ops, diasPropios: !!(u.horario.dias && u.horario.dias.length), diasTxt: diasTxt_(ops),
+    minDia: md, minSemana: md * ops.length };
 }
 function bajaEmpleado(token, uid, fechaBaja, motivo) {
   const s = sesion_(token, 'personal', true);
@@ -1064,7 +1132,16 @@ function jornadaDe_(u) {
     siguiente: ab ? null : (ult && tipoDe_(ult) === 'entrada' ? 'salida' : 'entrada'),
     manualesPendientes: delDia.filter(x => x.pendiente).map(x => ({ tipo: x.tipo, hora: String(x.hora).slice(0, 5) })),
     entrada: e ? { hora: horaEf_(e).slice(0, 5), estado: e.estado } : null, salida: o ? { hora: horaEf_(o).slice(0, 5), estado: o.estado, minutos: P.minutos } : null,
-    vacacionesNovedades: nov };
+    vacacionesNovedades: nov, contrato: contratoHoy_(u, suc, hoy, P.minutos) };
+}
+/** 3.7 · Para la pantalla de fichada: su horario, si hoy le toca, lo que lleva hoy y el avance del mes contra su carga horaria. */
+function contratoHoy_(u, suc, hoy, minHoy) {
+  try {
+    const sc = sucursales_().find(x => normSuc_(x.nombre) === normSuc_(suc.nombre)), c = contrato_(u, sc); if (!c) return null;
+    const r = horas_({ uids: [u.id], desde: hoy.slice(0, 8) + '01', hasta: hoy }), e = r.empleados[0] || {};
+    return Object.assign(c, { hoyLeToca: c.dias.indexOf(dow_(hoy)) >= 0, minutosHoy: minHoy || 0,
+      mes: { trabajado: e.total || 0, esperadoHastaHoy: e.esperado, carga: e.cargaMes ? e.cargaMes.minutos : null, diasCarga: e.cargaMes ? e.cargaMes.dias : null } });
+  } catch (x) { return null; }
 }
 /* Contadores livianos por mes (p. ej. intentos de fichar dos veces) para no recorrer todo el historial al calcular KPIs. */
 function contar_(k) {
@@ -1171,7 +1248,7 @@ function horas_(opts) {
   if (opts.sucursal) users = users.filter(u => normSuc_(sucDe_(u)) === normSuc_(opts.sucursal));
   const ing = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta && vivo_(x));
   const empleados = users.map(u => {
-    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(sucDe_(u))), ops = suc ? suc.dias : cfg.diasOperativos;
+    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(sucDe_(u))), ops = opsDe_(u, suc);   // 3.7: días de su contratación
     const mios = ing.filter(x => x.uid === u.id), dias = [], he = u.horasEsperadas || null;
     let d = u.fechaIngreso && u.fechaIngreso > desde ? u.fechaIngreso : desde;
     const fin = u.estado !== 'activo' && u.fechaBaja && u.fechaBaja < hasta ? u.fechaBaja : hasta;
@@ -1212,6 +1289,7 @@ function horas_(opts) {
     const esperado = he && he.horas > 0 ? Object.keys(espSem).reduce((a, w) => a + espSem[w], 0) : null;
     const cuenta = e => dias.filter(x => x.estado === e).length;
     return { uid: u.id, nombre: u.nombre, legajo: u.legajo, sucursal: sucDe_(u), activo: u.estado === 'activo', horasEsperadas: he,
+      contrato: contrato_(u, suc), cargaMes: cargaMes_(u, hasta.slice(0, 7), suc, cal, vac),
       dias: dias.sort((a, b) => a.fecha.localeCompare(b.fecha)),
       semanas: Object.keys(semanas).sort().map(k => semanas[k]), meses: Object.keys(meses).sort().map(k => meses[k]),
       total: total, diasTrabajados: trab.length, promedio: trab.length ? Math.round(total / trab.length) : null,
@@ -1273,10 +1351,12 @@ function panelFichajesHoy(token) {
     const personas = users.filter(u => normSuc_(sucDe_(u)) === normSuc_(n)).map(u => {
       const recs = ing.filter(x => x.uid === u.id && x.fecha === hoy), P = pares_(recs, hoy, hoy);
       const ev = eventos_(u.id), ab = abiertaAnterior_(u.id, ev, hoy), pend = man.filter(c => c.uid === u.id && c.fecha === hoy);
-      let estado = recs.length ? (P.abierta ? 'adentro' : P.incoherente ? 'revisar' : 'salio') : vac(u.id, hoy) ? 'vacaciones' : fer ? 'feriado' : abre ? 'falta' : 'no_abre';
+      const leToca = abre && opsDe_(u, suc).indexOf(dow_(hoy)) >= 0;   // 3.7: solo falta si hoy le toca por su contratación
+      let estado = recs.length ? (P.abierta ? 'adentro' : P.incoherente ? 'revisar' : 'salio') : vac(u.id, hoy) ? 'vacaciones' : fer ? 'feriado' : leToca ? 'falta' : abre ? 'no_le_toca' : 'no_abre';
       if (!recs.length && pend.length) estado = 'manual_pendiente';
       return { uid: u.id, nombre: u.nombre, legajo: u.legajo, estado: estado, pares: P.pares, minutos: P.minutos,
         ultima: recs.length ? horaEf_(recs.slice().sort(ordenEv_).slice(-1)[0]).slice(0, 5) : null, abiertaAnterior: ab, manualesPendientes: pend.length,
+        horario: u.horario ? u.horario.entrada + '–' + u.horario.salida : null,
         revisar: recs.some(x => x.estado === 'revisar') };
     }).sort((a, b) => a.nombre.localeCompare(b.nombre));
     const c = e => personas.filter(p => p.estado === e).length;
@@ -1324,7 +1404,7 @@ function listarIngresos(token, desde, hasta) {
   const cfg = cfg_(), cal = calendario_(cfg), vac = deVacaciones_(), sucs = sucursales_();
   const pendientes = [], deVacaciones = [];
   users.filter(u => u.estado === 'activo' && u.registraIngreso).forEach(u => {
-    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(sucDe_(u))), ops = suc ? suc.dias : cfg.diasOperativos;
+    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(sucDe_(u))), ops = opsDe_(u, suc);
     diasOperativosEntre_(desde, hasta, ops).filter(d => d <= hoy && (!u.fechaIngreso || u.fechaIngreso <= d) && !(normSuc_(sucDe_(u)) === 'palermo' && cal.cerrado(d))).forEach(d => {
       if (lista.some(x => x.uid === u.id && x.fecha === d && x.estado !== 'anulado' && x.tipo === 'entrada')) return;
       if (vac(u.id, d)) deVacaciones.push({ fecha: d, uid: u.id, legajo: u.legajo, nombre: u.nombre });
@@ -2902,7 +2982,7 @@ function panorama_(opts) {
   const alertas = [], resumen = [];
   H.empleados.forEach(e => {
     const u = users.find(x => x.id === e.uid) || {}, hor = u.horario && horaOk_(u.horario.entrada) && horaOk_(u.horario.salida) ? u.horario : null;
-    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(e.sucursal)), ops = suc ? suc.dias : cfg.diasOperativos;
+    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(e.sucursal)), ops = opsDe_(u, suc);
     const mios = ing.filter(x => x.uid === e.uid);
     const trab = e.dias.filter(x => x.estado === 'trabajado'), faltas = e.dias.filter(x => x.estado === 'sin_fichaje'), inc = e.dias.filter(x => x.estado === 'incompleto');
     // Tardanzas y salidas anticipadas (solo si la persona tiene horario cargado)
