@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.4';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.6';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -34,7 +34,7 @@ const FALLAS_GLOBAL = 60, VENTANA_GLOBAL_SEG = 10 * 60;
 const MAX_FOTO_B64 = 2500000;
 const CIERRE_FILE_DEF = '1NuRUTwd9RwMWC5DdnDR0OS0_0XuPKMH1';
 
-const MODULOS = ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'historial', 'cierre', 'rrhh', 'otros', 'personal', 'config', 'vacaciones'];
+const MODULOS = ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'historial', 'cierre', 'rrhh', 'otros', 'personal', 'config', 'vacaciones', 'clientes', 'produccion'];   // 3.6: clientes y produccion (un jefe nuevo arranca sin ellas)
 const PERMS_ROL = {
   empleado: [],
   responsable: ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'cierre', 'otros', 'vacaciones'],
@@ -100,7 +100,7 @@ const HEAD = ['ID', 'Fecha', 'Auditor', ...PUNTOS.map(p => p[1]), 'Promedio', 'R
 /* ---------- Tablas nuevas (columnas legibles + JSON completo al final) ---------- */
 const TABLAS = {
   // 3.4: columnas nuevas al final (antes de JSON): la migración las inserta sin mover los datos existentes.
-  Usuarios: ['id', 'legajo', 'nombre', 'sector', 'rol', 'estado', 'registraIngreso', 'fechaIngreso', 'fechaBaja', 'actualizado', 'sucursal', 'horasEsperadas'],
+  Usuarios: ['id', 'legajo', 'nombre', 'sector', 'rol', 'estado', 'registraIngreso', 'fechaIngreso', 'fechaBaja', 'actualizado', 'sucursal', 'horasEsperadas', 'horario', 'vacacionesAnuales'],
   Ingresos: ['id', 'fecha', 'tipo', 'legajo', 'nombre', 'hora', 'estado', 'geoResultado', 'tieneFoto', 'horaCorregida', 'creado', 'sucursal', 'modo', 'latitud', 'longitud', 'precision', 'distancia'],
   Correcciones: ['id', 'ingresoId', 'tipo', 'legajo', 'nombre', 'fecha', 'horaPropuesta', 'motivo', 'estado', 'resueltoPor', 'resuelto', 'creado', 'clase', 'sucursal'],
   Acciones: ['id', 'auditId', 'punto', 'descripcion', 'responsable', 'vence', 'estado', 'creado', 'cerrado'],
@@ -127,7 +127,7 @@ function generarCodigoInstalacion() {
 function doGet() { return json_({ ok: true, app: 'heyblackk-palermo', v: VERSION, rev: REV }); }
 /* Llamadas sensibles a la latencia (fichada, arranque, fotos): la limpieza diaria de fotos no se cuelga de ellas. */
 const RAPIDAS_ = { estado: 1, inicio: 1, resumenHoy: 1, login: 1, logout: 1, yo: 1, reauth: 1, miJornada: 1, misIngresos: 1, registrarFichada: 1, registrarIngreso: 1, solicitarCorreccion: 1, getParams: 1, getAviso: 1, fotoIngreso: 1, getFoto: 1,
-  misVacaciones: 1, solicitarVacaciones: 1, cancelarVacaciones: 1, vacacionesVistas: 1, verificarUbicacion: 1, solicitarFichajeManual: 1, misSolicitudes: 1 };
+  misVacaciones: 1, solicitarVacaciones: 1, cancelarVacaciones: 1, vacacionesVistas: 1, verificarUbicacion: 1, solicitarFichajeManual: 1, misSolicitudes: 1, probarUbicacion: 1 };
 function doPost(e) {
   SS_ = null; MEMO_ = {};   // cada pedido arranca sin datos memorizados
   let req;
@@ -157,6 +157,9 @@ const API = {
   registrarIngreso: registrarIngreso, registrarFichada: registrarFichada, miJornada: miJornada, misIngresos: misIngresos, solicitarCorreccion: solicitarCorreccion,
   // 3.4 · Fichaje con sucursales, fichaje manual, horas y panel de jefes
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
+  probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
+  panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -387,7 +390,7 @@ function publico_(u) {
   return { id: u.id, legajo: u.legajo, nombre: u.nombre, sector: u.sector, rol: u.rol, estado: u.estado, registraIngreso: !!u.registraIngreso,
     fechaIngreso: u.fechaIngreso || '', fechaBaja: u.fechaBaja || '', bajaPor: u.bajaPor || '', motivoBaja: u.motivoBaja || '',
     permisos: permisos_(u), permisosPersonalizados: Array.isArray(u.permisos), creado: u.creado || '', bloqueado: !!u.bloqueadoPin, largoPin: largoPin_(u.rol),
-    sucursal: sucDe_(u), horasEsperadas: u.horasEsperadas || null };
+    sucursal: sucDe_(u), horasEsperadas: u.horasEsperadas || null, horario: u.horario || null, vacacionesAnuales: u.vacacionesAnuales || null };
 }
 function sesion_(token, perm, necesitaElev) {
   if (!token || !/^[0-9a-f-]{36}$/.test(String(token))) throw new Error('AUTH');
@@ -508,6 +511,7 @@ function globalFallas_() { if (Number(CACHE.get('fallas_global') || 0) >= FALLAS
 function sumarGlobal_() { CACHE.put('fallas_global', String(Number(CACHE.get('fallas_global') || 0) + 1), VENTANA_GLOBAL_SEG); }
 function login(legajo, pin, opts) {
   globalFallas_();
+  try { migrarPermisos36_(); } catch (e) {}   // 3.6: caso inicial de permisos por jefe (una sola vez)
   legajo = txt_(legajo, 20).toUpperCase();
   const u = usuarios_().find(x => x.legajo === legajo);
   const kb = 'b_' + legajo, kf = 'f_' + legajo, kn = 'nb_' + legajo;
@@ -604,11 +608,16 @@ function editarEmpleado(token, uid, d) {
   d = d || {};
   return lock_(() => {
     const u = usuarios_().find(x => x.id === uid); if (!u) throw new Error('Empleado no encontrado.');
-    const resumen = x => [x.nombre, x.sector, x.registraIngreso, x.fechaIngreso, sucDe_(x), x.horasEsperadas ? x.horasEsperadas.horas + ' h/' + x.horasEsperadas.tipo : 'sin horas esperadas'].join(' / ');
+    const resumen = x => [x.nombre, x.sector, x.registraIngreso, x.fechaIngreso, sucDe_(x), x.horasEsperadas ? x.horasEsperadas.horas + ' h/' + x.horasEsperadas.tipo : 'sin horas esperadas', x.horario ? x.horario.entrada + '-' + x.horario.salida : 'sin horario', x.vacacionesAnuales ? x.vacacionesAnuales + ' días de vacaciones' : ''].join(' / ');
     const antes = resumen(u);
     if (d.nombre != null) u.nombre = txt_(d.nombre, 60) || u.nombre;
     if (d.sucursal != null) u.sucursal = sucursalValida_(d.sucursal);
     if (d.horasEsperadas !== undefined) u.horasEsperadas = horasEsperadas_(d.horasEsperadas);
+    if (d.horario !== undefined) {   // 3.5: horario habitual (para tardanzas y salidas anticipadas del Panorama RRHH)
+      if (!d.horario || (!d.horario.entrada && !d.horario.salida)) u.horario = null;
+      else { const e = horaOk_(d.horario.entrada), x = horaOk_(d.horario.salida); if (!e || !x || x <= e) throw new Error('Horario inválido: cargá entrada y salida (HH:MM), con la salida después de la entrada.'); u.horario = { entrada: e, salida: x }; }
+    }
+    if (d.vacacionesAnuales !== undefined) { const v = Number(d.vacacionesAnuales); u.vacacionesAnuales = isFinite(v) && v > 0 ? Math.min(60, Math.round(v)) : null; }
     if (d.sector != null) u.sector = txt_(d.sector, 40);
     if (d.registraIngreso != null) u.registraIngreso = !!d.registraIngreso;
     if (d.fechaIngreso != null && fechaOk_(d.fechaIngreso)) u.fechaIngreso = d.fechaIngreso;
@@ -1762,6 +1771,25 @@ function sync_(s) {
   log_(s, 'sync_cierre', res.errores.length ? 'con_alertas' : 'ok', file.getId(), st.dias + ' días · ' + nuevos + ' nuevos · ' + cambiados + ' cambiados · ' + res.errores.length + ' alertas');
   return st;
 }
+/** 3.4 · Comando «actualizar app» (miércoles a domingo): se ejecuta desde el editor de Apps Script (no se puede llamar desde la web).
+    Vuelve a leer la planilla de cierre de Palermo (solo lectura), actualiza los feriados si corresponde y deja un resumen en el registro. */
+function actualizarApp() {
+  SS_ = null; MEMO_ = {};
+  let ctl; try { const d = control_(true); ctl = { ok: true, archivo: d.archivo, leida: d.leida, modificada: d.modificado, clientes: d.clientes.length, articulos: d.lineas.length, avisos: d.avisos }; } catch (e) { ctl = { ok: false, error: String(e.message || e) }; }
+  const st = sync_(null);
+  try { autoFeriados_(); } catch (e) {}
+  const hoy = hoy_(), cfg = cfg_(), cal = calendario_(cfg);
+  const c = tAll_('Cierres').filter(x => x.total >= 0).sort((a, b) => a.fecha.localeCompare(b.fecha)), u = c[c.length - 1];
+  const desde = sumarDias_(hoy, -14), con = {}; c.forEach(x => { con[x.fecha] = 1; });
+  const sinCierre = diasOperativosEntre_(desde, hoy, cfg.diasOperativos).filter(d => d < hoy && !con[d] && !cal.cerrado(d) && !cal.sinConfirmar(d));
+  const mes = c.filter(x => x.fecha.slice(0, 7) === hoy.slice(0, 7));
+  const out = { ok: st.ok, leida: st.ts, archivo: st.archivo || '', modificada: st.modificado || '', dias: st.dias, nuevos: st.nuevos, cambiados: st.cambiados,
+    errores: st.errores || [st.error], avisos: st.avisos || [], ultimoCierre: u ? { fecha: u.fecha, total: u.total } : null,
+    mes: { dias: mes.length, total: mes.reduce((a, x) => a + x.total, 0) }, diasSinCierre14: sinCierre,
+    feriadosPorConfirmar: feriadosPanel_(cfg).pendientes.map(f => f.fecha + ' ' + f.nombre), controlIngreso: ctl };
+  console.log('ACTUALIZAR_APP ' + JSON.stringify(out));
+  return out;
+}
 function alertasCierre_(cierres, desde, hasta, cal) {
   const cfg = cfg_(), users = usuarios_(), ing = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta && x.estado !== 'anulado' && tipoDe_(x) === 'entrada');
   cal = cal || calendario_(cfg);
@@ -1826,10 +1854,19 @@ function getKPIs(token, desde, hasta) {
   const auditoria = kpiAuditoria_(auds, acc, params_(), hoy);
   const feriados = feriadosPanel_(cfg);
   const pendientes = alertas.filter(a => a.tipo === 'cierre_pendiente').map(a => a.fecha).sort();
-  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy });
+  // 3.5: panorama de RRHH (últimos 30 días) solo para jefes y administración; se integra al resumen general.
+  let rrhh = null; if (s.perms.indexOf('ingresos') >= 0) { try { rrhh = panorama_({}); } catch (e) { rrhh = null; } }
+  // 3.6: clientes y producción, solo si el jefe tiene esas secciones habilitadas (lo que no tiene permiso ni se lee).
+  let cliR = null, proR = null, cliL = [];
+  if (s.perms.indexOf('clientes') >= 0 || s.perms.indexOf('produccion') >= 0) { try { const D = control_(false); if (s.perms.indexOf('clientes') >= 0) { cliR = resumenClientes_(D); cliL = D.clientes.filter(c => c.seCuenta !== false); } if (s.perms.indexOf('produccion') >= 0) proR = resumenProduccion_(D); } catch (e) {} }
+  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR });
   return {
     desde: desde, hasta: hasta, auditoriasN: audN, params: params_(),
     acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio,
+    clientes36: cliR ? { clientes: cliR.clientes, pedido: cliR.pedido, entregado: cliR.entregado, pendiente: cliR.pendiente, cumplimiento: cliR.cumplimiento, estados: cliR.estados, alertas: cliR.alertas.slice(0, 3) } : null,
+    produccion36: proR ? { planificado: proR.planificado, ingresado: proR.ingresado, enProceso: proR.enProceso, faltaFabricar: proR.faltaFabricar, avance: proR.avance, atrasados: proR.atrasados, alertas: proR.alertas.slice(0, 3) } : null,
+    controlSync: (cliR || proR) ? sync36_() : null,
+    rrhh: rrhh ? { periodo: rrhh.periodo, cuenta: rrhh.cuenta, alertas: rrhh.alertas.filter(a => a.nivel !== 'verde').slice(0, 5).concat(rrhh.alertas.filter(a => a.nivel === 'verde').slice(0, 3)), ranking: rrhh.ranking.slice(0, 3) } : null,
     cierresPendientes: pendientes, feriadosPendientes: alertas.filter(a => a.tipo === 'feriado_confirmar').map(a => a.fecha).sort(),
     ingresos: { total: ing.filter(x => x.estado !== 'anulado').length, revisar: ing.filter(x => x.estado === 'revisar').length,
       validos: ing.filter(x => x.estado === 'valido').length, corregidos: ing.filter(x => x.estado === 'corregido').length,
@@ -1850,7 +1887,7 @@ function kpiAuditoria_(auds, acc, p, hoy) {
   const abiertas = acc.filter(a => a.estado === 'abierta' || a.estado === 'en_curso'), vencidas = abiertas.filter(a => a.vence && a.vence < hoy);
   const out = { auditorias: L.length, ultima: null, anterior: null, puntoDebil: null, infraccionTop: null, pedidosFuera: 0, tendencia: null,
     accionesAbiertas: abiertas.length, accionesVencidas: vencidas.length, recomendaciones: [], diferenciasCaja: 'sin_datos' };
-  if (!L.length) { out.recomendaciones.push({ prioridad: 1, queEstaPasando: 'Todavía no hay auditorías cargadas.', accion: 'Hacer la primera auditoría del local desde la app para tener una línea de base.' }); return out; }
+  if (!L.length) return out;   // 3.5: sin auditorías no se recomienda nada (regla: no mencionar lo que no tiene datos)
   const u = L[L.length - 1], a = L[L.length - 2] || null;
   out.ultima = { fecha: u.fecha, promedio: u.promedio, resultado: u.resultado, auditor: u.auditor };
   if (a) { out.anterior = { fecha: a.fecha, promedio: a.promedio, resultado: a.resultado }; out.tendencia = u.promedio > a.promedio ? 'mejora' : u.promedio < a.promedio ? 'empeora' : 'igual'; }
@@ -1929,8 +1966,9 @@ function kpiComercial_(todos, cfg, hasta, sync, cal) {
   const cargado = c => c.total > 0 || (c.total === 0 && (!cal.feriado(c.fecha) || cal.feriado(c.fecha).palermo === 'abierto'));
   const dias = todos.filter(c => c.fecha <= hasta && cargado(c)).sort((a, b) => a.fecha.localeCompare(b.fecha));
   const base = { definiciones: DEFINICIONES, noDisponible: NO_DISPONIBLE, actualizado: sync ? sync.ts : null, fuente: FUENTE_CIERRE };
-  if (!dias.length) return Object.assign(base, { sinDatos: true, alertas: [], recomendaciones: [], mesBajo: null, accionesComerciales: [] });
   const ops = cfg.diasOperativos || [3, 4, 5, 6];
+  base.fechasEspeciales = fechasEspeciales_(hasta, ops, cal);   // 3.5: no dependen de las ventas
+  if (!dias.length) return Object.assign(base, { sinDatos: true, alertas: [], recomendaciones: [], mesBajo: null, accionesComerciales: [], diasFlojos: null });
 
   // ---- Meses
   const porMes = {};
@@ -2088,7 +2126,7 @@ function kpiComercial_(todos, cfg, hasta, sync, cal) {
       const flojo = diaSemana.filter(d => d.n >= 2).sort((x, y) => x.promedio - y.promedio)[0];
       rec.push({ prioridad: 2, titulo: 'Reducir la dependencia del ' + top.nombre,
         diagnostico: 'Gran parte de la venta depende de un solo día.', datos: a.observado + '. Día más flojo: ' + (flojo ? flojo.nombre + ' (' + $_(flojo.promedio) + ' de promedio, ' + flojo.participacion + '%)' : 's/d') + '.',
-        causa: 'Hecho: la venta se concentra el ' + top.nombre + '. Hipótesis: más tráfico de fin de semana. Sin datos de visitas no se puede confirmar.',
+        causa: 'Hecho: la venta se concentra el ' + top.nombre + '. Hipótesis: más tráfico de fin de semana (se confirma contando las visitas al showroom).',
         accion: 'Probar durante 4 semanas una acción puntual el ' + (flojo ? flojo.nombre : 'día más flojo') + ' (comunicación en redes, beneficio por transferencia o recordatorio a clientas) y no cambiar nada más para poder medirla.',
         medicion: 'Promedio del ' + (flojo ? flojo.nombre : 'día') + ' en esas 4 semanas contra ' + (flojo ? $_(flojo.promedio) : 'su promedio actual') + ', y participación del ' + top.nombre + ' por debajo del ' + ac.concentracionPct + '%.' });
     }
@@ -2122,13 +2160,13 @@ function kpiComercial_(todos, cfg, hasta, sync, cal) {
   if (mesBajo && mesBajo.esBajo != null) resumen.push({ pregunta: '¿Es un mes bajo?', respuesta: mesBajo.mensaje + (mesBajo.esBajo ? ' Ver «Acciones comerciales para Palermo».' : '') });
   if (proyeccion && proyeccion.bloqueada) resumen.push({ pregunta: '¿Cómo cerraría el mes?', respuesta: proyeccion.motivo });
   else if (proyeccion) resumen.push({ pregunta: '¿Cómo cerraría el mes?', respuesta: 'Estimación: ' + $_(proyeccion.minimo) + ' a ' + $_(proyeccion.maximo) + ' (central ' + $_(proyeccion.medio) + '), incertidumbre ' + proyeccion.incertidumbre + '.' + (proyeccion.objetivo ? ' Objetivo ' + $_(proyeccion.objetivo) + ': avance ' + proyeccion.avancePct + '%.' : ' No hay objetivo cargado para este mes.') });
-  if (top) resumen.push({ pregunta: '¿Qué está impulsando las ventas?', respuesta: 'Los ' + top.nombre + ' aportan el ' + top.participacion + '% (' + $_(top.promedio) + ' de promedio). Sin detalle por producto no se puede identificar qué artículos impulsan la venta.' });
-  resumen.push({ pregunta: '¿Qué conviene revisar esta semana?', respuesta: rec.length ? rec.slice(0, 3).map(r => r.titulo).join(' · ') : 'Sin alertas relevantes con los umbrales actuales.' });
+  if (top) resumen.push({ pregunta: '¿Qué está impulsando las ventas?', respuesta: 'Los ' + top.nombre + ' aportan el ' + top.participacion + '% (' + $_(top.promedio) + ' de promedio).' });
+  if (rec.length) resumen.push({ pregunta: '¿Qué conviene revisar esta semana?', respuesta: rec.slice(0, 3).map(r => r.titulo).join(' · ') });
 
   return Object.assign(base, { desde: dias[0].fecha, hasta: dias[dias.length - 1].fecha, diasConCierre: dias.length,
     meses: meses, semanas: semanas.slice(-16), anios: anios, diaSemana: diaSemana, proyeccion: proyeccion, alertas: alertas, recomendaciones: rec, resumen: resumen,
     ultimos: dias.slice(-31).map(c => Object.assign({}, c, { feriado: cal.feriado(c.fecha) ? cal.feriado(c.fecha).nombre : '', noHabitual: !cal.esApertura(c.fecha) })),
-    mesBajo: mesBajo, accionesComerciales: accionesComerciales, quintaSemana: quintaSemana });
+    mesBajo: mesBajo, accionesComerciales: accionesComerciales, quintaSemana: quintaSemana, diasFlojos: diasFlojos_(dias, hasta, ops, cal) });
 }
 
 /* ---- 3.3 · Mes bajo: promedio por día de apertura (o su proyección) vs. mes anterior o promedio del año, con umbral configurable ---- */
@@ -2136,7 +2174,7 @@ function mesBajo_(meses, actual, proyeccion, ac, dias) {
   const umbral = Number(ac.mesBajoPct) || 10;
   let m = actual && actual.dias >= ac.minDias ? actual : null, aclaracion = '';
   if (!m) { const comp = meses.filter(x => !x.enCurso && x.dias >= ac.minDias); m = comp[comp.length - 1] || null;
-    if (actual) aclaracion = 'Todavía no hay suficientes días con cierre en ' + actual.nombre + ' (' + actual.dias + ' de un mínimo de ' + ac.minDias + '); se evalúa ' + (m ? m.nombre : 'ningún mes') + '.'; }
+    if (actual) aclaracion = m ? 'Se evalúa ' + m.nombre + ': ' + actual.nombre + ' lleva ' + actual.dias + ' días con cierre y se evalúa desde ' + ac.minDias + '.' : ''; }
   if (!m) return { esBajo: null, umbralPct: umbral, mensaje: 'Sin datos suficientes para evaluar un mes.', aclaracion: aclaracion };
   const idx = meses.indexOf(m), prev = idx > 0 && meses[idx - 1].dias >= ac.minDias ? meses[idx - 1] : null;
   const delAnio = dias.filter(c => c.fecha.slice(0, 4) === m.mes.slice(0, 4) && c.fecha.slice(0, 7) < m.mes);
@@ -2181,15 +2219,15 @@ function accionesComerciales_(mb, diaSemana, actual, proxFer) {
     esfuerzo: 'alto', plazo: 'este mes', medicion: 'Venta del día del evento contra el promedio del mismo día de la semana, y contactos nuevos registrados.' });
   A.push({ prioridad: 3, tipo: 'conversion', titulo: 'Beneficio por 2 o más prendas y promo con un medio de pago',
     queHacer: 'Combo o beneficio al llevar dos o más prendas y una promo acotada con un medio de pago (por ejemplo transferencia), antes que bajar precios de lista.',
-    porQue: 'Dato: la planilla no tiene cantidad de operaciones, así que no se mide conversión ni ticket promedio; la acción apunta a subir el importe por visita. Mix actual: ' + (actual && actual.mix ? 'tarjetas ' + actual.mix.tarjetas + '%, transferencia ' + actual.mix.transferencia + '%, efectivo ' + actual.mix.efectivo + '%' : 'sin datos') + '.',
+    porQue: 'La acción apunta a subir el importe por visita.' + (actual && actual.mix ? ' Mix actual: tarjetas ' + actual.mix.tarjetas + '%, transferencia ' + actual.mix.transferencia + '%, efectivo ' + actual.mix.efectivo + '%.' : ''),
     esfuerzo: 'bajo', plazo: 'esta semana', medicion: 'Facturación por día de apertura y participación del medio de pago promocionado en las próximas 2 semanas.' });
   A.push({ prioridad: 3, tipo: 'clientes', titulo: 'Campaña de WhatsApp a clientas anteriores y registro de contactos',
     queHacer: 'Mandar una campaña por WhatsApp o mail a clientas anteriores con una invitación concreta al showroom, y registrar el contacto en cada venta nueva.',
-    porQue: 'Dato: no hay identificación de clientes en la planilla (indicador 10.4 sin datos); sin base no hay recurrencia medible.',
+    porQue: 'Una base de contactos permite medir la recurrencia y reactivar visitas en los días flojos.',
     esfuerzo: 'bajo', plazo: 'este mes', medicion: 'Contactos registrados por semana y ventas que responden a la campaña.' });
   A.push({ prioridad: 3, tipo: 'ticket', titulo: 'Venta cruzada y armado de looks',
     queHacer: 'Armar looks completos en el showroom y ofrecer la segunda prenda en cada venta.',
-    porQue: 'Dato: sin cantidad de operaciones no se conoce el ticket promedio; la hipótesis es que hay margen para subirlo.',
+    porQue: 'Hipótesis: hay margen para subir el importe por visita con looks armados.',
     esfuerzo: 'bajo', plazo: 'esta semana', medicion: 'Facturación por día de apertura en 2 semanas contra ' + $_(mb.promDia) + '.' });
   return A.slice(0, 5);
 }
@@ -2231,11 +2269,14 @@ function hablar_(t) {
 }
 const sinEl_ = s => s.replace(/^el /, '');
 const cap_ = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-/* ---- 3.3 · Textos del resumen hablado (el navegador los lee con la Web Speech API; aquí solo se arma el texto con datos reales) ---- */
+/* ---- Textos del resumen hablado (el navegador los lee con la Web Speech API; aquí solo se arma el texto con datos reales) ----
+   3.5 · Regla: lo que no tiene datos no se menciona (ni "no hay datos" ni secciones vacías). Orden: comercial → auditoría → RRHH,
+   de lo más importante a lo positivo. Si no hay nada para contar, solo un saludo. */
 function audio_(u, com, aud, ctx) {
   const nombre = String(u && u.nombre || '').trim().split(' ')[0];
   const hola = nombre ? 'Hola ' + nombre + ', ' : 'Hola, ';
   const hoy = ctx.hoy || hoy_();
+  const limpiar = t => String(t || '').replace(/\s+/g, ' ').trim();
   // Feriados: una frase breve solo cuando corresponde.
   const fer = ctx.feriados || { proximos: [], pendientes: [] }, lim14 = sumarDias_(hoy, 14);
   const prox = (fer.proximos || []).filter(f => f.fecha >= hoy && f.fecha <= lim14 && f.abre && !f.palermo)[0];
@@ -2243,58 +2284,85 @@ function audio_(u, com, aud, ctx) {
   const ferProx = prox ? 'Atención, ' + fechaHablada_(prox.fecha) + ' es feriado, ' + prox.nombre + ', hay que confirmar si Palermo abre.' : '';
   const ferPend = nPend ? (nPend === 1 ? 'Hay un feriado pendiente de confirmar si el local abrió.' : 'Hay ' + palabras_(nPend) + ' feriados pendientes de confirmar si el local abrió.') : '';
   // ---- Comercial
-  const C = [], Cg = [];   // completo y versión corta para el general
-  let mesTxt = '';
-  if (com.sinDatos) { C.push('Todavía no hay cierres cargados en la planilla, así que no tengo indicadores comerciales.'); Cg.push(C[0]); }
-  else {
+  const C = [], Cg = [];
+  if (!com.sinDatos) {
     const meses = com.meses || [], actual = meses.find(m => m.enCurso), conDatos = meses.filter(m => m.dias), ref = conDatos[conDatos.length - 1], ult = (com.ultimos || []).slice(-1)[0];
     if (ult) { const s = 'El último cierre es del ' + sinEl_(fechaHablada_(ult.fecha)) + ', con ' + dinero_(ult.total) + (ult.feriado ? ', un día feriado' : '') + '.'; C.push(s); Cg.push(s); }
     if (ref) {
       const s = 'En ' + ref.nombre.split(' ')[0] + ' van ' + dinero_(ref.total) + ' en ' + palabras_(ref.dias) + (ref.dias === 1 ? ' día con cierre' : ' días con cierre') + ', un promedio de ' + dinero_(ref.promDia) + ' por día' +
         (ref.vsAnterior && ref.vsAnterior.deltaPromPct != null ? ', ' + porcentaje_(ref.vsAnterior.deltaPromPct) + ' que en ' + MES_NOM(ref.vsAnterior.mes).split(' ')[0] + '.' : '.');
       C.push(s); Cg.push(s);
-      if (ref.diasCerrados && ref.diasCerrados.length) { mesTxt = 'Este mes tuvo ' + (ref.diasCerrados.length === 1 ? 'un día menos de apertura' : palabras_(ref.diasCerrados.length) + ' días menos de apertura') + ' por ' + ref.diasCerrados[0].tipo + '.'; C.push(mesTxt); Cg.push(mesTxt); }
+      if (ref.diasCerrados && ref.diasCerrados.length) { const m = 'Este mes tuvo ' + (ref.diasCerrados.length === 1 ? 'un día menos de apertura' : palabras_(ref.diasCerrados.length) + ' días menos de apertura') + ' por ' + ref.diasCerrados[0].tipo + '.'; C.push(m); }
     }
     const sem = (com.semanas || []).filter(s => s.dias >= 1), us = sem[sem.length - 1];
     if (us) C.push('La última semana con ventas, la del ' + sinEl_(fechaHablada_(us.semana)) + ', sumó ' + dinero_(us.total) + (us.deltaPct != null ? ', ' + porcentaje_(us.deltaPct) + ' respecto de la anterior.' : '.'));
     const P = com.proyeccion;
-    if (P && P.bloqueada) { const s = 'No proyecto el mes porque hay ' + palabras_(actual.diasSinCierre.length) + ' días de apertura sin cierre cargado.'; C.push(s); Cg.push(s); }
-    else if (P) { const s = 'Si se mantiene el ritmo, ' + (actual ? actual.nombre.split(' ')[0] : 'el mes') + ' cerraría cerca de ' + dinero_(P.medio) + ', entre ' + dinero_(P.minimo) + ' y ' + dinero_(P.maximo) + '. Es una estimación.' + (P.objetivo ? ' El objetivo es ' + dinero_(P.objetivo) + ' y el avance real es del ' + palabras_(Math.round(P.avancePct)) + ' por ciento.' : ''); C.push(s); Cg.push(s); }
-    const ds = (com.diaSemana || []).filter(d => d.n >= 2), fuerte = ds.slice().sort((a, b) => b.participacion - a.participacion)[0], flojo = ds.slice().sort((a, b) => a.promedio - b.promedio)[0];
-    if (fuerte) { const s = 'El día más fuerte es el ' + fuerte.nombre + ', con el ' + palabras_(Math.round(fuerte.participacion)) + ' por ciento de la facturación' + (flojo && flojo.dia !== fuerte.dia ? '; el más flojo, el ' + flojo.nombre + ', con ' + dinero_(flojo.promedio) + ' de promedio.' : '.'); C.push(s); Cg.push(s); }
+    if (P && !P.bloqueada) { const s = 'Si se mantiene el ritmo, ' + (actual ? actual.nombre.split(' ')[0] : 'el mes') + ' cerraría cerca de ' + dinero_(P.medio) + ', entre ' + dinero_(P.minimo) + ' y ' + dinero_(P.maximo) + '. Es una estimación.' + (P.objetivo ? ' El objetivo es ' + dinero_(P.objetivo) + ' y el avance real es del ' + palabras_(Math.round(P.avancePct)) + ' por ciento.' : ''); C.push(s); Cg.push(s); }
+    const ds = (com.diaSemana || []).filter(d => d.n >= 2), fuerte = ds.slice().sort((a, b) => b.participacion - a.participacion)[0];
+    if (fuerte) C.push('El día más fuerte es el ' + fuerte.nombre + ', con el ' + palabras_(Math.round(fuerte.participacion)) + ' por ciento de la facturación.');
     if (ref && ref.mix) {
       C.push('En medios de pago: tarjetas ' + palabras_(Math.round(ref.mix.tarjetas)) + ' por ciento, transferencia ' + palabras_(Math.round(ref.mix.transferencia)) + ' y efectivo ' + palabras_(Math.round(ref.mix.efectivo)) + '.');
       const cm = (com.alertas || []).find(a => a.tipo === 'cambio_mix'); if (cm) C.push('Cambio relevante: ' + hablar_(cm.titulo.toLowerCase() + ', ' + cm.observado + ' contra ' + cm.comparado) + '.');
     }
     const recs = (com.recomendaciones || []).slice(0, 2); if (recs.length) C.push('Recomendaciones comerciales: ' + recs.map(r => hablar_(r.titulo).toLowerCase()).join('; ') + '.');
   }
+  // ---- Días flojos (vs. el promedio del mismo día de la semana) y acciones para traccionar
+  const DF = com.diasFlojos, F = [], Fg = [];
+  if (DF) {
+    const pe = DF.diaMasFlojo;
+    if (pe && pe.vsGeneralPct != null && pe.vsGeneralPct < 0) { const s = 'El día más flojo es el ' + pe.nombre + ', con ' + dinero_(pe.promedio) + ' de promedio, ' + porcentaje_(pe.vsGeneralPct) + ' que el promedio general.'; F.push(s); Fg.push(s); }
+    if (DF.flojos.length) F.push('En las últimas dos semanas vendieron por debajo de lo habitual ' + DF.flojos.slice(0, 3).map(x => sinEl_(fechaHablada_(x.fecha))).join(', ') + '.');
+    const ac = DF.acciones.slice(0, 3);
+    if (ac.length) { F.push('Para traccionar ventas: ' + ac.map((a, i) => palabras_(i + 1) + ', ' + a.titulo.toLowerCase() + ': ' + hablar_(a.detalle.charAt(0).toLowerCase() + a.detalle.slice(1))).join(' ') + (ac[0].meta ? ' ' + hablar_(ac[0].meta) : '')); Fg.push('Acción sugerida: ' + ac[0].titulo.toLowerCase() + '.'); }
+  }
+  // ---- Fechas especiales que se vienen (aviso con 3 a 4 semanas) y qué hacer ahora
+  const FE = com.fechasEspeciales || [], E = [], Eg = [];
+  FE.slice(0, 3).forEach((f, i) => {
+    const cuando = f.faltan <= 0 ? ' es hoy' : f.faltan === 1 ? ' es mañana' : ' es ' + fechaHablada_(f.fecha) + ', en ' + palabras_(f.faltan) + ' días';
+    const s = f.nombre + cuando + (f.aConfirmar ? ', fecha a confirmar' : '') + '. Ahora conviene: ' + f.accionAhora.charAt(0).toLowerCase() + f.accionAhora.slice(1) + (f.refuerzoLocal && f.faltan <= 7 ? ' Reforzá el local en los días de apertura cercanos.' : '');
+    E.push(s); if (i === 0) Eg.push(s);
+  });
   // ---- Mes bajo (una frase) y acciones
   const mb = com.mesBajo, X = [];
   let bajoTxt = '';
-  if (!mb || mb.esBajo == null) bajoTxt = mb && mb.mensaje ? hablar_(mb.mensaje) : 'No hay datos suficientes para evaluar si el mes es bajo.';
-  else if (!mb.esBajo) bajoTxt = 'Sin alertas: el mes viene en línea. ' + cap_(mb.nombre.split(' ')[0]) + ' promedia ' + dinero_(mb.promDia) + ' por día de apertura y no queda por debajo del umbral del ' + palabras_(mb.umbralPct) + ' por ciento.';
-  else bajoTxt = cap_(mb.nombre.split(' ')[0]) + ' se considera un mes bajo: ' + (mb.criterio === 'promedio' ? 'el promedio por día de apertura es ' + dinero_(mb.promDia) : 'la proyección por día es ' + dinero_(mb.promDiaProyectado)) + ', ' + porcentaje_(mb.deltaPct) + ' que el ' + mb.contra.replace(/\s*\(.*\)/, '') + ', con un umbral del ' + palabras_(mb.umbralPct) + ' por ciento.';
-  X.push(bajoTxt);
+  if (mb && mb.esBajo === false) bajoTxt = 'El mes viene en línea: ' + mb.nombre.split(' ')[0] + ' promedia ' + dinero_(mb.promDia) + ' por día de apertura.';
+  else if (mb && mb.esBajo) bajoTxt = cap_(mb.nombre.split(' ')[0]) + ' se considera un mes bajo: ' + (mb.criterio === 'promedio' ? 'el promedio por día de apertura es ' + dinero_(mb.promDia) : 'la proyección por día es ' + dinero_(mb.promDiaProyectado)) + ', ' + porcentaje_(mb.deltaPct) + ' que el ' + mb.contra.replace(/\s*\(.*\)/, '') + '.';
+  if (bajoTxt) X.push(bajoTxt);
   const acs = com.accionesComerciales || [];
-  if (acs.length) {
-    X.push('Las ' + (acs.length >= 3 ? 'tres' : palabras_(acs.length)) + ' acciones principales: ' + acs.slice(0, 3).map((a, i) => palabras_(i + 1) + ', ' + hablar_(a.titulo) + '. ' + hablar_(a.porQue.replace(/^Dato: /, '')) + ' Esfuerzo ' + a.esfuerzo + ', plazo ' + a.plazo + '.').join(' '));
-    X.push('El detalle de cada acción, con cómo medirla, está en pantalla.');
-  }
-  // ---- Auditoría
-  const A = [], pend = ctx.pendientes || [], ac = ctx.acciones || {};
-  A.push(pend.length ? (pend.length === 1 ? 'Hay un cierre pendiente de carga, el ' + sinEl_(fechaHablada_(pend[0])) + '.' : 'Hay ' + palabras_(pend.length) + ' cierres pendientes de carga; los primeros son ' + pend.slice(0, 3).map(f => sinEl_(fechaHablada_(f))).join(', ') + '.') : 'No hay cierres pendientes de carga en los días de apertura.');
-  A.push('Sobre diferencias de caja: la planilla no registra arqueos ni diferencias, así que no puedo informarlas.');
-  A.push(ac.abiertas ? 'Observaciones abiertas: ' + palabras_(ac.abiertas) + (ac.abiertas === 1 ? ' acción correctiva abierta' : ' acciones correctivas abiertas') + (ac.vencidas ? ', ' + palabras_(ac.vencidas) + (ac.vencidas === 1 ? ' vencida.' : ' vencidas.') : ', ninguna vencida.') : 'No hay acciones correctivas abiertas.');
+  if (acs.length) X.push('Las ' + (acs.length >= 3 ? 'tres' : palabras_(acs.length)) + ' acciones principales: ' + acs.slice(0, 3).map((a, i) => palabras_(i + 1) + ', ' + hablar_(a.titulo) + '. ' + hablar_(a.porQue.replace(/^Dato: /, '')) + ' Esfuerzo ' + a.esfuerzo + ', plazo ' + a.plazo + '.').join(' '));
+  if (acs.length) X.push('El detalle de cada acción, con cómo medirla, está en pantalla.');
+  X.push.apply(X, F); X.push.apply(X, E);
+  // ---- Auditoría (solo lo que tiene datos)
+  const A = [], pend = ctx.pendientes || [], acc = ctx.acciones || {};
+  if (pend.length) A.push(pend.length === 1 ? 'Hay un cierre pendiente de carga, el ' + sinEl_(fechaHablada_(pend[0])) + '.' : 'Hay ' + palabras_(pend.length) + ' cierres pendientes de carga; los primeros son ' + pend.slice(0, 3).map(f => sinEl_(fechaHablada_(f))).join(', ') + '.');
+  if (acc.abiertas) A.push(palabras_(acc.abiertas) === 'uno' ? 'Hay una acción correctiva abierta' + (acc.vencidas ? ', vencida.' : '.') : 'Hay ' + palabras_(acc.abiertas) + ' acciones correctivas abiertas' + (acc.vencidas ? ', ' + palabras_(acc.vencidas) + (acc.vencidas === 1 ? ' vencida.' : ' vencidas.') : '.'));
   if (aud && aud.ultima) A.push('La última auditoría fue el ' + sinEl_(fechaHablada_(aud.ultima.fecha)) + ', con resultado ' + String(aud.ultima.resultado).toLowerCase() + ', ' + String(aud.ultima.promedio).replace('.', ' coma ') + ' sobre cinco.');
   const recA = (aud && aud.recomendaciones || []).slice(0, 3).map(r => 'Prioridad ' + palabras_(r.prioridad) + ': ' + hablar_(r.queEstaPasando) + ' Acción: ' + hablar_(r.accion));
+  if (ferPend) A.push(ferPend);
+  // ---- RRHH (jefes y administración): hasta 3 alertas, de las rojas a las positivas, en tono neutro
+  const R = [], al = ctx.rrhh && ctx.rrhh.alertas || [];
+  const atencion = al.filter(a => a.nivel !== 'verde').slice(0, 3), positivas = al.filter(a => a.nivel === 'verde');
+  const minus = t => hablar_(t.charAt(0).toLowerCase() + t.slice(1));
+  const porPersona = []; atencion.forEach(a => { const p = porPersona.find(x => x.uid === a.uid); if (p) p.t.push(minus(a.titulo)); else porPersona.push({ uid: a.uid, nombre: a.nombre, t: [minus(a.titulo)] }); });
+  porPersona.slice(0, 3).forEach(p => R.push(p.nombre + ': ' + p.t.join(' y ') + '.'));
+  if (positivas.length && porPersona.length < 3) R.push('Para destacar: ' + positivas[0].nombre + ', ' + minus(positivas[0].titulo) + '.');
+  // ---- Armado
   const intro = t => hola + t + ' ';
-  const comercial = intro('te cuento los indicadores comerciales de Palermo.') + C.join(' ') + (ferProx ? ' ' + ferProx : '');
-  const auditoria = intro('te cuento los indicadores de auditoría de Palermo.') + A.concat(recA).join(' ') + (ferPend ? ' ' + ferPend : '');
-  const acciones = intro('te cuento las acciones comerciales para Palermo.') + X.join(' ');
-  const general = intro('te cuento las últimas novedades de Palermo.') + Cg.join(' ') + ' ' + bajoTxt + ' Ahora, auditoría. ' + A.slice(0, 3).join(' ') + (recA.length ? ' ' + recA[0] : '') +
-    (ferProx ? ' ' + ferProx : '') + (ferPend ? ' ' + ferPend : '') + ' Eso es todo por ahora.';
-  const limpiar = t => t.replace(/\s+/g, ' ').trim();
-  return { saludo: nombre, general: limpiar(general), comercial: limpiar(comercial), auditoria: limpiar(auditoria), acciones: limpiar(acciones) };
+  const seccion = (titulo, partes) => partes.filter(Boolean).length ? limpiar(intro(titulo) + partes.filter(Boolean).join(' ')) : '';
+  const comercial = seccion('te cuento los indicadores comerciales de Palermo.', C.concat(F, E, [ferProx]));
+  const auditoria = seccion('te cuento los indicadores de auditoría de Palermo.', A.concat(recA));
+  const acciones = seccion('te cuento las acciones comerciales para Palermo.', X);
+  const rrhh = seccion('te cuento el panorama de recursos humanos de los últimos treinta días.', R);
+  const cuerpo = [];
+  if (Cg.length || bajoTxt || Fg.length || Eg.length || ferProx) cuerpo.push(Cg.concat([bajoTxt], Fg, Eg, [ferProx]).filter(Boolean).join(' '));
+  if (A.length) cuerpo.push('Ahora, auditoría. ' + A.slice(0, 3).join(' ') + (recA.length ? ' ' + recA[0] : ''));
+  const cr = ctx.clientes, pr = ctx.produccion;
+  if (cr && cr.clientes) { const top = (ctx.clientesLista || []).filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente)[0];
+    cuerpo.push('Pedidos de clientes: cumplimiento del ' + palabras_(cr.cumplimiento || 0) + ' por ciento, con ' + unid36_(cr.pendiente) + ' pendientes' + (top ? '; ' + top.nombre + ' es el que más espera, ' + unid36_(top.pendiente) : '') + '.'); }
+  if (pr && pr.planificado) cuerpo.push('Producción: avance del ' + palabras_(pr.avance || 0) + ' por ciento' + (pr.faltaFabricar ? ', faltan fabricar ' + unid36_(pr.faltaFabricar) + ' para pedidos' : '') + (pr.atrasados ? ' y hay ' + palabras_(pr.atrasados) + (pr.atrasados === 1 ? ' artículo atrasado' : ' artículos atrasados') : '') + '.');
+  if (R.length) cuerpo.push('En recursos humanos: ' + R.join(' '));
+  const general = cuerpo.length ? limpiar(intro('te cuento las últimas novedades.') + cuerpo.join(' ') + ' Eso es todo por ahora.') : limpiar((nombre ? 'Hola ' + nombre : 'Hola') + ', que tengas un buen día.');
+  return { saludo: nombre, general: general, comercial: comercial, auditoria: auditoria, acciones: acciones, rrhh: rrhh };
 }
 
 /* =================== Historial =================== */
@@ -2546,4 +2614,658 @@ function purgaDiaria_() {
   } finally { l.releaseLock(); }
   const r = JSON.parse(PROPS.getProperty('PURGA_RES') || '{}');
   if (r.fecha === hoy && (r.fotosIngreso || r.fotosAuditoria)) log_(null, 'retencion_automatica', 'ok', '', 'Fotos de ingreso a papelera: ' + r.fotosIngreso + ' · fotos de auditoría: ' + r.fotosAuditoria + (r.pendientes ? ' · quedan más para mañana' : ''));
+}
+
+/* =================== 3.5 · Probar mi ubicación (no registra nada) =================== */
+/** Muestra si con esta ubicación se podría fichar: distancia a la sucursal, radio y precisión. No guarda la ubicación ni consulta la secuencia. */
+function probarUbicacion(token, geo) {
+  const s = sesion_(token), v = validarGeo_(geo, sucursalDe_(s.user), cfg_());
+  return { ok: v.ok, motivo: v.motivo, distancia: v.distancia, precision: v.precision, radio: v.radio, sucursal: v.sucursal, faltan: v.faltan || null, precisionMax: v.precisionMax || null, precisionBaja: !!v.precisionBaja };
+}
+
+/* =================== 3.5 · Borrado de fichajes (solo administración) =================== */
+/* Solo el rol "admin" (María). Se borran filas de Ingresos (y las solicitudes de fichaje manual / corrección de ese empleado en el rango)
+   y las fotos van a la papelera de Drive. En el historial queda: quién, cuándo, de qué empleado y cuántos registros (sin los datos borrados). */
+function soloAdmin_(token, elev) { const s = sesion_(token, 'personal', elev); if (s.user.rol !== 'admin') throw new Error('PERM'); return s; }
+/** Borra las filas de una tabla que cumplen la condición, de abajo hacia arriba y por bloques contiguos. Devuelve los objetos borrados. */
+function tDelWhere_(nombre, pred) {
+  delete MEMO_[nombre];
+  const sh = tabla_(nombre), filas = jsonCol_(nombre), idx = [], borrados = [];
+  filas.forEach((o, i) => { if (o && pred(o)) { idx.push(i + 2); borrados.push(o); } });
+  for (let k = idx.length - 1; k >= 0;) {
+    let fin = idx[k], ini = fin; k--;
+    while (k >= 0 && idx[k] === ini - 1) { ini = idx[k]; k--; }
+    sh.deleteRows(ini, fin - ini + 1);
+  }
+  delete MEMO_[nombre];
+  return borrados;
+}
+function criterioBorrado_(d) {
+  d = d || {};
+  const uid = String(d.uid || ''), u = usuarios_().find(x => x.id === uid);
+  if (!u) throw new Error('Elegí el empleado.');
+  const todos = d.todos === true, desde = todos ? null : fechaOk_(d.desde), hasta = todos ? null : fechaOk_(d.hasta);
+  if (!todos && !desde && !hasta) throw new Error('Elegí un rango de fechas o marcá «todos los registros de ese empleado».');
+  if (desde && hasta && desde > hasta) throw new Error('La fecha «desde» es posterior a «hasta».');
+  const enRango = f => (!desde || f >= desde) && (!hasta || f <= hasta);
+  return { u: u, todos: todos, desde: desde, hasta: hasta, ing: x => x.uid === uid && enRango(x.fecha), cor: c => c.uid === uid && enRango(c.fecha),
+    texto: todos ? 'todos los registros' : (desde && hasta ? 'del ' + fdm_(desde) + ' al ' + fdm_(hasta) : desde ? 'desde el ' + fdm_(desde) : 'hasta el ' + fdm_(hasta)) };
+}
+/** Vista previa: cuántos registros se borrarían (no borra nada). */
+function previaBorrado(token, d) {
+  soloAdmin_(token, false);
+  const c = criterioBorrado_(d), ing = tAll_('Ingresos').filter(c.ing), cor = tAll_('Correcciones').filter(c.cor);
+  return { uid: c.u.id, nombre: c.u.nombre, estado: c.u.estado, rango: c.texto, fichajes: ing.length, solicitudes: cor.length, fotos: ing.filter(x => x.foto).length,
+    primero: ing.length ? ing.map(x => x.fecha).sort()[0] : null, ultimo: ing.length ? ing.map(x => x.fecha).sort().slice(-1)[0] : null };
+}
+function borrarFichajes(token, d) {
+  const s = soloAdmin_(token, true);
+  d = d || {};
+  if (String(d.confirmacion || '').trim().toUpperCase() !== 'BORRAR') throw new Error('Para confirmar escribí BORRAR.');
+  return lock_(() => {
+    const c = criterioBorrado_(d);
+    const esperado = Number(d.esperado);
+    const ing = tDelWhere_('Ingresos', c.ing);
+    if (isFinite(esperado) && d.esperado != null && ing.length !== esperado) log_(s, 'borrado_fichajes_aviso', 'alerta', c.u.id, 'La cantidad cambió entre la vista previa (' + esperado + ') y el borrado (' + ing.length + ')');
+    const cor = tDelWhere_('Correcciones', c.cor);
+    let fotos = 0; ing.forEach(x => { if (x.foto) { try { DriveApp.getFileById(x.foto).setTrashed(true); fotos++; } catch (e) {} } });
+    log_(s, 'borrado_fichajes', 'ok', c.u.id, c.u.nombre + ' (' + c.u.legajo + ') · ' + c.texto + ' · ' + ing.length + ' fichaje(s), ' + cor.length + ' solicitud(es), ' + fotos + ' foto(s) a la papelera');
+    return { nombre: c.u.nombre, fichajes: ing.length, solicitudes: cor.length, fotos: fotos };
+  });
+}
+/** Borrado de un registro individual (desde el detalle de la fichada). */
+function borrarFichaje(token, id) {
+  const s = soloAdmin_(token, true);
+  return lock_(() => {
+    const borr = tDelWhere_('Ingresos', x => x.id === String(id || ''));
+    if (!borr.length) throw new Error('Registro no encontrado (puede que ya se haya borrado).');
+    const x = borr[0];
+    if (x.foto) { try { DriveApp.getFileById(x.foto).setTrashed(true); } catch (e) {} }
+    log_(s, 'borrado_fichajes', 'ok', x.uid, x.nombre + ' (' + x.legajo + ') · 1 registro individual (' + tipoDe_(x) + ')');
+    return { fichajes: 1 };
+  });
+}
+
+/* =================== 3.5 · Días flojos y fechas especiales (acciones comerciales) =================== */
+/** Días flojos: los días de apertura recientes que vendieron por debajo del promedio de su mismo día de la semana (últimas 8 semanas). */
+function diasFlojos_(dias, hasta, ops, cal) {
+  const desde8 = sumarDias_(hasta, -56), base = dias.filter(c => c.fecha >= desde8 && c.fecha <= hasta && ops.indexOf(dow_(c.fecha)) >= 0 && !(cal.feriado(c.fecha)));
+  if (base.length < 6) return null;
+  const prom = {}; ops.forEach(d => { const l = base.filter(c => dow_(c.fecha) === d); if (l.length >= 2) prom[d] = { n: l.length, prom: l.reduce((a, c) => a + c.total, 0) / l.length }; });
+  const general = base.reduce((a, c) => a + c.total, 0) / base.length;
+  const recientes = base.filter(c => c.fecha >= sumarDias_(hasta, -14) && prom[dow_(c.fecha)]).map(c => {
+    const p = prom[dow_(c.fecha)].prom; return { fecha: c.fecha, dia: NOMBRE_DIA[dow_(c.fecha)], total: c.total, promedioDia: r2_(p), deltaPct: pct_(c.total, p) };
+  });
+  const flojos = recientes.filter(x => x.deltaPct != null && x.deltaPct <= -20).sort((a, b) => a.deltaPct - b.deltaPct);
+  const ranking = Object.keys(prom).map(Number).map(d => ({ dia: d, nombre: NOMBRE_DIA[d], promedio: r2_(prom[d].prom), vsGeneralPct: pct_(prom[d].prom, general) })).sort((a, b) => a.promedio - b.promedio);
+  const peor = ranking[0];
+  if (!flojos.length && !(peor && peor.vsGeneralPct <= -15)) return null;
+  const nom = peor ? peor.nombre : flojos[0].dia, brecha = peor ? Math.max(0, r2_(general - peor.promedio)) : 0;
+  const acciones = [];
+  acciones.push({ titulo: 'Promo exclusiva del ' + nom, detalle: 'Un beneficio solo válido ese día en el showroom (regalo con la compra, 10 % en la segunda prenda o preventa de novedades), anunciado el día anterior.',
+    meta: brecha ? 'Llevar el ' + nom + ' a su promedio general suma unos ' + $_(brecha) + ' por semana.' : '' });
+  acciones.push({ titulo: 'WhatsApp a la base de clientas el día anterior', detalle: 'Mensaje corto con 3 fotos de novedades e invitación al showroom para el ' + nom + ', priorizando a las clientas frecuentes (atención preferencial o un horario reservado).', meta: '' });
+  acciones.push({ titulo: flojos.length >= 2 ? 'Combo de 2 prendas y contenido en redes' : 'Contenido en redes para ese día', detalle: (flojos.length >= 2 ? 'Combo o beneficio al llevar dos o más prendas y ' : '') + 'historias del local en vivo ese día (vidriera, ingresos nuevos, looks armados) con la dirección y el horario.', meta: '' });
+  return { umbralPct: -20, flojos: flojos.slice(0, 4), diaMasFlojo: peor || null, promedioGeneral: r2_(general), acciones: acciones };
+}
+const nDomingo_ = (y, mes, n) => { const d = new Date(Date.UTC(y, mes - 1, 1)); const off = (7 - d.getUTCDay()) % 7; return new Date(Date.UTC(y, mes - 1, 1 + off + 7 * (n - 1))).toISOString().slice(0, 10); };
+const nDiaSemana_ = (y, mes, dow, n) => { const d = new Date(Date.UTC(y, mes - 1, 1)); const off = (dow - d.getUTCDay() + 7) % 7; return new Date(Date.UTC(y, mes - 1, 1 + off + 7 * (n - 1))).toISOString().slice(0, 10); };
+/* Eventos de comercio electrónico con fecha oficial de CACE cuando está anunciada; si no, se marca "a confirmar". */
+const EVENTOS_CACE = { cyber: { 2026: ['2026-11-02', '2026-11-04'] }, hotsale: { 2026: ['2026-05-11', '2026-05-13'] } };
+/** Fechas especiales de Argentina de este año y el próximo (comerciales + fines de semana largos de los feriados cargados). */
+function fechasEspecialesLista_(y, cal) {
+  const L = [];
+  [y, y + 1].forEach(a => {
+    L.push({ id: 'madre', nombre: 'Día de la Madre', fecha: nDomingo_(a, 10, 3), tipo: 'regalo' });
+    L.push({ id: 'padre', nombre: 'Día del Padre', fecha: nDomingo_(a, 6, 3), tipo: 'regalo' });
+    L.push({ id: 'blackfriday', nombre: 'Black Friday', fecha: nDiaSemana_(a, 11, 5, 4), tipo: 'descuentos' });
+    L.push({ id: 'cybermonday_us', nombre: 'Cyber Monday', fecha: sumarDias_(nDiaSemana_(a, 11, 5, 4), 3), tipo: 'descuentos' });
+    const cy = EVENTOS_CACE.cyber[a]; L.push({ id: 'cyber_cace', nombre: 'CyberMonday (CACE)', fecha: cy ? cy[0] : nDiaSemana_(a, 11, 1, 1), hasta: cy ? cy[1] : null, aConfirmar: !cy, tipo: 'descuentos' });
+    const hs = EVENTOS_CACE.hotsale[a]; L.push({ id: 'hotsale', nombre: 'Hot Sale (CACE)', fecha: hs ? hs[0] : nDiaSemana_(a, 5, 1, 2), hasta: hs ? hs[1] : null, aConfirmar: !hs, tipo: 'descuentos' });
+    L.push({ id: 'navidad', nombre: 'Navidad', fecha: a + '-12-25', tipo: 'regalo' });
+    L.push({ id: 'anionuevo', nombre: 'Año Nuevo', fecha: (a + 1) + '-01-01', tipo: 'fiestas' });
+  });
+  // Fines de semana largos: feriados nacionales (o puentes) pegados a un sábado/domingo.
+  const vistos = {};
+  cal.lista.filter(f => f.origen === 'api' && f.fecha.slice(0, 4) >= String(y)).forEach(f => {
+    const d = dow_(f.fecha); if ([1, 5].indexOf(d) < 0 && f.tipo !== 'puente turístico') return;
+    let ini = f.fecha, fin = f.fecha;
+    while (dow_(sumarDias_(ini, -1)) === 0 || dow_(sumarDias_(ini, -1)) === 6 || cal.feriado(sumarDias_(ini, -1))) ini = sumarDias_(ini, -1);
+    while (dow_(sumarDias_(fin, 1)) === 0 || dow_(sumarDias_(fin, 1)) === 6 || cal.feriado(sumarDias_(fin, 1))) fin = sumarDias_(fin, 1);
+    if (vistos[ini] || (Date.parse(fin) - Date.parse(ini)) / 86400000 < 2) return; vistos[ini] = 1;
+    L.push({ id: 'finde_' + ini, nombre: 'Fin de semana largo por ' + f.nombre.replace(/\s*\([^)]*\)/g, ''), fecha: ini, hasta: fin, tipo: 'finde' });
+  });
+  return L.sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+/** Plan por etapas para una fecha especial: 3-4 semanas antes, 2 semanas antes, semana previa y el día; con refuerzo del local si cae en días de apertura. */
+function planFecha_(f, ops, hoy) {
+  const faltan = Math.round((Date.parse(f.fecha + 'T12:00:00Z') - Date.parse(hoy + 'T12:00:00Z')) / 86400000);
+  const etapa = faltan >= 21 ? 'tres_cuatro' : faltan >= 8 ? 'dos' : faltan >= 1 ? 'previa' : 'dia';
+  const abiertos = []; for (let d = sumarDias_(f.fecha, -6); d <= (f.hasta || f.fecha); d = sumarDias_(d, 1)) if (ops.indexOf(dow_(d)) >= 0) abiertos.push(d);
+  const regalo = f.tipo === 'regalo', desc = f.tipo === 'descuentos', finde = f.tipo === 'finde';
+  const P = {
+    tres_cuatro: regalo ? 'Definir los productos foco para regalo (3 a 5), asegurar stock y talles, preparar packaging de regalo y fotos para el catálogo.' :
+      desc ? 'Elegir qué se ofrece (preventa, combos o beneficio con transferencia) sin rematar la colección nueva, revisar stock de lo que va a rotar y armar el catálogo de la acción.' :
+      finde ? 'Revisar si conviene abrir o ampliar horario esos días y planificar stock de lo que más rota.' : 'Planificar stock y propuesta para las fiestas: regalos, looks de fiesta y tarjetas de regalo.',
+    dos: regalo ? 'Comunicar: posteos e historias con la guía de regalos, pauta geolocalizada alrededor del showroom y mensaje a la base de clientas.' :
+      desc ? 'Anunciar la acción con cuenta regresiva en redes, pauta a públicos que ya interactuaron y lista de difusión por WhatsApp.' :
+      finde ? 'Anunciar los horarios del fin de semana largo y una propuesta para quienes se quedan en la ciudad.' : 'Comunicar horarios especiales y guía de regalos.',
+    previa: regalo ? 'Promo de último momento (envoltorio sin cargo, beneficio por compra en el local), recordatorio por WhatsApp y equipo completo en el showroom los días de más movimiento.' :
+      desc ? 'Recordatorio el día anterior, beneficio extra para quien compre en el local y el equipo preparado para responder consultas rápido.' :
+      finde ? 'Recordar horarios por redes y WhatsApp; vidriera y looks listos.' : 'Recordatorio de horarios y promo de último momento.',
+    dia: desc ? 'Publicar en vivo, responder consultas en el momento y medir ventas por hora.' : 'Atención reforzada, contenido en vivo desde el local y registro de ventas para comparar con el año próximo.'
+  };
+  return { id: f.id, nombre: f.nombre, fecha: f.fecha, hasta: f.hasta || null, aConfirmar: !!f.aConfirmar, faltan: faltan, etapa: etapa, accionAhora: P[etapa],
+    etapas: [{ cuando: '3 a 4 semanas antes', que: P.tres_cuatro }, { cuando: '2 semanas antes', que: P.dos }, { cuando: 'Semana previa', que: P.previa }, { cuando: 'El día', que: P.dia }],
+    refuerzoLocal: abiertos.length ? 'Cae cerca de días de apertura (' + abiertos.slice(-3).map(d => DIAS_CORTOS[dow_(d)] + ' ' + fdm_(d).slice(0, 5)).join(', ') + '): sumá una persona en el showroom ' + (abiertos.indexOf(f.fecha) >= 0 ? 'ese día' : 'el último día de apertura previo') + ', ampliá el horario si se puede y tené stock a mano de los productos foco.' : '' };
+}
+/** Fechas que se vienen en las próximas 4 semanas (aviso con 3 a 4 semanas de anticipación). */
+function fechasEspeciales_(hoy, ops, cal) {
+  const y = Number(hoy.slice(0, 4)), lim = sumarDias_(hoy, 28);
+  return fechasEspecialesLista_(y, cal).filter(f => (f.hasta || f.fecha) >= hoy && f.fecha <= lim).slice(0, 4).map(f => planFecha_(f, ops, hoy));
+}
+
+/* =================== 3.5 · Panorama RRHH (solo jefes y administración) =================== */
+const RRHH_DEF = { tolerancia: 10, faltasAmarillo: 2, faltasRojo: 3, tardanzasAmarillo: 2, tardanzasRojo: 4, incompletosAmarillo: 1, incompletosRojo: 3,
+  cumplimientoAmarillo: 90, cumplimientoRojo: 75, jornadaMaxHoras: 10, extraPct: 20, ubicacionAmarillo: 3, ubicacionRojo: 6, rachaDias: 10 };
+const umbralesRRHH_ = () => Object.assign({}, RRHH_DEF, cfg_().rrhh || {});
+function setUmbralesRRHH(token, u) {
+  const s = sesion_(token, 'ingresos', true); u = u || {};
+  const c = cfg_(), out = {}, n = (k, lo, hi) => { const v = Number(u[k]); out[k] = isFinite(v) && String(u[k]) !== '' ? Math.min(hi, Math.max(lo, Math.round(v))) : umbralesRRHH_()[k]; };
+  n('tolerancia', 0, 60); n('faltasAmarillo', 1, 20); n('faltasRojo', 1, 30); n('tardanzasAmarillo', 1, 30); n('tardanzasRojo', 1, 40); n('incompletosAmarillo', 1, 20); n('incompletosRojo', 1, 30);
+  n('cumplimientoAmarillo', 10, 100); n('cumplimientoRojo', 5, 100); n('jornadaMaxHoras', 4, 16); n('extraPct', 5, 100); n('ubicacionAmarillo', 1, 30); n('ubicacionRojo', 1, 50); n('rachaDias', 3, 60);
+  if (out.faltasRojo < out.faltasAmarillo || out.tardanzasRojo < out.tardanzasAmarillo || out.incompletosRojo < out.incompletosAmarillo || out.ubicacionRojo < out.ubicacionAmarillo) throw new Error('El umbral rojo no puede ser menor que el amarillo.');
+  if (out.cumplimientoRojo > out.cumplimientoAmarillo) throw new Error('El cumplimiento en rojo tiene que ser menor que el de amarillo.');
+  c.rrhh = out; PROPS.setProperty('CFG', JSON.stringify(c));
+  log_(s, 'cambio_umbrales_rrhh', 'ok', '', JSON.stringify(out).slice(0, 300));
+  return out;
+}
+/** Calcula el panorama de RRHH a partir de fichajes, vacaciones, feriados y horarios. Informativo: no sanciona ni descuenta nada. */
+function panorama_(opts) {
+  const U = umbralesRRHH_(), hoy = hoy_();
+  const hasta = fechaOk_(opts.hasta) && opts.hasta < hoy ? opts.hasta : sumarDias_(hoy, -1);   // hasta ayer: el día en curso no está terminado
+  const desde = fechaOk_(opts.desde) && opts.desde <= hasta ? opts.desde : sumarDias_(hasta, -29);
+  const H = horas_({ desde: desde, hasta: hasta, sucursal: opts.sucursal || null, uids: opts.uids || null });
+  const users = usuarios_(), ing = tAll_('Ingresos').filter(x => x.fecha >= desde && x.fecha <= hasta && vivo_(x));
+  const vacAll = tAll_('Vacaciones').filter(v => v.estado === 'aprobada');
+  const hist = histRango_(desde, hasta).filter(h => h.accion === 'fichada_rechazada_ubicacion');
+  const man = tAll_('Correcciones').filter(c => c.clase === 'manual' && c.fecha >= desde && c.fecha <= hasta);
+  const cfg = cfg_(), cal = calendario_(cfg), sucs = sucursales_();
+  const periodo = { desde: desde, hasta: hasta };
+  const alertas = [], resumen = [];
+  H.empleados.forEach(e => {
+    const u = users.find(x => x.id === e.uid) || {}, hor = u.horario && horaOk_(u.horario.entrada) && horaOk_(u.horario.salida) ? u.horario : null;
+    const suc = sucs.find(x => normSuc_(x.nombre) === normSuc_(e.sucursal)), ops = suc ? suc.dias : cfg.diasOperativos;
+    const mios = ing.filter(x => x.uid === e.uid);
+    const trab = e.dias.filter(x => x.estado === 'trabajado'), faltas = e.dias.filter(x => x.estado === 'sin_fichaje'), inc = e.dias.filter(x => x.estado === 'incompleto');
+    // Tardanzas y salidas anticipadas (solo si la persona tiene horario cargado)
+    let tard = [], anticip = [];
+    if (hor) trab.forEach(x => {
+      const P = (x.pares || []).filter(p => p.entrada && p.salida); if (!P.length) return;
+      if (minDe_(P[0].entrada) > minDe_(hor.entrada) + U.tolerancia) tard.push(x.fecha);
+      if (minDe_(P[P.length - 1].salida) < minDe_(hor.salida) - U.tolerancia) anticip.push(x.fecha);
+    });
+    const largas = trab.filter(x => x.minutos > U.jornadaMaxHoras * 60);
+    const rechazos = hist.filter(h => h.uid === e.uid).length, manuales = man.filter(c => c.uid === e.uid).length;
+    const cumpl = e.esperado ? Math.round(e.total / e.esperado * 100) : null;
+    const vacTom = e.dias.filter(x => x.estado === 'vacaciones').length;
+    let saldo = null;
+    if (u.vacacionesAnuales > 0) {
+      const anio = hoy.slice(0, 4); let usados = 0;
+      vacAll.filter(v => v.uid === e.uid && v.desde.slice(0, 4) <= anio && v.hasta.slice(0, 4) >= anio).forEach(v => { usados += Number(v.dias) || 0; });
+      saldo = u.vacacionesAnuales - usados;
+    }
+    // Racha actual de días esperados trabajados (desde el más reciente hacia atrás)
+    let racha = 0; for (let i = e.dias.length - 1; i >= 0; i--) { const x = e.dias[i]; if (x.estado === 'trabajado' || x.estado === 'en_curso') racha++; else if (x.estado === 'sin_fichaje' || x.estado === 'incompleto') break; }
+    // Personal dado de baja: solo aparece si trabajó en el período (sus días sin fichaje no son ausencias).
+    const tieneDatos = u.estado !== 'activo' ? trab.length > 0 : (trab.length || faltas.length || inc.length || rechazos || manuales || vacTom);
+    if (!tieneDatos) return;   // regla: si no hay datos en el período, no se menciona
+    const A = (nivel, tipo, titulo, detalle) => alertas.push({ uid: e.uid, nombre: e.nombre, sucursal: e.sucursal, nivel: nivel, tipo: tipo, titulo: titulo, detalle: detalle, periodo: periodo });
+    const lista = L => L.slice(0, 6).map(f => fdm_(f).slice(0, 5)).join(', ') + (L.length > 6 ? '…' : '');
+    if (faltas.length >= U.faltasAmarillo) A(faltas.length >= U.faltasRojo ? 'rojo' : 'amarillo', 'ausentismo', pl_(faltas.length, 'día', 'días') + ' sin fichaje en días que le tocaba trabajar', 'Fechas: ' + lista(faltas.map(x => x.fecha)) + '. Ya descontadas vacaciones aprobadas y feriados.');
+    const nT = tard.length + anticip.length;
+    if (nT >= U.tardanzasAmarillo) A(nT >= U.tardanzasRojo ? 'rojo' : 'amarillo', 'puntualidad', (tard.length ? pl_(tard.length, 'llegada tarde', 'llegadas tarde') : '') + (tard.length && anticip.length ? ' y ' : '') + (anticip.length ? pl_(anticip.length, 'salida anticipada', 'salidas anticipadas') : ''),
+      'Horario ' + hor.entrada + ' a ' + hor.salida + ', tolerancia ' + U.tolerancia + ' min. ' + (tard.length ? 'Tarde: ' + lista(tard) + '. ' : '') + (anticip.length ? 'Antes de hora: ' + lista(anticip) + '.' : ''));
+    if (inc.length >= U.incompletosAmarillo) A(inc.length >= U.incompletosRojo ? 'rojo' : 'amarillo', 'incompletos', pl_(inc.length, 'día', 'días') + ' con fichaje incompleto (entrada sin salida o salida sin entrada)', 'Fechas: ' + lista(inc.map(x => x.fecha)) + '. No se suman a las horas hasta corregirlos.');
+    if (cumpl != null && cumpl < U.cumplimientoAmarillo) A(cumpl < U.cumplimientoRojo ? 'rojo' : 'amarillo', 'horas', 'Horas por debajo de lo pactado: ' + cumpl + ' %', hm_(e.total) + ' h trabajadas de ' + hm_(e.esperado) + ' h pactadas.');
+    if (cumpl != null && cumpl > 100 + U.extraPct) A('amarillo', 'extra', 'Horas por encima de lo pactado: ' + cumpl + ' %', hm_(e.total) + ' h trabajadas de ' + hm_(e.esperado) + ' h pactadas.');
+    if (largas.length) A('amarillo', 'jornada_larga', pl_(largas.length, 'jornada', 'jornadas') + ' de más de ' + U.jornadaMaxHoras + ' h', 'Fechas: ' + lista(largas.map(x => x.fecha)) + '.');
+    const nU = rechazos + manuales;
+    if (nU >= U.ubicacionAmarillo) A(nU >= U.ubicacionRojo ? 'rojo' : 'amarillo', 'ubicacion', 'Ubicación rechazada o fichaje manual ' + pl_(nU, 'vez', 'veces'), (rechazos ? rechazos + ' intento(s) rechazado(s) por ubicación' : '') + (rechazos && manuales ? ' y ' : '') + (manuales ? manuales + ' pedido(s) de fichaje manual' : '') + '.');
+    // Patrones: faltas el mismo día de la semana, o pegadas a feriados y fines de semana.
+    if (faltas.length >= 2) {
+      const porDow = {}; faltas.forEach(x => { const d = dow_(x.fecha); porDow[d] = (porDow[d] || 0) + 1; });
+      const rep = Object.keys(porDow).filter(d => porDow[d] >= 2).map(Number);
+      if (rep.length) A('amarillo', 'patron_dia', 'Faltas repetidas los ' + rep.map(d => NOMBRE_DIA[d]).join(' y '), 'Puede ser casualidad: conviene conversarlo antes de sacar conclusiones.');
+      const primero = Math.min.apply(null, ops.map(d => (d + 6) % 7)), ultimo = Math.max.apply(null, ops.map(d => (d + 6) % 7));
+      const pegadas = faltas.filter(x => { const d = (dow_(x.fecha) + 6) % 7; return d === primero || d === ultimo || cal.feriado(sumarDias_(x.fecha, -1)) || cal.feriado(sumarDias_(x.fecha, 1)); });
+      if (pegadas.length >= 2) A('amarillo', 'patron_finde', pegadas.length + ' faltas pegadas a feriados o al fin de semana', 'Fechas: ' + lista(pegadas.map(x => x.fecha)) + '.');
+    }
+    // Positivas
+    const sinProblemas = !faltas.length && !nT && !inc.length;
+    if (sinProblemas && cumpl != null && cumpl >= 100) A('verde', 'cumplimiento', 'Cumplió el ' + cumpl + ' % de sus horas, sin faltas ni tardanzas', hm_(e.total) + ' h de ' + hm_(e.esperado) + ' h pactadas.');
+    else if (sinProblemas && hor && trab.length >= 5) A('verde', 'puntualidad', 'Puntualidad destacada: ' + trab.length + ' días sin llegadas tarde', 'Tolerancia ' + U.tolerancia + ' min.');
+    else if (sinProblemas && trab.length >= 4 && cumpl == null) A('verde', 'asistencia', trab.length + ' días trabajados sin faltas en el período', '');
+    if (racha >= U.rachaDias) A('verde', 'racha', 'Racha de ' + racha + ' días seguidos sin faltas', '');
+    const asistencia = trab.length + faltas.length ? Math.round(trab.length / (trab.length + faltas.length) * 100) : null;
+    resumen.push({ uid: e.uid, nombre: e.nombre, sucursal: e.sucursal, horas: e.total, esperado: e.esperado, cumplimiento: cumpl, diasTrabajados: trab.length, faltas: faltas.length,
+      tardanzas: tard.length, salidasAnticipadas: anticip.length, incompletos: inc.length, vacacionesTomadas: vacTom, saldoVacaciones: saldo, asistencia: asistencia, horario: hor,
+      puntaje: cumpl != null ? Math.min(cumpl, 110) - faltas.length * 10 - nT * 3 - inc.length * 3 : (asistencia || 0) - nT * 3 - inc.length * 3 });
+  });
+  const orden = { rojo: 0, amarillo: 1, verde: 2 };
+  alertas.sort((a, b) => orden[a.nivel] - orden[b.nivel] || a.nombre.localeCompare(b.nombre));
+  const ranking = resumen.filter(r => r.diasTrabajados).slice().sort((a, b) => b.puntaje - a.puntaje).slice(0, 5)
+    .map((r, i) => ({ puesto: i + 1, uid: r.uid, nombre: r.nombre, sucursal: r.sucursal, cumplimiento: r.cumplimiento, asistencia: r.asistencia }));
+  return { periodo: periodo, umbrales: U, alertas: alertas, resumen: resumen.sort((a, b) => a.sucursal.localeCompare(b.sucursal) || a.nombre.localeCompare(b.nombre)), ranking: ranking,
+    sucursales: sucs.map(x => x.nombre), cuenta: { rojo: alertas.filter(a => a.nivel === 'rojo').length, amarillo: alertas.filter(a => a.nivel === 'amarillo').length, verde: alertas.filter(a => a.nivel === 'verde').length } };
+}
+const pl_ = (n, uno, varios) => n + ' ' + (n === 1 ? uno : varios);
+const hm_ = m => m == null ? '' : Math.floor(m / 60) + ':' + String(Math.round(m) % 60).padStart(2, '0');
+function panoramaRRHH(token, f) {
+  sesion_(token, 'ingresos'); f = f || {};
+  return panorama_({ desde: f.desde, hasta: f.hasta, sucursal: txt_(f.sucursal, 40) || null, uids: f.uid ? [String(f.uid)] : null });
+}
+
+/* =================== 3.6 · Clientes y pedidos + Producción (planilla «Control ingreso Nueva temporada 27») ===================
+   La planilla se LEE con SpreadsheetApp (nunca se escribe). Las columnas se ubican por el texto del encabezado, no por la posición,
+   para que agregar o mover columnas en la planilla no rompa la app. Lo leído se guarda en caché (6 h) y se refresca con
+   «Actualizar datos» o con el comando «actualizar las planillas» (función actualizarApp del editor), cualquier día de la semana. */
+const CONTROL_ID_DEF = '1ecqEsW9ZILcGxYjAqWvSTqJAgOtaBA7lhSZ5hnf8zP0';
+const CONTROL_CACHE = 'CONTROL36';
+const controlId_ = () => cfg_().controlFileId || CONTROL_ID_DEF;
+const nh_ = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
+/** Número de una celda: acepta números, "1.234", "1.234,5", "$ 34.269.420", "-" (cero), "(7)" (negativo). */
+function n36_(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v == null ? '' : v).trim(); if (!s || s === '-' || s === '—') return 0;
+  const neg = /^\(.*\)$/.test(s) || /^[-−]/.test(s);
+  s = s.replace(/[^\d,.]/g, ''); if (!s) return 0;
+  if (s.indexOf(',') >= 0) s = s.replace(/\./g, '').replace(',', '.'); else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  const x = parseFloat(s); return isNaN(x) ? 0 : (neg ? -x : x);
+}
+/** Fecha de una celda (Date o "dd/mm/aaaa" o "dd/mm") → "aaaa-mm-dd" o null. */
+function f36_(v, d) {
+  if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, TZ, 'yyyy-MM-dd');
+  const s = String(d != null && d !== '' ? d : v || '').trim();
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return y + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2); }
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0];
+  return null;
+}
+/** Hoja por nombre (sin importar tildes ni mayúsculas): valores + texto mostrado. */
+function hoja36_(ss, re) { return vals36_(ss.getSheets().filter(s => re.test(nh_(s.getName())))[0]); }
+function vals36_(sh) {
+  if (!sh) return null;
+  const lr = sh.getLastRow(), lc = sh.getLastColumn();
+  if (!lr || !lc) return { nombre: sh.getName(), v: [], d: [] };
+  const rg = sh.getRange(1, 1, lr, lc);
+  return { nombre: sh.getName(), v: rg.getValues(), d: rg.getDisplayValues() };
+}
+/** Fila de encabezado: la primera que contiene todos los textos pedidos. Devuelve {i, col(re)}. */
+function enc36_(H, req) {
+  if (!H) return null;
+  for (let i = 0; i < H.d.length; i++) {
+    const row = H.d[i].map(nh_);
+    if (req.every(r => row.some(c => r.test(c)))) return { i: i, row: row, col: re => row.findIndex(c => re.test(c)) };
+  }
+  return null;
+}
+/* ---------- Lectura y armado de los datos ---------- */
+function leerControl_() {
+  const id = controlId_();
+  let ss; try { ss = SpreadsheetApp.openById(id); } catch (e) { throw new Error('No se encontró la planilla «Control ingreso Nueva temporada 27» o no hay permiso de lectura.'); }
+  const hoy = hoy_(), avisos = [];
+  // ---- PEDIDOS: una fila por producto; por cliente: Pidió / Asegurado / Entregado
+  const P = hoja36_(ss, /^PEDIDOS$/), eP = enc36_(P, [/^CODIGO$/, /^PRODUCTO$/, /PIDIO$/]);
+  const clientes = {}, orden = [];
+  if (!eP) avisos.push('No se encontró la hoja PEDIDOS con las columnas Código, Producto y «Pidió» por cliente.');
+  else {
+    const cCod = eP.col(/^CODIGO$/), cProd = eP.col(/^PRODUCTO$/), cLista = eP.col(/^LISTA EL/), cEst = eP.col(/^ESTADO$/), cStock = eP.col(/^STOCK HB LIMA/);
+    const cols = {};
+    const orig = {};
+    eP.row.forEach((h, j) => { const m = h.match(/^(.+?) (PIDIO|ASEGURADO|ENTREGADO)$/); if (m) { const k = m[1]; (cols[k] = cols[k] || {})[m[2]] = j; if (m[2] === 'PIDIO') orig[k] = String(P.d[eP.i][j]).replace(/\s*Pidi[oó]\s*$/i, '').trim(); } });
+    Object.keys(cols).forEach(k => { if (cols[k].PIDIO == null) return; orden.push(k); clientes[k] = { clave: k, nombre: cap36_(orig[k] || k), items: [], pedido: 0, entregado: 0, separado: 0, pendiente: 0, extra: 0 }; });
+    for (let i = eP.i + 1; i < P.v.length; i++) {
+      const r = P.v[i], d = P.d[i], cod = String(d[cCod] || '').trim(), prod = String(d[cProd] || '').trim();
+      if (!cod || !prod) continue;
+      const stock = cStock >= 0 ? Math.max(0, n36_(r[cStock])) : 0;
+      orden.forEach(k => {
+        const c = cols[k], pid = Math.max(0, n36_(r[c.PIDIO])), ent = c.ENTREGADO != null ? Math.max(0, n36_(r[c.ENTREGADO])) : 0, ase = c.ASEGURADO != null ? Math.max(0, n36_(r[c.ASEGURADO])) : 0;
+        if (!pid && !ent) return;
+        const entA = Math.min(ent, pid), sep = Math.min(ase, pid - entA), pen = Math.max(0, pid - entA - sep), C = clientes[k];
+        C.pedido += pid; C.entregado += entA; C.separado += sep; C.pendiente += pen; C.extra += Math.max(0, ent - pid);
+        C.items.push({ codigo: cod, producto: prod, pedido: pid, entregado: entA, separado: sep, pendiente: pen, extra: Math.max(0, ent - pid), stockLima: stock,
+          listaEl: cLista >= 0 ? f36_(r[cLista], d[cLista]) : null, estado: cEst >= 0 ? String(d[cEst] || '').replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim() : '' });
+      });
+    }
+  }
+  // ---- TABLERO · «Lo que falta cubrir por cliente»: monto del pedido, ¿se cuenta?, entrega total estimada y qué hacer
+  const T = hoja36_(ss, /^TABLERO$/), eT = enc36_(T, [/^CLIENTE$/, /^MONTO DEL PEDIDO$/]);
+  if (eT) {
+    const cC = eT.col(/^CLIENTE$/), cM = eT.col(/^MONTO DEL PEDIDO$/), cS = eT.col(/^¿?SE CUENTA/), cE = eT.col(/^ENTREGA TOTAL/), cQ = eT.col(/^QUE HACER/);
+    for (let i = eT.i + 1; i < T.v.length; i++) {
+      const nom = nh_(T.d[i][cC]); if (!nom) break;
+      const C = clientes[nom]; if (!C) continue;
+      C.monto = cM >= 0 ? n36_(T.v[i][cM]) || null : null;
+      C.seCuenta = cS >= 0 ? nh_(T.d[i][cS]) !== 'NO' : true;
+      C.entregaEstimada = C.entregaEstimada || (cE >= 0 ? f36_(T.v[i][cE], T.d[i][cE]) : null);
+      C.queHacer = C.queHacer || (cQ >= 0 ? String(T.d[i][cQ] || '').trim() : '');
+    }
+  } else avisos.push('En TABLERO no se encontró la tabla «Lo que falta cubrir por cliente» (monto del pedido y entrega estimada).');
+  // ---- Tablero clientes · «Resumen por cliente»: son los totales que muestra la planilla (fuente principal de los totales;
+  //      el detalle por modelo sale de PEDIDOS). Si la suma del detalle no coincide, se avisa.
+  const TC = hoja36_(ss, /^TABLERO CLIENTES$/), eC = enc36_(TC, [/^CLIENTE$/, /^PEDIDO$/, /^LE DEBEMOS$/]);
+  if (eC) {
+    const k = { cli: eC.col(/^CLIENTE$/), ped: eC.col(/^PEDIDO$/), ent: eC.col(/^ENTREGADO/), sep: eC.col(/^SEPARADO/), deb: eC.col(/^LE DEBEMOS$/), esp: eC.col(/^ESPERA FABRICACION/),
+      fec: eC.col(/^ENTREGA TOTAL/), que: eC.col(/^QUE HACER/) };
+    for (let i = eC.i + 1; i < TC.v.length; i++) {
+      const nom = nh_(TC.d[i][k.cli]); if (!nom || nom === 'TOTAL') { if (!nom) break; continue; }
+      const C = clientes[nom]; if (!C) continue;
+      const sumaDetalle = { pedido: C.pedido, pendiente: C.pendiente };
+      C.pedido = n36_(TC.v[i][k.ped]); if (k.ent >= 0) C.entregado = n36_(TC.v[i][k.ent]); if (k.sep >= 0) C.separado = n36_(TC.v[i][k.sep]); if (k.deb >= 0) C.pendiente = n36_(TC.v[i][k.deb]);
+      if (k.esp >= 0) C.esperaFabricacion = n36_(TC.v[i][k.esp]);
+      if (k.fec >= 0) C.entregaEstimada = f36_(TC.v[i][k.fec], TC.d[i][k.fec]) || C.entregaEstimada || null;
+      if (k.que >= 0 && TC.d[i][k.que]) C.queHacer = String(TC.d[i][k.que]).trim();
+      if (sumaDetalle.pedido !== C.pedido) C.difDetalle = 'El detalle por modelo (hoja PEDIDOS) suma ' + sumaDetalle.pedido + ' u pedidas y el resumen de la planilla dice ' + C.pedido + ' u.';
+    }
+  }
+  // ---- SE LLEVÓ (entregas con fecha): hojas que empiezan con «SE LLEVÓ»; el cliente sale del nombre de la hoja o de una columna Cliente
+  ss.getSheets().filter(s => /^SE LLEVO/.test(nh_(s.getName()))).forEach(sh => {
+    const H = vals36_(sh);
+    // Formato «remito»: PRODUCTOS · PRECIO · $ Franquicia · talles · CANT. · SUBTOTAL → monto facturado al cliente (sin fechas)
+    const eR = enc36_(H, [/^PRODUCTOS?$/, /^SUBTOTAL$/]);
+    if (eR) {
+      const cli = clientes[nh_(sh.getName()).replace(/^SE LLEVO\s*/, '')]; if (!cli) return;
+      const cS = eR.col(/^SUBTOTAL$/), cP = eR.col(/^PRODUCTOS?$/), cQ = eR.col(/^CANT/);
+      let monto = 0, unid = 0;
+      for (let i = eR.i + 1; i < H.v.length; i++) { const nom = nh_(H.d[i][cP]); if (!nom || /^TOTAL/.test(nom)) continue; monto += n36_(H.v[i][cS]); if (cQ >= 0) unid += n36_(H.v[i][cQ]); }
+      cli.facturado = (cli.facturado || 0) + monto; cli.unidadesRemito = (cli.unidadesRemito || 0) + unid;
+      return;
+    }
+    const e = enc36_(H, [/^FECHA/, /CODIGO|SKU/]); if (!e) return;
+    const cF = e.col(/^FECHA/), cK = e.col(/CODIGO|SKU/), cQ = e.col(/^CANT|^UNID|^TOTAL$/), cCl = e.col(/^CLIENTE/);
+    const delNombre = nh_(sh.getName()).replace(/^SE LLEVO\s*/, '');
+    for (let i = e.i + 1; i < H.v.length; i++) {
+      const f = f36_(H.v[i][cF], H.d[i][cF]), k = String(H.d[i][cK] || '').trim(); if (!f || !k) continue;
+      const cli = clientes[cCl >= 0 ? nh_(H.d[i][cCl]) : delNombre]; if (!cli) continue;
+      const q = cQ >= 0 ? n36_(H.v[i][cQ]) : 1; if (q <= 0) continue;
+      (cli.entregas = cli.entregas || []).push({ fecha: f, codigo: k, unidades: q });
+    }
+  });
+  const tipos = cfg_().tiposCliente || {};
+  const listaCli = orden.map(k => {
+    const C = clientes[k];
+    C.tipo = tipos[k] || 'Franquicia';
+    C.cumplimiento = C.pedido ? Math.round((C.entregado + C.separado) / C.pedido * 100) : null;
+    C.estado = !C.pedido ? 'sin_pedido' : !C.pendiente ? 'completo' : (C.entregado + C.separado) === 0 ? 'pendiente' : 'parcial';
+    if (C.pendiente && C.entregaEstimada && C.entregaEstimada < hoy) C.estado = 'atrasado';
+    if (C.monto && C.facturado != null) C.pendienteFacturar = Math.max(0, Math.round(C.monto - C.facturado));
+    C.separableYa = C.items.reduce((a, x) => a + Math.min(x.pendiente, x.stockLima), 0);
+    if (C.entregas) {
+      const porF = {}; C.entregas.forEach(x => { porF[x.fecha] = (porF[x.fecha] || 0) + x.unidades; });
+      C.entregasPorFecha = Object.keys(porF).sort().map(f => ({ fecha: f, unidades: porF[f] }));
+      const ult = {}; C.entregas.forEach(x => { if (!ult[x.codigo] || x.fecha > ult[x.codigo]) ult[x.codigo] = x.fecha; });
+      C.items.forEach(x => { if (ult[x.codigo]) x.ultimaEntrega = ult[x.codigo]; });
+      C.primeraEntrega = C.entregasPorFecha.length ? C.entregasPorFecha[0].fecha : null;
+      delete C.entregas;
+    }
+    C.items.sort((a, b) => b.pendiente - a.pendiente || a.producto.localeCompare(b.producto));
+    return C;
+  }).filter(C => C.pedido > 0);
+
+  // ---- INGRESO (lo que llega del taller al depósito)
+  const I = hoja36_(ss, /^INGRESO$/), eI = enc36_(I, [/^PRODUCTO$/, /^PEDIDO AL TALLER/, /^LLEGO/]);
+  const lineas = [];
+  if (!eI) avisos.push('No se encontró la hoja INGRESO con Producto, «Pedido al taller» y «Llegó».');
+  else {
+    const c = { prod: eI.col(/^PRODUCTO$/), tienda: eI.col(/^NOMBRE TIENDA/), ot: eI.col(/^N° OT|^NO OT|^N OT/), sku: eI.col(/^CODIGO|SKU/), taller: eI.col(/^TALLER$/),
+      ult: eI.col(/^FECHA ULTIMA LLEGADA/), plan: eI.col(/^PEDIDO AL TALLER/), llego: eI.col(/^LLEGO/), fallas: eI.col(/^FALLAS$/), est: eI.col(/^ESTADO$/),
+      salio: eI.col(/SALIO DEL TALLER/), prom: eI.col(/^FECHA PROMETIDA/) };
+    for (let i = eI.i + 1; i < I.v.length; i++) {
+      const r = I.v[i], d = I.d[i], prod = String(d[c.prod] || '').trim(), plan = Math.max(0, n36_(r[c.plan]));
+      if (!prod || !plan) continue;
+      const llego = Math.max(0, n36_(r[c.llego])), falt = Math.max(0, plan - llego), prom = c.prom >= 0 ? f36_(r[c.prom], d[c.prom]) : null;
+      const estTxt = c.est >= 0 ? String(d[c.est] || '').replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim() : '';
+      const est = !falt ? 'completo' : !llego ? 'pendiente' : 'parcial';
+      lineas.push({ producto: prod, nombreTienda: c.tienda >= 0 ? String(d[c.tienda] || '').trim() : '', ot: c.ot >= 0 ? String(d[c.ot] || '').trim() : '', sku: c.sku >= 0 ? String(d[c.sku] || '').trim() : '',
+        taller: (c.taller >= 0 ? String(d[c.taller] || '').trim() : '') || 'Sin taller', planificado: plan, ingresado: Math.min(llego, plan), sobrante: Math.max(0, llego - plan), faltante: falt,
+        fallas: c.fallas >= 0 ? Math.max(0, n36_(r[c.fallas])) : 0, estado: est, estadoPlanilla: estTxt, fechaPrometida: prom, ultimaLlegada: c.ult >= 0 ? f36_(r[c.ult], d[c.ult]) : null,
+        salioDelTaller: c.salio >= 0 ? /^SI/.test(nh_(d[c.salio])) : null, atrasado: !!(falt && prom && prom < hoy) });
+    }
+  }
+  // ---- PRODUCCIÓN (OTs y en qué paso están)
+  const O = hoja36_(ss, /^PRODUCCION$/), eO = enc36_(O, [/^N° OT|^NO OT|^N OT/, /^ESTADO ACTUAL/]);
+  const ots = [];
+  if (eO) {
+    const c = { ot: eO.col(/^N° OT|^NO OT|^N OT/), sku: eO.col(/^CODIGO|SKU/), prenda: eO.col(/^PRENDA/), tipo: eO.col(/^TIPO$/), cant: eO.col(/^CANTIDAD/), taller: eO.col(/^TALLER/),
+      ini: eO.col(/^FECHA INICIO/), rec: eO.col(/^RECIBIDAS/), est: eO.col(/^ESTADO ACTUAL/), paso: eO.col(/^PASO SIGUIENTE/), al: eO.col(/^ALERTA/) };
+    for (let i = eO.i + 1; i < O.v.length; i++) {
+      const d = O.d[i], ot = String(d[c.ot] || '').trim(); if (!/^OT/i.test(ot)) continue;
+      const cant = Math.max(0, n36_(O.v[i][c.cant])), rec = c.rec >= 0 ? Math.max(0, n36_(O.v[i][c.rec])) : 0;
+      const al = c.al >= 0 ? String(d[c.al] || '') : '', est = c.est >= 0 ? String(d[c.est] || '') : '';
+      const term = /TERMINAD/i.test(al) || /TERMINAD/i.test(est);
+      ots.push({ ot: ot, sku: c.sku >= 0 ? String(d[c.sku] || '').trim() : '', prenda: c.prenda >= 0 ? String(d[c.prenda] || '').trim() : '', tipo: c.tipo >= 0 ? String(d[c.tipo] || '').trim() : '',
+        cantidad: cant, recibidas: rec, taller: c.taller >= 0 ? String(d[c.taller] || '').trim() : '', inicio: c.ini >= 0 ? f36_(O.v[i][c.ini], d[c.ini]) : null,
+        estado: est.replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim(), paso: c.paso >= 0 ? String(d[c.paso] || '').replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim() : '', alerta: al.replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim(),
+        terminada: term, atrasada: /ATRAS/i.test(al) });
+    }
+  }
+  // ---- A FABRICAR (lo que falta fabricar para pedidos y para llegar al stock mínimo)
+  const F = hoja36_(ss, /^A FABRICAR$/), eF = enc36_(F, [/^CODIGO|SKU/, /^FALTAN P/]);
+  const fabricar = [];
+  if (eF) {
+    const c = { sku: eF.col(/^CODIGO|SKU/), prod: eF.col(/^PRODUCTO$/), talle: eF.col(/^TALLE$/), stock: eF.col(/^STOCK LIMA/), pend: eF.col(/^PEDIDOS PENDIENTES/), falt: eF.col(/^FALTAN P/),
+      min: eF.col(/^PARA LLEGAR AL MINIMO/), ot: eF.col(/^OT$/), est: eF.col(/^ESTADO DE PRODUCCION/), llega: eF.col(/^LLEGA/), prio: eF.col(/^PRIORIDAD/), que: eF.col(/^PASO SIGUIENTE|^QUE HACER/) };
+    for (let i = eF.i + 1; i < F.v.length; i++) {
+      const r = F.v[i], d = F.d[i], sku = String(d[c.sku] || '').trim(); if (!sku) continue;
+      const falt = Math.max(0, n36_(r[c.falt])), min = c.min >= 0 ? Math.max(0, n36_(r[c.min])) : 0; if (!falt && !min) continue;
+      fabricar.push({ sku: sku, producto: c.prod >= 0 ? String(d[c.prod] || '').trim() : '', talle: c.talle >= 0 ? String(d[c.talle] || '').trim() : '', stockLima: c.stock >= 0 ? n36_(r[c.stock]) : null,
+        faltanPedidos: falt, paraMinimo: min, ot: c.ot >= 0 ? String(d[c.ot] || '').trim() : '', estadoProduccion: c.est >= 0 ? String(d[c.est] || '').replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim() : '',
+        llega: c.llega >= 0 ? f36_(r[c.llega], d[c.llega]) : null, prioridad: c.prio >= 0 ? String(d[c.prio] || '').trim() : '', queHacer: c.que >= 0 ? String(d[c.que] || '').trim() : '' });
+    }
+  }
+  let modificado = null; try { modificado = DriveApp.getFileById(id).getLastUpdated().toISOString(); } catch (e) {}
+  return { leida: new Date().toISOString(), modificado: modificado, archivo: ss.getName(), avisos: avisos, clientes: listaCli, lineas: lineas, ots: ots, fabricar: fabricar };
+}
+/** Tipo de cada cliente (Franquicia / Mayorista): se aplica al leer, así un cambio se ve sin releer la planilla. */
+function tipos36_(D) { const T = cfg_().tiposCliente || {}; (D.clientes || []).forEach(c => { c.tipo = T[c.clave] || 'Franquicia'; }); return D; }
+const cap36_ = s => String(s).toLowerCase().replace(/(^|\s)(\S)/g, (m, a, b) => a + b.toUpperCase());
+/* ---------- Caché (en partes de 90 KB) ---------- */
+function cacheGuardar36_(obj) {
+  const s = JSON.stringify(obj), n = Math.ceil(s.length / 90000), o = {};
+  for (let i = 0; i < n; i++) o[CONTROL_CACHE + '_' + i] = s.slice(i * 90000, (i + 1) * 90000);
+  o[CONTROL_CACHE + '_n'] = String(n);
+  try { CACHE.putAll(o, 21600); } catch (e) {}
+}
+function cacheLeer36_() {
+  try {
+    const n = Number(CACHE.get(CONTROL_CACHE + '_n')); if (!n) return null;
+    const k = []; for (let i = 0; i < n; i++) k.push(CONTROL_CACHE + '_' + i);
+    const g = CACHE.getAll(k); if (k.some(x => g[x] == null)) return null;
+    return JSON.parse(k.map(x => g[x]).join(''));
+  } catch (e) { return null; }
+}
+/** Lee la planilla (o usa la caché). Deja registrada la última actualización (o el error). */
+function control_(forzar, estricto) {
+  if (!forzar) { const c = cacheLeer36_(); if (c) return tipos36_(c); }
+  let d;
+  try { d = leerControl_(); }
+  catch (e) {
+    const st = { ts: new Date().toISOString(), ok: false, error: String(e.message || e).slice(0, 200) };
+    PROPS.setProperty('CONTROL_SYNC', JSON.stringify(st));
+    const c = estricto ? null : cacheLeer36_(); if (c) { c.errorUltimaLectura = st.error; return tipos36_(c); }
+    throw new Error(st.error);
+  }
+  cacheGuardar36_(d); tipos36_(d);
+  PROPS.setProperty('CONTROL_SYNC', JSON.stringify({ ts: d.leida, ok: true, archivo: d.archivo, modificado: d.modificado, avisos: d.avisos.slice(0, 10) }));
+  return d;
+}
+/* ---------- Resúmenes ---------- */
+const ESTADO_PED = { completo: 'Completo', parcial: 'Parcial', pendiente: 'Pendiente', atrasado: 'Atrasado' };
+function resumenClientes_(D) {
+  const L = D.clientes.filter(c => c.seCuenta !== false), hoy = hoy_();
+  const tot = k => L.reduce((a, c) => a + (c[k] || 0), 0);
+  const porTipo = {}; L.forEach(c => { const t = porTipo[c.tipo] = porTipo[c.tipo] || { tipo: c.tipo, clientes: 0, pedido: 0, entregado: 0, separado: 0, pendiente: 0 }; t.clientes++; ['pedido', 'entregado', 'separado', 'pendiente'].forEach(k => { t[k] += c[k]; }); });
+  Object.keys(porTipo).forEach(k => { const t = porTipo[k]; t.cumplimiento = t.pedido ? Math.round((t.entregado + t.separado) / t.pedido * 100) : null; });
+  const estados = { completo: 0, parcial: 0, pendiente: 0, atrasado: 0 }; L.forEach(c => { if (estados[c.estado] != null) estados[c.estado]++; });
+  const alertas = [];
+  L.forEach(c => {
+    const pct = c.pedido ? c.pendiente / c.pedido : 0;
+    if (c.estado === 'atrasado') alertas.push({ nivel: 'rojo', cliente: c.nombre, texto: c.nombre + ': ' + c.pendiente + ' u pendientes y la entrega estimada (' + fdm_(c.entregaEstimada) + ') ya pasó.' });
+    else if (c.pendiente >= 50 && pct >= 0.3) alertas.push({ nivel: pct >= 0.6 ? 'rojo' : 'amarillo', cliente: c.nombre, texto: c.nombre + ': falta entregar ' + c.pendiente + ' u, el ' + Math.round(pct * 100) + ' % del pedido.' });
+    if (c.entregaEstimada && c.pendiente && c.entregaEstimada > sumarDias_(hoy, 45)) alertas.push({ nivel: 'amarillo', cliente: c.nombre, texto: c.nombre + ': la entrega total se estima para el ' + fdm_(c.entregaEstimada) + ' (más de 45 días).' });
+  });
+  const recomendaciones = [];
+  const sep = L.filter(c => c.separableYa > 0).sort((a, b) => b.separableYa - a.separableYa);
+  if (sep.length) recomendaciones.push('Hay stock en HB Lima para separar ya ' + sep.slice(0, 3).map(c => c.separableYa + ' u de ' + c.nombre).join(', ') + ': pasarlas a su depósito acorta la entrega sin fabricar.');
+  const top = L.filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente)[0];
+  if (top) recomendaciones.push('Priorizar la próxima entrega a ' + top.nombre + ', que tiene la mayor cantidad pendiente (' + top.pendiente + ' u).');
+  const pedido = tot('pedido'), ent = tot('entregado'), sepT = tot('separado');
+  return { clientes: L.length, pedido: pedido, entregado: ent, separado: sepT, pendiente: tot('pendiente'), extra: tot('extra'),
+    cumplimiento: pedido ? Math.round((ent + sepT) / pedido * 100) : null, monto: L.some(c => c.monto) ? tot('monto') : null,
+    porTipo: Object.keys(porTipo).map(k => porTipo[k]), estados: estados, alertas: alertas.sort((a, b) => (a.nivel === 'rojo' ? 0 : 1) - (b.nivel === 'rojo' ? 0 : 1)), recomendaciones: recomendaciones };
+}
+function resumenProduccion_(D) {
+  const L = D.lineas, tot = k => L.reduce((a, x) => a + (x[k] || 0), 0);
+  const plan = tot('planificado'), ing = tot('ingresado');
+  // En producción = lo que falta llegar de artículos ya asignados a un taller · Sin iniciar = planificado todavía sin taller.
+  const enProceso = L.filter(x => x.faltante && x.taller !== 'Sin taller').reduce((a, x) => a + x.faltante, 0);
+  const sinIniciar = L.filter(x => x.faltante && x.taller === 'Sin taller').reduce((a, x) => a + x.faltante, 0);
+  const faltaFab = D.fabricar.reduce((a, x) => a + x.faltanPedidos, 0), paraMin = D.fabricar.reduce((a, x) => a + x.paraMinimo, 0);
+  const talleres = {}; L.forEach(x => { const t = talleres[x.taller] = talleres[x.taller] || { taller: x.taller, lineas: 0, planificado: 0, ingresado: 0, faltante: 0, atrasadas: 0, proxima: null };
+    t.lineas++; t.planificado += x.planificado; t.ingresado += x.ingresado; t.faltante += x.faltante; if (x.atrasado) t.atrasadas++;
+    if (x.faltante && x.fechaPrometida && x.fechaPrometida >= hoy_() && (!t.proxima || x.fechaPrometida < t.proxima)) t.proxima = x.fechaPrometida; });
+  const TL = Object.keys(talleres).map(k => { const t = talleres[k]; t.avance = t.planificado ? Math.round(t.ingresado / t.planificado * 100) : null; return t; }).sort((a, b) => b.faltante - a.faltante);
+  const atrasadas = L.filter(x => x.atrasado), criticos = D.fabricar.filter(x => /URGENTE/i.test(x.prioridad) || x.faltanPedidos > 0).sort((a, b) => b.faltanPedidos - a.faltanPedidos);
+  const alertas = [];
+  if (atrasadas.length) alertas.push({ nivel: 'rojo', texto: atrasadas.length + (atrasadas.length === 1 ? ' artículo atrasado' : ' artículos atrasados') + ' (pasó la fecha prometida y falta mercadería): ' + atrasadas.slice(0, 3).map(x => x.producto + ' · ' + x.taller).join(', ') + '.' });
+  const sinOt = criticos.filter(x => !x.ot);
+  if (sinOt.length) alertas.push({ nivel: 'rojo', texto: sinOt.length + ' talles con faltante para pedidos todavía sin OT (' + sinOt.reduce((a, x) => a + x.faltanPedidos, 0) + ' u).' });
+  const muchoFalt = L.filter(x => x.faltante && x.planificado && x.faltante / x.planificado >= 0.5 && x.ingresado > 0);
+  if (muchoFalt.length) alertas.push({ nivel: 'amarillo', texto: muchoFalt.length + ' artículos con más de la mitad todavía sin llegar.' });
+  const recomendaciones = [];
+  if (sinOt.length) recomendaciones.push('Abrir OT para lo urgente sin orden, empezando por ' + sinOt.slice(0, 3).map(x => x.producto).join(', ') + '.');
+  if (TL[0] && TL[0].faltante) recomendaciones.push('Seguir de cerca al taller ' + TL[0].taller + ', que concentra el mayor faltante (' + TL[0].faltante + ' u).');
+  return { planificado: plan, ingresado: ing, enProceso: enProceso, sinIniciar: sinIniciar, faltaFabricar: faltaFab, paraMinimo: paraMin, sobrante: tot('sobrante'), fallas: tot('fallas'),
+    avance: plan ? Math.round(ing / plan * 100) : null, articulos: L.length, talleres: TL, otsAbiertas: D.ots.filter(o => !o.terminada).length, otsTerminadas: D.ots.filter(o => o.terminada).length,
+    atrasados: atrasadas.length, alertas: alertas, recomendaciones: recomendaciones };
+}
+/* ---------- Audio (texto que el navegador lee) ---------- */
+function unid36_(n) { n = Math.round(n || 0); return n === 1 ? 'una unidad' : palabras_(n) + ' unidades'; }
+function cuandoAct36_() {
+  const st = JSON.parse(PROPS.getProperty('CONTROL_SYNC') || 'null'); if (!st || !st.ts) return '';
+  const d = new Date(st.ts), f = Utilities.formatDate(d, TZ, 'yyyy-MM-dd'), h = Utilities.formatDate(d, TZ, 'HH:mm');
+  return 'Datos de la planilla actualizados ' + fechaHablada_(f) + ' a las ' + palabras_(Number(h.slice(0, 2))) + (Number(h.slice(3)) ? ' y ' + palabras_(Number(h.slice(3))) : '') + '.';
+}
+function audioClientes_(u, R, L) {
+  const nombre = String(u && u.nombre || '').trim().split(' ')[0], P = [];
+  if (!R.clientes) return '';
+  P.push((nombre ? 'Hola ' + nombre + ', ' : 'Hola, ') + 'te cuento la situación de los pedidos de clientes.');
+  P.push(cuandoAct36_());
+  P.push('Hay ' + palabras_(R.clientes) + (R.clientes === 1 ? ' cliente' : ' clientes') + ' con pedido: ' + unid36_(R.pedido) + ' pedidas, ' + unid36_(R.entregado) + ' entregadas' + (R.separado ? ', ' + unid36_(R.separado) + ' separadas en su depósito' : '') + ' y ' + unid36_(R.pendiente) + ' pendientes. El cumplimiento general es del ' + palabras_(R.cumplimiento || 0) + ' por ciento.');
+  if (R.porTipo.length > 1) R.porTipo.forEach(t => P.push(t.tipo + 's: ' + palabras_(t.clientes) + ', con ' + unid36_(t.pendiente) + ' pendientes y ' + palabras_(t.cumplimiento || 0) + ' por ciento de cumplimiento.'));
+  else if (R.porTipo.length === 1) P.push('Todos son ' + R.porTipo[0].tipo.toLowerCase() + 's.');
+  const e = R.estados, partes = [];
+  if (e.completo) partes.push(palabras_(e.completo) + (e.completo === 1 ? ' completo' : ' completos'));
+  if (e.parcial) partes.push(palabras_(e.parcial) + (e.parcial === 1 ? ' parcial' : ' parciales'));
+  if (e.pendiente) partes.push(palabras_(e.pendiente) + (e.pendiente === 1 ? ' pendiente' : ' pendientes'));
+  if (e.atrasado) partes.push(palabras_(e.atrasado) + (e.atrasado === 1 ? ' atrasado' : ' atrasados'));
+  if (partes.length) P.push('Pedidos: ' + partes.join(', ') + '.');
+  const top = L.filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente).slice(0, 3);
+  if (top.length) P.push('Con más mercadería pendiente: ' + top.map(c => c.nombre + ', ' + unid36_(c.pendiente)).join('; ') + '.');
+  const saldos = L.filter(c => c.pendienteFacturar).sort((a, b) => b.pendienteFacturar - a.pendienteFacturar).slice(0, 2);
+  const montos = L.filter(c => c.monto).sort((a, b) => b.monto - a.monto).slice(0, 2);
+  if (saldos.length) P.push('Como dato complementario, los saldos más altos sin facturar son ' + saldos.map(c => c.nombre + ', ' + dinero_(c.pendienteFacturar)).join(', y ') + '.');
+  else if (montos.length) P.push('Como dato complementario, los pedidos de mayor monto son ' + montos.map(c => c.nombre + ', ' + dinero_(c.monto)).join(', y ') + '.');
+  R.alertas.slice(0, 2).forEach(a => P.push(hablar_(a.texto.replace(/(\d+) u\b/g, (m, n) => unid36_(Number(n))))));
+  R.recomendaciones.slice(0, 2).forEach(r => P.push(hablar_(r.replace(/(\d+) u\b/g, (m, n) => unid36_(Number(n))))));
+  return P.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+}
+function audioProduccion_(u, R) {
+  const nombre = String(u && u.nombre || '').trim().split(' ')[0], P = [];
+  if (!R.planificado && !R.faltaFabricar) return '';
+  P.push((nombre ? 'Hola ' + nombre + ', ' : 'Hola, ') + 'te cuento cómo viene la producción.');
+  P.push(cuandoAct36_());
+  if (R.planificado) P.push('Hay ' + unid36_(R.planificado) + ' planificadas: ' + unid36_(R.ingresado) + ' ya ingresaron al depósito' + (R.enProceso ? ', ' + unid36_(R.enProceso) + ' están en los talleres' : '') + (R.sinIniciar ? ' y ' + unid36_(R.sinIniciar) + ' todavía no se mandaron a ningún taller' : '') + '. El avance es del ' + palabras_(R.avance || 0) + ' por ciento.');
+  const T = R.talleres.filter(t => t.planificado && t.taller !== 'Sin taller');
+  const mejor = T.filter(t => t.avance != null).sort((a, b) => b.avance - a.avance)[0], peor = T.filter(t => t.faltante).sort((a, b) => b.faltante - a.faltante)[0];
+  if (mejor) P.push('El taller más avanzado es ' + mejor.taller + ', con el ' + palabras_(mejor.avance) + ' por ciento.');
+  if (peor && (!mejor || peor.taller !== mejor.taller)) P.push('El que más debe es ' + peor.taller + ': le faltan ' + unid36_(peor.faltante) + (peor.atrasadas ? ', con ' + palabras_(peor.atrasadas) + (peor.atrasadas === 1 ? ' artículo atrasado' : ' artículos atrasados') : '') + '.');
+  if (R.faltaFabricar) P.push('Falta fabricar ' + unid36_(R.faltaFabricar) + ' para cubrir pedidos' + (R.paraMinimo ? ' y ' + unid36_(R.paraMinimo) + ' para llegar al stock mínimo' : '') + '.');
+  R.alertas.slice(0, 2).forEach(a => P.push(hablar_(a.texto.replace(/\((\d+) u\)/g, (m, n) => ', ' + unid36_(Number(n))).replace(/(\d+) talles/, (m, n) => palabras_(Number(n)) + ' talles').replace(/^(\d+) art/, (m, n) => palabras_(Number(n)) + ' art'))));
+  if (R.recomendaciones.length) P.push('Prioridad: ' + R.recomendaciones[0].replace(/\((\d+) u\)/g, (m, n) => ', ' + unid36_(Number(n))));
+  return P.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+}
+/* ---------- API ---------- */
+const sync36_ = () => JSON.parse(PROPS.getProperty('CONTROL_SYNC') || 'null');
+function clientesPedidos(token) {
+  const s = sesion_(token, 'clientes'), D = control_(false), R = resumenClientes_(D);
+  return { sync: sync36_(), cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), resumen: R, clientes: D.clientes, avisos: D.avisos, audio: audioClientes_(s.user, R, D.clientes.filter(c => c.seCuenta !== false)) };
+}
+function produccionPanel(token) {
+  const s = sesion_(token, 'produccion'), D = control_(false), R = resumenProduccion_(D);
+  return { sync: sync36_(), cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), resumen: R, lineas: D.lineas, ots: D.ots, fabricar: D.fabricar, avisos: D.avisos, audio: audioProduccion_(s.user, R) };
+}
+/** «Actualizar datos»: relee las DOS planillas (Control ingreso y Ventas Palermo), cualquier día de la semana. */
+function actualizarPlanillas(token) {
+  const s = sesion_(token);
+  if (!['clientes', 'produccion', 'cierre', 'kpi'].some(p => s.perms.indexOf(p) >= 0)) throw new Error('PERM');
+  return actualizarPlanillas_(s);
+}
+function actualizarPlanillas_(s) {
+  const out = [];
+  try { const d = control_(true, true); out.push({ planilla: d.archivo || 'Control ingreso Nueva temporada 27', ok: true, ts: d.leida, modificado: d.modificado, avisos: d.avisos }); }
+  catch (e) { out.push({ planilla: 'Control ingreso Nueva temporada 27', ok: false, ts: new Date().toISOString(), error: String(e.message || e) }); }
+  const c = sync_(s);
+  out.push({ planilla: c.archivo || 'HeyBlackk_VentasPalermo_2026 (1)', ok: !!c.ok, ts: c.ts, modificado: c.modificado || null, error: c.ok ? null : c.error });
+  log_(s, 'actualizar_planillas', out.every(x => x.ok) ? 'ok' : 'error', '', out.map(x => x.planilla + ': ' + (x.ok ? 'ok' : x.error)).join(' · ').slice(0, 300));
+  return out;
+}
+/** Tipo de cliente (Franquicia / Mayorista): lo define administración o quien tiene el módulo; no se escribe en la planilla original. */
+function setTipoCliente(token, clave, tipo) {
+  const s = sesion_(token, 'clientes', true);
+  if (['Franquicia', 'Mayorista'].indexOf(tipo) < 0) throw new Error('Tipo inválido.');
+  const k = nh_(clave); if (!k) throw new Error('Falta el cliente.');
+  const c = cfg_(); c.tiposCliente = Object.assign({}, c.tiposCliente || {}); const antes = c.tiposCliente[k] || 'Franquicia'; c.tiposCliente[k] = tipo;
+  PROPS.setProperty('CFG', JSON.stringify(c));
+  log_(s, 'tipo_cliente', 'ok', k, k + ': ' + antes + ' → ' + tipo);
+  return { clave: k, tipo: tipo };
+}
+/* ---------- Permisos por jefe (solo administración) ---------- */
+const SECCIONES_JEFE = [['clientes', 'Clientes y pedidos'], ['produccion', 'Producción'], ['ingresos', 'Fichaje y horas / RRHH'], ['vacaciones', 'Vacaciones'], ['rrhh', 'Novedades RR. HH.'],
+  ['kpi', 'KPIs comerciales'], ['cierre', 'Cierre diario'], ['auditar', 'Auditar'], ['auditoria', 'Registro de auditorías'], ['acciones', 'Acciones correctivas'], ['historial', 'Historial'], ['personal', 'Personal'], ['config', 'Configuración'], ['otros', 'Otros']];
+function permisosJefes(token) {
+  const s = sesion_(token, 'personal'); if (s.user.rol !== 'admin') throw new Error('PERM');
+  return { secciones: SECCIONES_JEFE.map(x => ({ id: x[0], nombre: x[1] })),
+    jefes: usuarios_().filter(u => u.estado === 'activo' && u.rol !== 'empleado').map(u => ({ id: u.id, nombre: u.nombre, rol: u.rol, permisos: permisos_(u) }))
+      .sort((a, b) => (a.rol === 'admin' ? 1 : 0) - (b.rol === 'admin' ? 1 : 0) || a.nombre.localeCompare(b.nombre)) };
+}
+function setPermisoJefe(token, uid, modulo, activo) {
+  const s = sesion_(token, 'personal', true);
+  if (s.user.rol !== 'admin') throw new Error('Solo la administración cambia los permisos de los jefes.');
+  if (MODULOS.indexOf(modulo) < 0) throw new Error('Sección inválida.');
+  return lock_(() => {
+    const u = usuarios_().find(x => x.id === uid); if (!u) throw new Error('Jefe no encontrado.');
+    if (u.rol === 'empleado') throw new Error('Primero cambiá el rol a Jefe/Responsable.');
+    if (u.rol === 'admin') throw new Error('La administración tiene acceso a todas las secciones.');
+    const P = permisos_(u).slice(), tenia = P.indexOf(modulo) >= 0;
+    if (!!activo === tenia) return publico_(u);
+    u.permisos = activo ? P.concat([modulo]) : P.filter(p => p !== modulo);
+    u.ver = Number(u.ver || 0) + 1;   // la sesión del jefe toma el cambio en su próxima llamada
+    guardarUsuario_(u);
+    const nom = (SECCIONES_JEFE.find(x => x[0] === modulo) || [modulo, modulo])[1];
+    log_(s, 'cambio_permisos', 'ok', u.id, u.nombre + ': ' + (activo ? 'habilitó' : 'quitó') + ' «' + nom + '»');
+    return publico_(u);
+  });
+}
+/** Caso inicial pedido por María (una sola vez): Thomás → Clientes y pedidos sí, Producción no · Víctor → Producción sí, Clientes no. */
+function migrarPermisos36_() {
+  if (PROPS.getProperty('MIG36_PERMS')) return;
+  PROPS.setProperty('MIG36_PERMS', new Date().toISOString());
+  const reglas = [[/^T+H?OMAS\b/, 'clientes', 'produccion'], [/^VICTOR\b/, 'produccion', 'clientes']];
+  usuarios_().filter(u => u.estado === 'activo' && u.rol === 'responsable').forEach(u => {
+    const r = reglas.find(x => x[0].test(nh_(u.nombre))); if (!r) return;
+    u.permisos = permisos_(u).filter(p => p !== r[2]).concat(permisos_(u).indexOf(r[1]) >= 0 ? [] : [r[1]]);
+    u.ver = Number(u.ver || 0) + 1; guardarUsuario_(u);
+    log_(null, 'cambio_permisos', 'ok', u.id, u.nombre + ': caso inicial 3.6 (+' + r[1] + ', sin ' + r[2] + ')');
+  });
 }
