@@ -2309,11 +2309,12 @@ const VOZ = {
   claveGenero(){ return "hb35_voz_genero_"+((S.user&&(S.user.usuario||S.user.legajo||S.user.id))||"anon"); },
   genero(){ const g = lsGet(this.claveGenero()); return g==="masculina" ? "masculina" : "femenina"; },
   setGenero(g){ lsSet(this.claveGenero(), g==="masculina"?"masculina":"femenina"); },
-  generoDe(v){ const n = String(v && v.name || "");
-    if (/female|mujer|femenin|helena|laura|sabina|paulina|m[oó]nica|elena|luc[ií]a|isabel|camila|valeria|elvira|dalia|paloma|conchita|pen[eé]lope|lupe|esperanza|marisol|salom[eé]|carla|ximena|soledad|beatriz|francisca|catalina|esf|google espa[nñ]ol( de estados unidos)?$/i.test(n)) return "femenina";
-    if (/\bmale\b|hombre|masculin|tom[aá]s|ra[uú]l|pablo|jorge|[aá]lvaro|diego|carlos|juan|enrique|gerardo|federico|mateo|alonso|emilio|jos[eé]|andr[eé]s|gonzalo|lorenzo|esd\b|esc\b/i.test(n)) return "masculina";
+  /* Género de una voz por su nombre o identificador. En Android (Samsung, Google) Chrome suele exponer voces sin nombre de persona:
+     se reconocen los códigos del motor de Google (es-us-x-esd = masculina, es-us-x-esf/sfb = femenina, etc.). */
+  generoDe(v){ const n = String(v && (v.name + " " + (v.voiceURI||"")) || "").toLowerCase();
+    if (/female|mujer|femenin|helena|laura|sabina|paulina|m[oó]nica|elena|luc[ií]a|isabel|camila|valeria|elvira|dalia|paloma|conchita|pen[eé]lope|lupe|esperanza|marisol|salom[eé]|carla|ximena|soledad|beatriz|francisca|catalina|x-esf|x-sfb|x-eea|x-eec|x-eee|smtf|google espa[nñ]ol( de estados unidos)?$/i.test(n)) return "femenina";
+    if (/\bmale\b|hombre|masculin|tom[aá]s|ra[uú]l|pablo|jorge|[aá]lvaro|diego|carlos|juan|enrique|gerardo|federico|mateo|alonso|emilio|jos[eé]|andr[eé]s|gonzalo|lorenzo|x-esd|x-esc|x-eed|x-eef|x-esm|smtm/i.test(n)) return "masculina";
     return null; },
-  /* es-AR primero; si no hay, es-419 / es-US / es-MX / es-ES; dentro del idioma, la voz de mejor calidad (natural/neural/Google). */
   mejorVoz(){
     const vs = this.voces(); if (!vs.length) return null;
     const g = this.genero(), norm = l => String(l||"").replace("_","-").toLowerCase();
@@ -2326,12 +2327,15 @@ const VOZ = {
     return es.length ? buena(es) : null;
   },
   /** Si no hay una voz del género elegido, se aproxima con el tono. */
-  pitch(voz){ const g = this.genero(), gv = this.generoDe(voz); if (gv===g) return 1; if (g==="masculina") return gv==="femenina" ? 0.7 : 0.85; return gv==="masculina" ? 1.3 : 1.05; },
+  /** Si el teléfono no tiene una voz del género elegido (lo habitual en Android: una sola voz femenina por idioma),
+      la masculina se logra bajando bastante el tono y apenas la velocidad. */
+  pitch(voz){ const g = this.genero(), gv = this.generoDe(voz); if (gv===g) return 1; if (g==="masculina") return 0.55; return gv==="masculina" ? 1.35 : 1.05; },
+  ajusteRate(voz){ const g = this.genero(), gv = this.generoDe(voz); return g==="masculina" && gv!=="masculina" ? 0.95 : 1; },
   activa:null, onEstado:null,
   hablar(texto, onFin){
     if (!this.soporta()) return false;
     this.detener();
-    const voz = this.mejorVoz(), rate = this.rate(), pitch = this.pitch(voz);
+    const voz = this.mejorVoz(), rate = this.rate()*this.ajusteRate(voz), pitch = this.pitch(voz);
     const partes = String(texto).match(/[^.!?]+[.!?]+["»]?\s*|[^.!?]+$/g) || [String(texto)];   // por oraciones: algunos navegadores cortan los textos largos
     const ses = { onFin, i:0 }; this.activa = ses;
     const siguiente = () => {
