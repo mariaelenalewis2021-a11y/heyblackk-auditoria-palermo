@@ -159,7 +159,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -673,6 +673,13 @@ const CONTRATOS37_ = [
   { re: /^florencia\b/i, suc: /lima/i, h: { entrada: '11:00', salida: '17:00', dias: [0, 1, 2, 3, 4, 6] } },
   { re: /^isabel+a\b/i, suc: /lima/i, h: { entrada: '12:30', salida: '17:00', dias: [1, 2, 3, 4, 5] } },
   { re: /./, suc: /palermo/i, soloEmpleado: true, h: { entrada: '14:00', salida: '20:00', dias: null } }];
+/** Al dar de alta: si el nombre y la sucursal coinciden con una contratación ya informada, la app la propone (se puede cambiar). */
+function contratoSugerido(token, nombre, sucursal) {
+  sesion_(token, 'personal');
+  const n = String(nombre || '').trim(), su = String(sucursal || '');
+  const c = CONTRATOS37_.find(k => !k.soloEmpleado && k.re.test(n) && k.suc.test(su)) || (n && CONTRATOS37_.find(k => k.soloEmpleado && k.suc.test(su)));
+  return c ? { entrada: c.h.entrada, salida: c.h.salida, dias: c.h.dias } : null;
+}
 function aplicarContratos37() {
   const out = [];
   lock_(() => {
