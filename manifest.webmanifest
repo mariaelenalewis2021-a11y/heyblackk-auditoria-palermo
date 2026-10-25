@@ -1,7 +1,7 @@
 {
-  "name": "Hey Blackk · Palermo",
-  "short_name": "HB Palermo",
-  "description": "Gestión de Hey Blackk Palermo: fichada, auditoría, cierre diario y KPIs.",
+  "name": "Hey Blackk · Gestión",
+  "short_name": "Hey Blackk",
+  "description": "Gestión de Hey Blackk (Palermo y Lima): fichaje, auditoría, cierre diario, KPIs, clientes y producción.",
   "lang": "es-AR",
   "start_url": "./",
   "scope": "./",
