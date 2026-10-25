@@ -3185,10 +3185,10 @@ function resumenClientes_(D) {
 /** Stock real de Lima (lo que queda libre después de los pedidos): planilla «STOCK vs Pedidos», columna «Stock Lima final». */
 function resumenStock37_(D) {
   const S = D.stock || []; if (!S.length) return null;
-  const tot = k => S.reduce((a, x) => a + (x[k] || 0), 0);
+  const tot = k => Math.round(S.reduce((a, x) => a + (x[k] || 0), 0));
   const porModelo = {}; S.forEach(x => { const m = porModelo[x.modelo] = porModelo[x.modelo] || { modelo: x.modelo, fisico: 0, comprometido: 0, libre: 0, faltante: 0, talles: 0 };
     m.fisico += x.fisico; m.comprometido += x.comprometido; m.libre += x.libre; m.faltante += x.faltante; m.talles++; });
-  const M = Object.keys(porModelo).map(k => porModelo[k]);
+  const M = Object.keys(porModelo).map(k => porModelo[k]); M.forEach(m => ['fisico', 'comprometido', 'libre', 'faltante'].forEach(k => { m[k] = Math.round(m[k]); }));
   return { fisico: tot('fisico'), comprometido: tot('comprometido'), libre: tot('libre'), faltante: tot('faltante'), skus: S.length, modelos: M.length,
     topLibre: M.filter(m => m.libre).sort((a, b) => b.libre - a.libre).slice(0, 5),
     topMenos: M.filter(m => m.faltante || (m.fisico && !m.libre) || m.comprometido).sort((a, b) => (b.faltante - a.faltante) || (a.libre - b.libre)).slice(0, 5) };
