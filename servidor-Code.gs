@@ -159,7 +159,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, conectarContabilium: conectarContabilium, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -1235,6 +1235,21 @@ function descargaFinanzas(token) {
 const CTB_BASE = 'https://rest.contabilium.com';
 const CTB_LECTURAS = [/^\/api\/usuarios\/tieneAcceso$/, /^\/api\/usuarios\/obtenerinfo$/, /^\/api\/comprobantes\/search$/, /^\/api\/clientes\/search$/,
   /^\/api\/inventarios\/getDepositos$/, /^\/api\/inventarios\/getStockByDeposito$/, /^\/api\/conceptos\/search$/, /^\/api\/puntosdeventa\/search$/];
+/** 3.8 · María conecta Contabilium desde la app (sin tocar Propiedades del script): pega el Client ID y la API key, se validan
+    contra Contabilium y recién ahí se guardan en el servidor. Nunca vuelven al teléfono ni quedan en el Historial. Pide PIN. */
+function conectarContabilium(token, id, secreto) {
+  const s = sesion_(token, 'finanzas', true); if (!esMaria_(s.user)) throw new Error('PERM');
+  id = String(id || '').trim(); secreto = String(secreto || '').trim();
+  if (!id || !secreto || id.length > 200 || secreto.length > 300) throw new Error('Completá el Client ID y la API key de Contabilium.');
+  const r = UrlFetchApp.fetch(CTB_BASE + '/token', { method: 'post', muteHttpExceptions: true, contentType: 'application/x-www-form-urlencoded',
+    payload: 'grant_type=client_credentials&client_id=' + encodeURIComponent(id) + '&client_secret=' + encodeURIComponent(secreto) });
+  let j = {}; try { j = JSON.parse(r.getContentText()); } catch (e) {}
+  if (r.getResponseCode() !== 200 || !j.access_token) { log_(s, 'conectar_contabilium', 'error', '', 'Contabilium rechazó las credenciales (HTTP ' + r.getResponseCode() + ')'); throw new Error('Contabilium no aceptó esos datos (HTTP ' + r.getResponseCode() + '). Revisá que sean el Client ID y la API key de Mi cuenta → API.'); }
+  PROPS.setProperty('CONTABILIUM_ID', id); PROPS.setProperty('CONTABILIUM_SECRET', secreto);
+  try { CACHE.put('CTB_TOKEN', j.access_token, Math.max(60, Math.min(21000, (Number(j.expires_in) || 3600) - 120))); CACHE.remove('FIN38_R'); } catch (e) {}
+  log_(s, 'conectar_contabilium', 'ok', '', 'Conexión de solo lectura con Contabilium guardada');
+  return { ok: true };
+}
 function ctbConfigurado_() { return !!(PROPS.getProperty('CONTABILIUM_ID') && PROPS.getProperty('CONTABILIUM_SECRET')); }
 function ctbToken_(forzar) {
   if (!forzar) { const c = CACHE.get('CTB_TOKEN'); if (c) return c; }

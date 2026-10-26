@@ -36,7 +36,7 @@ const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
 const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
+const SENSIBLES = new Set(["conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -2508,6 +2508,17 @@ function medidorVenta(vendido, necesario){
       el("i",{class:ok?"ok":"bad",style:`width:${Math.min(100,pct)}%`})),
     el("div",{class:"row med-txt"}, el("b",{text:`${pct} % de lo necesario`}), el("span",{class:"hint",text: ok?"✅ se llegó":"Faltó vender "+moneyK(necesario-vendido)})));
 }
+/** Solo María: conectar Contabilium pegando el Client ID y la API key (se validan y se guardan en el servidor; no quedan en el teléfono). */
+function formContabilium(recargar){
+  const id = el("input",{type:"text",autocomplete:"off",spellcheck:"false",placeholder:"Client ID (Mi cuenta → API)","aria-label":"Client ID de Contabilium"});
+  const sec = el("input",{type:"password",autocomplete:"new-password",placeholder:"API key / Client Secret","aria-label":"API key de Contabilium"});
+  const err = el("div",{class:"notice bad",hidden:true}), b = el("button",{class:"btn primary",type:"submit",text:"🔌 Conectar Contabilium"});
+  return el("form",{class:"grid ctb38",onsubmit:async e=>{ e.preventDefault(); err.hidden=true; spinBtn(b,"Verificando con Contabilium…");
+      try{ await apiS("conectarContabilium", id.value, sec.value); id.value=""; sec.value=""; toast("✅ Contabilium conectado (solo lectura)."); recargar(true); }
+      catch(x){ unspin(b); sec.value=""; err.textContent=msgErr(x); err.hidden=false; } }},
+    el("p",{class:"lead",text:"🔒 Conectar Contabilium (solo lo ves vos). En Contabilium: tu nombre → Configuración → API → Credenciales. Copiá y pegá los dos datos acá. Se verifican con Contabilium y se guardan en el servidor; no quedan en el teléfono."}),
+    id, sec, err, b);
+}
 function pintarFinanzas(body, D, recargar){
   if (!D.conectado){
     body.append(el("div",{class:"card notice warn"}, el("b",{text:"El panel todavía no está conectado a la planilla."}),
@@ -2604,6 +2615,7 @@ function pintarFinanzas(body, D, recargar){
   // 7c · Ventas facturadas: Contabilium ↔ Templete
   const K = R.contabilium || {};
   { const card = el("div",{class:"card"}, el("h2",{text:"🧾 Ventas facturadas: Contabilium y Templete"}));
+    if (D.maria && (!K.configurado || !K.ok)) card.append(formContabilium(recargar));
     if (!K.configurado) card.append(el("p",{class:"lead",text:"Cuando se conecte Contabilium, acá vas a ver lo facturado (COT) en Palermo 0001, Lima 0005 y Janette 0007, ya descontadas las notas de crédito. Lo que todavía no esté en el Templete se suma solo al mes, y cuando lo cargues se concilia por número de factura, sin duplicar."}));
     else if (!K.ok) card.append(el("p",{class:"notice warn",text:"No se pudo leer Contabilium: "+(K.error||"error")+". El panel sigue con los datos del Templete."}));
     else K.conciliacion.forEach(c=>{
