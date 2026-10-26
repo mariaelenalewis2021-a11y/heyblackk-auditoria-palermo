@@ -844,8 +844,20 @@ function dbxToken_(forzar) {
   return j.access_token;
 }
 /** Descarga (solo lectura) la planilla financiera de Dropbox. Devuelve {blob, modificado, rev}. */
+/* Hay dos copias del Templete (carpeta RESULTADOS y raíz del Dropbox): se usa la que se guardó por última vez. Solo lee metadatos. */
+function dbxElegirCopia_() {
+  if (PROPS.getProperty('DROPBOX_ARCHIVO')) return { alt: false };
+  const meta = p => { const r = UrlFetchApp.fetch('https://api.dropboxapi.com/2/files/get_metadata', { method: 'post', muteHttpExceptions: true, contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + dbxToken_() }, payload: JSON.stringify({ path: p }) });
+    if (r.getResponseCode() !== 200) return null; try { const j = JSON.parse(r.getContentText()); return { cuando: j.client_modified > j.server_modified ? j.client_modified : j.server_modified, nombre: j.name }; } catch (e) { return null; } };
+  try { const a = meta(DBX_ARCHIVO_DEF), b = meta(DBX_ARCHIVO_ALT);
+    if (a && b) return { alt: b.cuando > a.cuando, otra: { ruta: b.cuando > a.cuando ? DBX_ARCHIVO_DEF : DBX_ARCHIVO_ALT, modificado: b.cuando > a.cuando ? a.cuando : b.cuando }, usada: b.cuando > a.cuando ? b.cuando : a.cuando };
+    return { alt: !a && !!b };
+  } catch (e) { return { alt: false }; }
+}
 function dbxDescargar_() {
-  let alt = false;
+  const eleg = dbxElegirCopia_();
+  let alt = !!eleg.alt;
   for (let i = 0; i < 3; i++) {
     const r = UrlFetchApp.fetch('https://content.dropboxapi.com/2/files/download', { method: 'post', muteHttpExceptions: true,
       headers: { Authorization: 'Bearer ' + dbxToken_(i > 0 && !alt), 'Dropbox-API-Arg': JSON.stringify({ path: dbxArchivo_(alt) }).replace(/[\u007f-￿]/g, c => '\\u' + ('000' + c.charCodeAt(0).toString(16)).slice(-4)) } });
@@ -855,7 +867,7 @@ function dbxDescargar_() {
     if (code === 409) throw new Error('No encuentro el archivo en Dropbox (' + dbxArchivo_(alt) + '). ¿Le cambiaron el nombre o lo movieron?');
     if (code !== 200) throw new Error('Dropbox respondió HTTP ' + code + ' al leer el archivo.');
     let meta = {}; try { meta = JSON.parse(r.getHeaders()['dropbox-api-result'] || r.getHeaders()['Dropbox-API-Result'] || '{}'); } catch (e) {}
-    return { blob: r.getBlob(), modificado: meta.server_modified || null, rev: meta.rev || null, nombre: meta.name || dbxArchivo_(alt), ruta: dbxArchivo_(alt) };
+    return { blob: r.getBlob(), modificado: eleg.usada || meta.server_modified || null, rev: meta.rev || null, nombre: meta.name || dbxArchivo_(alt), ruta: dbxArchivo_(alt), otraCopia: eleg.otra || null };
   }
 }
 /** Diagnóstico (desde el editor, solo lee): hojas, filas y ENCABEZADOS de texto (sin números) para mapear pagos, ventas y egresos. */
@@ -1178,7 +1190,9 @@ function finanzas_(forzar) {
   if (dup.duplicados.length) R.alertas.push({ nivel: 'amarillo', texto: 'En el Templete hay ' + dup.duplicados.length + ' facturas cargadas dos veces (mismo número y mismo cliente): suman ' + $M_(dup.montoDeMas) + ' de más en ventas. Están en «Control de facturas».' });
   if (dup.mismoNumero.length) R.alertas.push({ nivel: 'amarillo', texto: dup.mismoNumero.length + ' números de factura aparecen con clientes distintos en el Templete: seguramente es un error de tipeo en el número.' });
   if (ctb.ok) ctb.conciliacion.forEach(c => { if (c.montoFalta > 0) R.recomendaciones.push('Cargar en el Templete las ' + c.faltaCargar.length + ' facturas de ' + MES_NOM(c.mes).split(' ')[0] + ' que están en Contabilium (' + $M_(c.montoFalta) + '). Mientras tanto el panel ya las suma.'); });
-  R.archivo = d.nombre; R.modificado = d.modificado; R.leida = new Date().toISOString();
+  R.archivo = d.nombre; R.modificado = d.modificado; R.ruta = d.ruta; R.leida = new Date().toISOString();
+  if (d.otraCopia && d.otraCopia.modificado && d.modificado && d.otraCopia.modificado.slice(0, 16) !== d.modificado.slice(0, 16))
+    R.alertas.push({ nivel: 'amarillo', texto: 'Hay dos copias del Templete en Dropbox y no son iguales. Se usó la más nueva (' + (d.ruta.indexOf('/RESULTADOS/') === 0 ? 'carpeta RESULTADOS' : 'raíz del Dropbox') + '). Conviene dejar una sola para no cargar datos en la equivocada.' });
   const s = JSON.stringify(R); if (s.length < 95000) try { CACHE.put('FIN38_R', s, 1800); } catch (e) {}
   CACHE.put('FIN38_F', 'x', 1);   // marca de lectura
   PROPS.setProperty('FIN_SYNC', JSON.stringify({ ts: R.leida, ok: true, modificado: d.modificado, filas: filas, contabilium: ctb.ok ? 'ok' : ctb.configurado ? 'error' : 'sin conectar' }));
@@ -1425,6 +1439,20 @@ function descargaCyber(token) {
       filas: L.map(x => [x.codigo, x.nombre, x.temporada, x.stock, x.palermo == null ? '' : x.palermo, x.lima == null ? '' : x.lima, Math.round(x.precio), x.valorStock, (JSON.parse(PROPS.getProperty('CTB_PROD') || '{"todos":[]}').todos.find(t => t.codigo === x.codigo) || {}).unidades || 0]) },
       { nombre: 'Resumen por temporada', columnas: ['Temporada', 'Productos', 'Unidades', 'Valor del stock'], dinero: [3],
         filas: Object.entries(L.reduce((o, x) => { const t = o[x.temporada] = o[x.temporada] || [0, 0, 0]; t[0]++; t[1] += x.stock; t[2] += x.valorStock; return o; }, {})).sort((a, b) => b[1][2] - a[1][2]).map(([k, v]) => [k, v[0], v[1], v[2]]) }] };
+}
+/** Editor: relee Templete + Contabilium (sin caché) y muestra un resumen de control. Solo lectura. */
+function refrescarTemplete() {
+  const hoy = hoy_(); ['CTBV_' + finMesAnt_(hoy.slice(0, 7)) + '-01_' + hoy, 'FIN38_R'].forEach(k => { try { CACHE.remove(k); } catch (e) {} });
+  const out = actualizacionDiaria();
+  const R = JSON.parse(CACHE.get('FIN38_R') || '{}');
+  const d = dbxDescargar_(), F = finLeerData_(d.blob);
+  const busca = F.filter(x => /0005-00007507/.test(x.factura || '') || (/eizikovit/i.test(x.contraparte || '') && x.tipo === 'egreso')).map(x => [x.fila, x.fecha, x.tipo, x.rubro, x.cuenta, (x.contraparte || '').slice(0, 25), x.factura, Math.round(x.monto)]);
+  const A = R.anticipos || {}, D = R.duplicados || { duplicados: [], mismoNumero: [] }, K = (R.contabilium || {}).conciliacion || [];
+  Logger.log('REF1 ' + JSON.stringify({ act: out.map(o => o.planilla + ':' + (o.ok ? 'ok' : o.error)), archivo: R.archivo, modificado: R.modificado, filas: R.filas, claves: Object.keys(R) }));
+  Logger.log('REF2 ' + JSON.stringify({ dupN: D.duplicados.length, deMas: Math.round(D.montoDeMas || 0), mismoNumero: D.mismoNumero.length, lista: D.duplicados.slice(0, 12).map(x => [x.factura, String(x.cliente || '').slice(0, 20), x.filas]), busca: busca }).slice(0, 6000));
+  Logger.log('REF3 ' + JSON.stringify({ alertas: (R.alertas || []).map(a => String(a.texto).slice(0, 160)), recomendaciones: (R.recomendaciones || []).map(t => String(t).slice(0, 160)) }).slice(0, 6000));
+  Logger.log('REF4 ' + JSON.stringify({ antClaves: Object.keys(A), clientes: (A.clientes || A.lista || []).slice(0, 10).map(c => [c.cliente, Math.round(c.anticipado || 0), Math.round(c.pedido || 0), Math.round(c.pagado || 0), (c.avisos || []).map(a => String(a.texto || a).slice(0, 90))]), conc: K.map(c => [c.mes, (c.faltaCargar || []).length, Math.round(c.montoFalta || 0), (c.diferencias || []).length, (c.noEnCtb || []).length]) }).slice(0, 7000));
+  Logger.log('REF5 ' + JSON.stringify({ mes: R.mes, ultimo: R.ultimo, meses: (R.meses || []).slice(-4) }).slice(0, 4000));
 }
 /* =================== 3.7 · Contexto que puede impactar a Hey Blackk (dólar + noticias) =================== */
 /* Fuentes públicas y gratuitas, sin clave: DolarApi (cotizaciones) y Google Noticias (titulares en español, Argentina).
