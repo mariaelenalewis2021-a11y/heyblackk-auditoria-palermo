@@ -1381,11 +1381,14 @@ function ctbProductos_(dias) {
 /** Cobranzas pendientes: comprobantes del último año con saldo, agrupados por cliente (vencido / por vencer). */
 function ctbCobranzas_() {
   const hasta = hoy_(), desde = sumarDias_(hasta, -365), cli = {};
-  ctbComprobantes_(desde, hasta, 150).filter(x => x.saldo > 0.5 && !CTB_ES_NC(x.tipo)).forEach(x => {
-    const k = x.cliente || 'Sin nombre', C = cli[k] = cli[k] || { cliente: k, saldo: 0, vencido: 0, comprobantes: 0, masViejo: null, franquicia: finFranq_(k) };
+  /* Notas de crédito con saldo = plata a favor del cliente: se descuenta de lo que debe (no se cobra dos veces). */
+  ctbComprobantes_(desde, hasta, 150).filter(x => x.saldo > 0.5).forEach(x => {
+    const k = x.cliente || 'Sin nombre', C = cli[k] = cli[k] || { cliente: k, saldo: 0, vencido: 0, aFavor: 0, comprobantes: 0, masViejo: null, franquicia: finFranq_(k) };
+    if (CTB_ES_NC(x.tipo)) { C.aFavor += x.saldo; return; }
     C.saldo += x.saldo; C.comprobantes++; if (x.vence && x.vence < hasta) C.vencido += x.saldo; if (!C.masViejo || x.fecha < C.masViejo) C.masViejo = x.fecha; });
-  const L = Object.keys(cli).map(k => cli[k]).sort((a, b) => b.saldo - a.saldo);
-  return { total: L.reduce((a, c) => a + c.saldo, 0), vencido: L.reduce((a, c) => a + c.vencido, 0), clientes: L.length, top: L.slice(0, 25).map(c => Object.assign({}, c, { saldo: Math.round(c.saldo), vencido: Math.round(c.vencido) })), leida: new Date().toISOString() };
+  Object.keys(cli).forEach(k => { const C = cli[k]; C.saldo = Math.max(0, C.saldo - C.aFavor); C.vencido = Math.min(C.vencido, C.saldo); });
+  const L = Object.keys(cli).map(k => cli[k]).filter(c => c.saldo > 0.5).sort((a, b) => b.saldo - a.saldo);
+  return { total: L.reduce((a, c) => a + c.saldo, 0), vencido: L.reduce((a, c) => a + c.vencido, 0), clientes: L.length, top: L.slice(0, 25).map(c => Object.assign({}, c, { saldo: Math.round(c.saldo), vencido: Math.round(c.vencido), aFavor: Math.round(c.aFavor) })), leida: new Date().toISOString() };
 }
 /** Productos FUERA DE TEMPORADA (el código no termina en SS27) con stock, para el Cyber Monday. Stock total y en HB Palermo / HB Lima. */
 function ctbFueraTemporada_() {
