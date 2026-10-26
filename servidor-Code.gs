@@ -1013,6 +1013,8 @@ function finResumen_(F, hoy) {
     const ent = lista.filter(x => x.tipo === 'ingreso').reduce((a, x) => a + x.monto, 0);
     return Object.keys(o).map(g => ({ grupo: g, nombre: GRUPO_TXT[g], monto: o[g], cada100: ent ? Math.round(o[g] / ent * 100) : null })).sort((a, b) => b.monto - a.monto); };
   const destinoAnio = destinoDe(delAnio), destinoMes = ult ? destinoDe(validas.filter(x => x.mes === ult.mes)) : [];
+  // Todos los meses del año hasta hoy (el mes en curso, parcial)
+  const destinoMeses = Array.from(new Set(delAnio.map(x => x.mes))).filter(m => m <= mesHoy).sort().map(m => ({ mes: m, enCurso: m === mesHoy, lista: destinoDe(delAnio.filter(x => x.mes === m)) })).filter(d => d.lista.length);
   // Punto de equilibrio con los 3 últimos meses cerrados: gastos fijos por mes ÷ (1 − parte de cada venta que se va en hacer la ropa)
   const ult3 = cerrados.slice(-3), en3 = validas.filter(x => ult3.some(M => M.mes === x.mes));
   const sum3 = f => en3.filter(f).reduce((a, x) => a + x.monto, 0);
@@ -1034,7 +1036,7 @@ function finResumen_(F, hoy) {
   if (equilibrio && ult && ult.ingresos < equilibrio.necesario) recomendaciones.unshift('Vender más o bajar gastos: para no perder plata hacen falta unos ' + $M_(Math.round(equilibrio.necesario / 1e5) * 1e5) + ' por mes y en ' + MES_NOM(ult.mes).split(' ')[0] + ' entraron ' + $M_(ult.ingresos) + '.');
   const stock = F.stock ? Object.assign({}, F.stock, { mes: anio + '-' + ('0' + F.stock.mesNum).slice(-2) }) : null;
   if (stock && stock.mes < (ult ? ult.mes : mesHoy)) recomendaciones.push('Actualizar el valor de la mercadería en la hoja «cierre»: el último dato cargado es de ' + MES_NOM(stock.mes).split(' ')[0] + '.');
-  const simple = { destinoAnio: destinoAnio, destinoMes: destinoMes, equilibrio: equilibrio, semaforo: semaforo, mejor: mejor, peor: peor, ventasMax: ventasMax, stock: stock, ultimaCarga: F.ultimaCarga || null };
+  const simple = { destinoAnio: destinoAnio, destinoMes: destinoMes, destinoMeses: destinoMeses, equilibrio: equilibrio, semaforo: semaforo, mejor: mejor, peor: peor, ventasMax: ventasMax, stock: stock, ultimaCarga: F.ultimaCarga || null };
   return { mesHoy: mesHoy, anio: anio, meses: L, ultimoCerrado: ult, enCurso: enCurso, simple: simple,
     promedio3: prev3.length ? { ingresos: prom('ingresos'), egresos: prom('egresos'), neto: prom('neto'), ventas: prom('ventas') } : null,
     anioTotales: { ingresos: delAnio.filter(x => x.tipo === 'ingreso').reduce((a, x) => a + x.monto, 0), egresos: egA.reduce((a, x) => a + x.monto, 0), ventas: ventasA.reduce((a, x) => a + x.monto, 0),
@@ -1159,7 +1161,8 @@ function finConciliar_(F, V, meses) {
     Palermo se compara con los cierres de caja de la app (al día), que no dependen de la carga del Templete. */
 function finSectores_(F) {
   const mesHoy = hoy_().slice(0, 7), meses = [finMesAnt_(finMesAnt_(mesHoy)), finMesAnt_(mesHoy), mesHoy], anio = mesHoy.slice(0, 4);
-  const sec = x => finPvNom_(finClave_(x.factura), x.pv) || (/anticipo/i.test(x.cuenta + ' ' + x.detalle) ? 'Anticipos de temporada' : 'Otras ventas');
+  // Anticipos de franquicias aparte; las facturas a franquicias (p. ej. lo que se llevó La Plata) no se suman al local que facturó.
+  const sec = x => /anticipo/i.test(x.cuenta + ' ' + x.detalle) ? 'Anticipos de temporada' : finFranq_(x.contraparte) ? 'Facturas a franquicias' : (finPvNom_(finClave_(x.factura), x.pv) || 'Otras ventas');
   const v = {}, a = {};
   F.filter(x => x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro) && x.mes).forEach(x => { const k = sec(x);
     if (meses.indexOf(x.mes) >= 0) v[k + '|' + x.mes] = (v[k + '|' + x.mes] || 0) + x.monto;
@@ -1168,7 +1171,7 @@ function finSectores_(F) {
   try { tAll_('Cierres').filter(c => Number(c.total) >= 0 && c.fecha).forEach(c => { const f = String(c.fecha).slice(0, 10), m = f.slice(0, 7);
     if (meses.indexOf(m) >= 0) { caja[m] = (caja[m] || 0) + Number(c.total || 0); dias[m] = (dias[m] || 0) + 1; }
     if (!ultimo || f > ultimo) ultimo = f; }); } catch (e) {}
-  const orden = ['Palermo', 'Lima', 'Janette', 'Anticipos de temporada', 'Otras ventas'];
+  const orden = ['Palermo', 'Lima', 'Janette', 'Anticipos de temporada', 'Facturas a franquicias', 'Otras ventas'];
   return { meses: meses, filas: orden.map(s => ({ sector: s, valores: meses.map(m => v[s + '|' + m] || 0), anio: a[s] || 0 })).filter(f => f.anio || f.valores.some(Boolean)),
     cajaPalermo: meses.map(m => caja[m] || 0), diasCaja: meses.map(m => dias[m] || 0), ultimoCierre: ultimo };
 }

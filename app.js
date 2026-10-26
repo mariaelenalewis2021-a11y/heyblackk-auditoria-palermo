@@ -2559,7 +2559,8 @@ function pintarFinanzas(body, D, recargar){
   if ((S.destinoAnio||[]).length){
     const caja = el("div",{}), tabs = el("div",{class:"row seg38"});
     const ver = (L, t)=>{ caja.textContent=""; caja.append(barraCada100(L)); [...tabs.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.k===t)); };
-    [["anio","Todo "+R.anio, S.destinoAnio], ["mes", U?capi(MESL(U.mes)):"", S.destinoMes]].filter(x=>(x[2]||[]).length).forEach(([k,t,L])=>{
+    const opc = [["anio","Todo "+R.anio, S.destinoAnio]].concat((S.destinoMeses||[]).length ? S.destinoMeses.map(d=>[d.mes, capi(MESL(d.mes))+(d.enCurso?" (en curso)":""), d.lista]) : [["mes", U?capi(MESL(U.mes)):"", S.destinoMes]]);
+    opc.filter(x=>(x[2]||[]).length).forEach(([k,t,L])=>{
       const b = el("button",{class:"btn sm",type:"button",text:t,"data-k":k}); b.onclick=()=>ver(L,k); tabs.append(b); });
     body.append(el("div",{class:"card"}, el("h2",{text:"🧭 ¿A dónde se va la plata?"}),
       el("p",{class:"lead",text:"De cada $ 100 que entran a Hey Blackk, cuánto se va en cada cosa:"}), tabs, caja));
@@ -2592,7 +2593,7 @@ function pintarFinanzas(body, D, recargar){
     filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), ...tot.map(v=>el("td",{class:"n",text:moneyK(v)})), el("td",{class:"n",text:moneyK(SX.filas.reduce((a,f)=>a+f.anio,0))})));
     const pal = SX.filas.find(f=>f.sector==="Palermo"), dif = pal ? SX.cajaPalermo[1]-pal.valores[1] : 0;
     body.append(el("div",{class:"card"}, el("h2",{text:"🏬 Ventas por sector"}),
-      el("p",{class:"lead",text:"Palermo (0001), Lima (0005) y Janette (0007) según el número de factura; los anticipos de las franquicias aparte."}),
+      el("p",{class:"lead",text:"Palermo (0001), Lima (0005) y Janette (0007) según el número de factura. Las franquicias van aparte (anticipos y facturas). El mes en curso suma lo facturado en Contabilium que todavía no está en el Templete."}),
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
       SX.cajaPalermo[2] ? el("p",{class:"hint",text:`Palermo en ${mesLargo(M[2])}: ${moneyK(SX.cajaPalermo[2])} según los cierres de caja (${SX.diasCaja[2]} días, último ${fmtF(SX.ultimoCierre)}). Es el dato más al día: el Templete se completa a fin de mes.`}) : null,
       pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03) ? el("p",{class:"notice warn",text:`En ${mesLargo(M[1])} Palermo vendió ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} según las facturas del Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}). Conviene revisar qué no se facturó o qué falta cargar.`}) : null));
