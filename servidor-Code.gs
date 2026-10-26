@@ -1134,6 +1134,23 @@ function finConciliar_(F, V, meses) {
     return r;
   });
 }
+/** 3.8 · Ventas por sector (local): Palermo 0001 · Lima 0005 · Janette 0007 · anticipos de temporada. Últimos 3 meses + año.
+    Palermo se compara con los cierres de caja de la app (al día), que no dependen de la carga del Templete. */
+function finSectores_(F) {
+  const mesHoy = hoy_().slice(0, 7), meses = [finMesAnt_(finMesAnt_(mesHoy)), finMesAnt_(mesHoy), mesHoy], anio = mesHoy.slice(0, 4);
+  const sec = x => finPvNom_(finClave_(x.factura), x.pv) || (/anticipo/i.test(x.cuenta + ' ' + x.detalle) ? 'Anticipos de temporada' : 'Otras ventas');
+  const v = {}, a = {};
+  F.filter(x => x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro) && x.mes).forEach(x => { const k = sec(x);
+    if (meses.indexOf(x.mes) >= 0) v[k + '|' + x.mes] = (v[k + '|' + x.mes] || 0) + x.monto;
+    if (x.mes.slice(0, 4) === anio && x.mes <= mesHoy) a[k] = (a[k] || 0) + x.monto; });
+  const caja = {}, dias = {}; let ultimo = null;
+  try { tAll_('Cierres').filter(c => Number(c.total) >= 0 && c.fecha).forEach(c => { const f = String(c.fecha).slice(0, 10), m = f.slice(0, 7);
+    if (meses.indexOf(m) >= 0) { caja[m] = (caja[m] || 0) + Number(c.total || 0); dias[m] = (dias[m] || 0) + 1; }
+    if (!ultimo || f > ultimo) ultimo = f; }); } catch (e) {}
+  const orden = ['Palermo', 'Lima', 'Janette', 'Anticipos de temporada', 'Otras ventas'];
+  return { meses: meses, filas: orden.map(s => ({ sector: s, valores: meses.map(m => v[s + '|' + m] || 0), anio: a[s] || 0 })).filter(f => f.anio || f.valores.some(Boolean)),
+    cajaPalermo: meses.map(m => caja[m] || 0), diasCaja: meses.map(m => dias[m] || 0), ultimoCierre: ultimo };
+}
 /** Lee la planilla de Dropbox (o la caché de 30 min / misma versión del archivo). */
 function finanzas_(forzar) {
   if (!forzar) { const c = CACHE.get('FIN38_R'); if (c) { try { return JSON.parse(c); } catch (e) {} } }
@@ -1148,7 +1165,7 @@ function finanzas_(forzar) {
     } catch (e) { ctb = { configurado: true, ok: false, error: String(e.message || e).slice(0, 200) }; }
   }
   const R = finResumen_(F), dup = finDuplicados_(F);
-  R.filas = filas; R.contabilium = ctb; R.duplicados = dup; try { R.anticipos = finAnticipos_(F); } catch (e) { R.anticipos = null; }
+  R.filas = filas; R.contabilium = ctb; R.duplicados = dup; try { R.anticipos = finAnticipos_(F); } catch (e) { R.anticipos = null; } try { R.sectores = finSectores_(F); } catch (e) { R.sectores = null; }
   if (dup.duplicados.length) R.alertas.push({ nivel: 'amarillo', texto: 'En el Templete hay ' + dup.duplicados.length + ' facturas cargadas dos veces (mismo número y mismo cliente): suman ' + $M_(dup.montoDeMas) + ' de más en ventas. Están en «Control de facturas».' });
   if (dup.mismoNumero.length) R.alertas.push({ nivel: 'amarillo', texto: dup.mismoNumero.length + ' números de factura aparecen con clientes distintos en el Templete: seguramente es un error de tipeo en el número.' });
   if (ctb.ok) ctb.conciliacion.forEach(c => { if (c.montoFalta > 0) R.recomendaciones.push('Cargar en el Templete las ' + c.faltaCargar.length + ' facturas de ' + MES_NOM(c.mes).split(' ')[0] + ' que están en Contabilium (' + $M_(c.montoFalta) + '). Mientras tanto el panel ya las suma.'); });

@@ -2583,9 +2583,23 @@ function pintarFinanzas(body, D, recargar){
   const sem = R.semanas.slice(-8);
   if (sem.length) body.append(el("div",{class:"card"}, el("h3",{text:"🗓️ Semana a semana"}), barrasIE(sem, x=>fmtF(x.semana).slice(0,5)),
     el("p",{class:"hint",text:"Si una semana aparece sin «entró», casi siempre es porque los cobros todavía no se cargaron."})));
+  // 5b · Ventas por sector (local) + cierres de caja de Palermo
+  if (R.sectores && R.sectores.filas.length){ const SX = R.sectores, M = SX.meses;
+    const cab = el("tr",{}, el("th",{text:"Sector"}), ...M.map((m,i)=>el("th",{class:"n",text:i===2?mesTxt(m)+" (en curso)":mesTxt(m)})), el("th",{class:"n",text:"Año "+R.anio}));
+    const filas = SX.filas.map(f=>el("tr",{}, el("th",{scope:"row",text:f.sector}), ...f.valores.map(v=>el("td",{class:"n",text:v?moneyK(v):"–"})), el("td",{class:"n",text:moneyK(f.anio)})));
+    if (SX.cajaPalermo.some(Boolean)) filas.splice(1,0, el("tr",{class:"caja38"}, el("th",{scope:"row",text:"↳ Palermo según cierres de caja"}), ...SX.cajaPalermo.map((v,i)=>el("td",{class:"n",text:v?moneyK(v)+` (${SX.diasCaja[i]} d)`:"–"})), el("td",{})));
+    const tot = M.map((m,i)=>SX.filas.reduce((a,f)=>a+f.valores[i],0));
+    filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), ...tot.map(v=>el("td",{class:"n",text:moneyK(v)})), el("td",{class:"n",text:moneyK(SX.filas.reduce((a,f)=>a+f.anio,0))})));
+    const pal = SX.filas.find(f=>f.sector==="Palermo"), dif = pal ? SX.cajaPalermo[1]-pal.valores[1] : 0;
+    body.append(el("div",{class:"card"}, el("h2",{text:"🏬 Ventas por sector"}),
+      el("p",{class:"lead",text:"Palermo (0001), Lima (0005) y Janette (0007) según el número de factura; los anticipos de las franquicias aparte."}),
+      el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
+      SX.cajaPalermo[2] ? el("p",{class:"hint",text:`Palermo en ${mesLargo(M[2])}: ${moneyK(SX.cajaPalermo[2])} según los cierres de caja (${SX.diasCaja[2]} días, último ${fmtF(SX.ultimoCierre)}). Es el dato más al día: el Templete se completa a fin de mes.`}) : null,
+      pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03) ? el("p",{class:"notice warn",text:`En ${mesLargo(M[1])} Palermo vendió ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} según las facturas del Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}). Conviene revisar qué no se facturó o qué falta cargar.`}) : null));
+  }
   // 6 · Quién compra y quién paga
   const fila = el("div",{class:"split"});
-  if (R.canales.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🛍️ ¿Por dónde se vende? ("+R.anio+")"}), barrasH(R.canales.slice(0,6), "#4F46E5")));
+  if (!R.sectores && R.canales.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🛍️ ¿Por dónde se vende? ("+R.anio+")"}), barrasH(R.canales.slice(0,6), "#4F46E5")));
   if (R.franquicias.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que pagó cada franquicia ("+R.anio+")"}),
     el("ol",{class:"top5"}, R.franquicias.slice(0,5).map(f=>el("li",{}, el("b",{text:f.franquicia}), ` · ${moneyK(f.cobradoAnio)}`, el("span",{class:"hint",text:f.ultimo?` · último pago ${fmtF(f.ultimo)}`:""}))))));
   if (R.topClientes.length) fila.append(el("div",{class:"card"}, el("h3",{text:"⭐ Los 5 que más compraron ("+R.anio+")"}), el("ol",{class:"top5"}, R.topClientes.map(c=>el("li",{}, el("b",{text:c.nombre}), " · "+moneyK(c.monto))))));
