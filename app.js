@@ -34,7 +34,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas"]);
+const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -2596,6 +2596,26 @@ function pintarFinanzas(body, D, recargar){
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
       SX.cajaPalermo[2] ? el("p",{class:"hint",text:`Palermo en ${mesLargo(M[2])}: ${moneyK(SX.cajaPalermo[2])} según los cierres de caja (${SX.diasCaja[2]} días, último ${fmtF(SX.ultimoCierre)}). Es el dato más al día: el Templete se completa a fin de mes.`}) : null,
       pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03) ? el("p",{class:"notice warn",text:`En ${mesLargo(M[1])} Palermo vendió ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} según las facturas del Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}). Conviene revisar qué no se facturó o qué falta cargar.`}) : null));
+  }
+  // 5c · Productos (Contabilium): más vendidos en Palermo, top 10 de movimiento y Excel para el Cyber Monday
+  if ((R.contabilium||{}).configurado){ const PR = R.productos;
+    const lista = (L, cap) => el("ol",{class:"top5 prod38"}, L.map(x=>el("li",{}, el("b",{text:x.nombre||x.codigo}), ` · ${x.unidades} u`, el("span",{class:"hint",text:` · ${x.codigo}${x.temporada==="fuera"?" · fuera de temporada":""}`}))));
+    const bx = el("button",{class:"btn primary",type:"button",text:"⬇️ Excel fuera de temporada (Cyber Monday)"});
+    bx.onclick = async ()=>{ spinBtn(bx,"Leyendo el stock de Contabilium… (puede tardar un minuto)"); try{ const D = await apiS("descargaCyber"); await exportarXLSX37(D); } catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(bx); };
+    const card = el("div",{class:"card"}, el("h2",{text:"🛍️ Productos: lo que más se vende"}));
+    if (!PR) card.append(el("p",{class:"hint",text:"Todavía no se calculó. Tocá «🔄 Actualizar» arriba de este panel (o esperá a la actualización de las 7 h) para leer los productos de Contabilium."}));
+    else card.append(el("p",{class:"hint",text:`Unidades vendidas del ${fmtF(PR.desde)} al ${fmtF(PR.hasta)} según Contabilium (COT menos notas de crédito, ${PR.comprobantes} comprobantes).`}),
+      el("div",{class:"split"},
+        el("div",{}, el("h3",{text:"🏬 Más vendidos en Palermo · última semana"}), PR.palermo.length ? lista(PR.palermo.slice(0,10)) : el("p",{class:"hint",text:"Sin ventas de Palermo en la semana."})),
+        el("div",{}, el("h3",{text:"🔥 Top 10 de mayor movimiento (todos los locales)"}), PR.todos.length ? lista(PR.todos) : el("p",{class:"hint",text:"Sin datos."}))));
+    card.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Productos que NO son SS27 y tienen stock, con stock en HB Palermo y HB Lima, precio y valor del stock:"}), bx));
+    body.append(card);
+    if (D.maria && R.cobranzas){ const K = R.cobranzas;
+      body.append(el("div",{class:"card"}, el("h2",{text:"💰 Cobranzas pendientes"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
+        el("div",{class:"hkpis"}, hk("Pendiente de cobro", moneyK(K.total), `${K.clientes} clientes`), hk("Vencido", moneyK(K.vencido), "", K.vencido?"neg":""), hk("Por vencer", moneyK(K.total-K.vencido))),
+        el("ol",{class:"top5"}, K.top.slice(0,10).map(c=>el("li",{}, el("b",{text:c.cliente+(c.franquicia?" ("+c.franquicia+")":"")}), ` · ${moneyK(c.saldo)}`, c.vencido?el("span",{class:"pill bad",text:`vencido ${moneyK(c.vencido)}`}):null, el("span",{class:"hint",text:` · ${c.comprobantes} comprobante(s) · desde ${fmtF(c.masViejo)}`})))),
+        el("p",{class:"hint",text:"Sale del saldo de los comprobantes del último año en Contabilium. Se actualiza todos los días a las 7 h y con «Actualizar datos»."})));
+    }
   }
   // 6 · Quién compra y quién paga
   const fila = el("div",{class:"split"});

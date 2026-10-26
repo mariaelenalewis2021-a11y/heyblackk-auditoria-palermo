@@ -159,7 +159,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, conectarContabilium: conectarContabilium, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, descargaCyber: descargaCyber, conectarContabilium: conectarContabilium, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -1091,16 +1091,17 @@ function ctbNormCbte_(c) {
   let clave = finClave_(nro); if (!clave && pv != null && nro != null) clave = finClave_(pv + '-' + nro);
   if (!clave) clave = finClave_(ctbPick_(c, ['NumeroCompleto', 'Comprobante', 'Nombre']));
   const f = String(ctbPick_(c, ['FechaEmision', 'Fecha', 'FechaComprobante', 'fecha']) || '').slice(0, 10);
-  return { id: ctbPick_(c, ['Id', 'ID', 'id']), tipo: tipo, clave: clave, pv: clave.slice(0, 4), fecha: f, mes: f.slice(0, 7),
+  return { id: ctbPick_(c, ['Id', 'ID', 'id']), asociadoId: ctbPick_(c, ['IdComprobanteAsociado']), saldo: Number(ctbPick_(c, ['Saldo'])) || 0, vence: String(ctbPick_(c, ['FechaVencimiento']) || '').slice(0, 10),
+    tipo: tipo, clave: clave, pv: clave.slice(0, 4), fecha: f, mes: f.slice(0, 7),
     total: Math.abs(Number(ctbPick_(c, ['ImporteTotalNeto', 'Total', 'ImporteTotal', 'TotalNeto', 'Importe'])) || 0),
     cliente: String(ctbPick_(c, ['RazonSocial', 'Cliente', 'NombreCliente']) || '').trim(),
     asociado: finClave_(ctbPick_(c, ['ComprobanteAsociado', 'NumeroComprobanteAsociado', 'CbteAsociado', 'ComprobanteOrigen'])) };
 }
 const CTB_ES_VENTA = t => /^COT/.test(t) || /COTIZ/.test(t);
 const CTB_ES_NC = t => /^NC/.test(t) || /NOTA\s*DE\s*CR/.test(t);
-function ctbComprobantes_(desde, hasta) {
+function ctbComprobantes_(desde, hasta, maxPag) {
   const out = [];
-  for (let p = 1; p <= 60; p++) {
+  for (let p = 1; p <= (maxPag || 60); p++) {
     const j = ctbGet_('/api/comprobantes/search', { fechaDesde: desde, fechaHasta: hasta, page: p });
     const L = j.Items || j.items || (Array.isArray(j) ? j : []); if (!L.length) break;
     L.forEach(c => out.push(ctbNormCbte_(c)));
@@ -1112,9 +1113,9 @@ function ctbComprobantes_(desde, hasta) {
 function ctbVentas_(desde, hasta) {
   const ck = 'CTBV_' + desde + '_' + hasta, c = CACHE.get(ck); if (c) { try { return JSON.parse(c); } catch (e) {} }
   const L = ctbComprobantes_(desde, hasta).filter(x => x.clave && FIN_PV[x.pv]);
-  const fc = {}; L.filter(x => CTB_ES_VENTA(x.tipo)).forEach(x => { fc[x.clave] = { clave: x.clave, pv: x.pv, fecha: x.fecha, mes: x.mes, cliente: x.cliente, total: x.total, nc: 0, neto: x.total }; });
+  const fc = {}, porId = {}; L.filter(x => CTB_ES_VENTA(x.tipo)).forEach(x => { fc[x.clave] = { clave: x.clave, pv: x.pv, fecha: x.fecha, mes: x.mes, cliente: x.cliente, total: x.total, nc: 0, neto: x.total }; if (x.id != null) porId[x.id] = fc[x.clave]; });
   const sueltas = [];
-  L.filter(x => CTB_ES_NC(x.tipo)).forEach(n => { const f = n.asociado && fc[n.asociado];
+  L.filter(x => CTB_ES_NC(x.tipo)).forEach(n => { const f = (n.asociadoId && porId[n.asociadoId]) || (n.asociado && fc[n.asociado]);
     if (f) { f.nc += n.total; f.neto = Math.max(0, f.total - f.nc); } else sueltas.push({ clave: n.clave, mes: n.mes, fecha: n.fecha, cliente: n.cliente, total: n.total, asociado: n.asociado }); });
   const R = { desde: desde, hasta: hasta, facturas: Object.keys(fc).map(k => fc[k]), ncSueltas: sueltas, leida: new Date().toISOString() };
   try { const s = JSON.stringify(R); if (s.length < 95000) CACHE.put(ck, s, 3600); } catch (e) {}
@@ -1211,8 +1212,11 @@ const esMaria_ = u => !!u && u.rol === 'admin' && String(u.legajo || '').toUpper
 function finanzasPanel(token, forzar) {
   const s = sesion_(token, 'finanzas');
   if (!dbxConfigurado_()) return { conectado: false };
+  if (forzar && ctbConfigurado_()) { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (!P || Date.now() - new Date(P.leida).getTime() > 2 * 3600000) try { ctbActualizarResumenes_(); } catch (e) {} }
   const R = Object.assign({}, finanzas_(!!forzar)), maria = esMaria_(s.user);
   if (!maria) delete R.anticipos;   // cobranzas pendientes y anticipos: solo el usuario MARIA
+  try { R.productos = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
+  if (maria) try { R.cobranzas = JSON.parse(PROPS.getProperty('CTB_COB') || 'null'); } catch (e) {}
   return { conectado: true, resumen: R, maria: maria, audio: audioFinanzas_(s.user, R), sync: JSON.parse(PROPS.getProperty('FIN_SYNC') || 'null') };
 }
 /** Hojas extra de la descarga: control de facturas, conciliación con Contabilium y (solo MARIA) anticipos por cliente. */
@@ -1259,7 +1263,8 @@ function descargaFinanzas(token) {
    Solo se permiten consultas GET de una lista cerrada: la app no puede crear, modificar ni borrar nada en Contabilium. */
 const CTB_BASE = 'https://rest.contabilium.com';
 const CTB_LECTURAS = [/^\/api\/usuarios\/tieneAcceso$/, /^\/api\/usuarios\/obtenerinfo$/, /^\/api\/comprobantes\/search$/, /^\/api\/clientes\/search$/,
-  /^\/api\/inventarios\/getDepositos$/, /^\/api\/inventarios\/getStockByDeposito$/, /^\/api\/conceptos\/search$/, /^\/api\/puntosdeventa\/search$/];
+  /^\/api\/inventarios\/getDepositos$/, /^\/api\/inventarios\/getStockByDeposito$/, /^\/api\/conceptos\/search$/, /^\/api\/puntosdeventa\/search$/,
+  /^\/api\/comprobantes\/?$/, /^\/api\/comprobantes\/getById$/];
 /** 3.8 · María conecta Contabilium desde la app (sin tocar Propiedades del script): pega el Client ID y la API key, se validan
     contra Contabilium y recién ahí se guardan en el servidor. Nunca vuelven al teléfono ni quedan en el Historial. Pide PIN. */
 function conectarContabilium(token, id, secreto) {
@@ -1318,6 +1323,96 @@ function contabiliumProbar() {
   Logger.log('CTB ' + JSON.stringify(out));
   PROPS.setProperty('CTB_PRUEBA', JSON.stringify({ ts: new Date().toISOString(), ok: out.token === true }));
   return out;
+}
+/** Diagnóstico 2 (editor, solo lectura): tipos de comprobante, puntos de venta, detalle de un ítem, stock y conceptos. Sin importes ni datos personales. */
+function contabiliumProbar2() {
+  const out = {}, forma = o => o && typeof o === 'object' ? Object.keys(o).map(k => k + ':' + (Array.isArray(o[k]) ? 'lista(' + o[k].length + ')' : o[k] === null ? 'null' : typeof o[k])) : typeof o;
+  const paso = (n, f) => { try { out[n] = f(); } catch (e) { out[n] = 'ERROR ' + String(e.message || e).slice(0, 160); } };
+  const hasta = hoy_(), desde = sumarDias_(hasta, -10); let L = [];
+  paso('cbtes', () => { for (let p = 1; p <= 8; p++) { const j = ctbGet_('/api/comprobantes/search', { fechaDesde: desde, fechaHasta: hasta, page: p }); const I = j.Items || []; L = L.concat(I); if (!I.length || L.length >= (j.TotalItems || 0)) break; }
+    const cnt = k => { const o = {}; L.forEach(c => { const v = String(c[k]); o[v] = (o[v] || 0) + 1; }); return o; };
+    return { total: L.length, tipo: cnt('TipoFc'), pv: cnt('PuntoVenta'), canal: cnt('Canal'), modo: cnt('Modo'), origen: cnt('Origen'), condicion: cnt('CondicionVenta'),
+      numeroForma: Array.from(new Set(L.slice(0, 40).map(c => String(c.Numero).replace(/\d/g, '9')))), asociados: L.filter(c => c.IdComprobanteAsociado).length,
+      conSaldo: L.filter(c => Number(c.Saldo) > 0).length, fechaForma: String(L[0] && L[0].FechaEmision).replace(/\d/g, '9') }; });
+  const cot = L.find(c => /COT/i.test(c.TipoFc) && Number(c.PuntoVenta) === 1) || L[0];
+  if (cot) {
+    paso('detalle1', () => { const j = ctbGet_('/api/comprobantes/', { id: cot.Id }); const it = (j.Items || [])[0]; return { raiz: forma(j), item: forma(it), items: (j.Items || []).length, codigoForma: it ? String(it.Codigo || it.CodigoProducto || '').replace(/\d/g, '9') : null }; });
+    paso('detalle2', () => { const j = ctbGet_('/api/comprobantes/getById', { id: cot.Id }); return forma(j).slice(0, 12); });
+  }
+  paso('conceptos', () => { const j = ctbGet_('/api/conceptos/search', { page: 1 }); const I = j.Items || []; return { raiz: forma(j), total: j.TotalItems, item: forma(I[0]), ss27: I.filter(x => /SS27$/i.test(String(x.Codigo || ''))).length, codigos: I.slice(0, 8).map(x => String(x.Codigo || '').replace(/\d/g, '9')) }; });
+  paso('stockPalermo', () => { const d = ctbGet_('/api/inventarios/getDepositos'), D = (Array.isArray(d) ? d : d.Items || []), pal = D.find(x => /palermo/i.test(x.Nombre) && !/falla/i.test(x.Nombre));
+    const j = ctbGet_('/api/inventarios/getStockByDeposito', { id: pal.Id, page: 1 }); const S = Array.isArray(j) ? j : (j.Items || []); return { raiz: Array.isArray(j) ? 'lista' : forma(j), cantidad: S.length, total: j.TotalItems, depositos: D.map(x => x.Nombre) }; });
+  Logger.log('CTB2 ' + JSON.stringify(out).slice(0, 8000));
+  return out;
+}
+/* =================== 3.8 · Productos, temporada y cobranzas desde Contabilium (SOLO LECTURA) =================== */
+/* Todo se LEE con GET (lista cerrada en CTB_LECTURAS): la app no crea, modifica ni borra nada en Contabilium.
+   Lo pesado (detalle de comprobantes, deuda de clientes) se calcula en la actualización diaria y se guarda resumido. */
+const ctbNum_ = v => Number(String(v == null ? 0 : v).replace(',', '.')) || 0;
+/** Detalle (ítems) de un comprobante, con caché de 6 h por comprobante. */
+function ctbItems_(id) {
+  const ck = 'CTBI_' + id, c = CACHE.get(ck); if (c) { try { return JSON.parse(c); } catch (e) {} }
+  const j = ctbGet_('/api/comprobantes/', { id: id });
+  const I = (j.Items || []).map(it => ({ codigo: String(it.Codigo || '').trim(), nombre: String(it.Concepto || '').trim().slice(0, 80), cant: ctbNum_(it.Cantidad),
+    monto: ctbNum_(it.Cantidad) * ctbNum_(it.PrecioUnitario) * (1 - ctbNum_(it.Bonificacion) / 100) }));
+  try { CACHE.put(ck, JSON.stringify(I), 21600); } catch (e) {}
+  return I;
+}
+/** Productos vendidos en los últimos N días (COT menos notas de crédito), por local según el número (0001/0005/0007). */
+function ctbProductos_(dias) {
+  const hasta = hoy_(), desde = sumarDias_(hasta, -(dias || 7) + 1);
+  const L = ctbComprobantes_(desde, hasta).filter(x => x.id != null && FIN_PV[x.pv] && (CTB_ES_VENTA(x.tipo) || CTB_ES_NC(x.tipo)));
+  const ag = {}, add = (loc, it, signo) => { if (!it.codigo && !it.nombre) return; const k = loc + '|' + (it.codigo || it.nombre), A = ag[k] = ag[k] || { local: loc, codigo: it.codigo, nombre: it.nombre, unidades: 0, monto: 0 };
+    A.unidades += signo * it.cant; A.monto += signo * it.monto; };
+  let leidos = 0;
+  L.forEach(c => { if (leidos >= 400) return; leidos++; const loc = FIN_PV[c.pv], sg = CTB_ES_NC(c.tipo) ? -1 : 1;
+    ctbItems_(c.id).forEach(it => { add(loc, it, sg); add('Todos', it, sg); }); });
+  const top = (loc, n) => Object.keys(ag).map(k => ag[k]).filter(a => a.local === loc && a.unidades > 0).sort((a, b) => b.unidades - a.unidades || b.monto - a.monto).slice(0, n)
+    .map(a => ({ codigo: a.codigo, nombre: a.nombre, unidades: Math.round(a.unidades), monto: Math.round(a.monto), temporada: /SS27$/i.test(a.codigo) ? 'SS27' : 'fuera' }));
+  return { desde: desde, hasta: hasta, comprobantes: leidos, palermo: top('Palermo', 15), lima: top('Lima', 10), janette: top('Janette', 10), todos: top('Todos', 10), leida: new Date().toISOString() };
+}
+/** Cobranzas pendientes: comprobantes del último año con saldo, agrupados por cliente (vencido / por vencer). */
+function ctbCobranzas_() {
+  const hasta = hoy_(), desde = sumarDias_(hasta, -365), cli = {};
+  ctbComprobantes_(desde, hasta, 150).filter(x => x.saldo > 0.5 && !CTB_ES_NC(x.tipo)).forEach(x => {
+    const k = x.cliente || 'Sin nombre', C = cli[k] = cli[k] || { cliente: k, saldo: 0, vencido: 0, comprobantes: 0, masViejo: null, franquicia: finFranq_(k) };
+    C.saldo += x.saldo; C.comprobantes++; if (x.vence && x.vence < hasta) C.vencido += x.saldo; if (!C.masViejo || x.fecha < C.masViejo) C.masViejo = x.fecha; });
+  const L = Object.keys(cli).map(k => cli[k]).sort((a, b) => b.saldo - a.saldo);
+  return { total: L.reduce((a, c) => a + c.saldo, 0), vencido: L.reduce((a, c) => a + c.vencido, 0), clientes: L.length, top: L.slice(0, 25).map(c => Object.assign({}, c, { saldo: Math.round(c.saldo), vencido: Math.round(c.vencido) })), leida: new Date().toISOString() };
+}
+/** Productos FUERA DE TEMPORADA (el código no termina en SS27) con stock, para el Cyber Monday. Stock total y en HB Palermo / HB Lima. */
+function ctbFueraTemporada_() {
+  const C = []; for (let p = 1; p <= 80; p++) { const j = ctbGet_('/api/conceptos/search', { page: p }); const I = j.Items || []; C.push.apply(C, I); if (!I.length || C.length >= (j.TotalItems || 0)) break; }
+  const dep = {}; try { const d = ctbGet_('/api/inventarios/getDepositos'), D = Array.isArray(d) ? d : (d.Items || []);
+    [['palermo', /hb palermo/i], ['lima', /hb lima/i]].forEach(([k, re]) => { const x = D.find(y => re.test(y.Nombre)); if (!x) return; const m = dep[k] = {};
+      for (let p = 1; p <= 80; p++) { const j = ctbGet_('/api/inventarios/getStockByDeposito', { id: x.Id, page: p }); const S = Array.isArray(j) ? j : (j.Items || []);
+        S.forEach(s => { m[String(s.Codigo || '').trim()] = ctbNum_(s.StockActual); }); if (!S.length || Array.isArray(j) || Object.keys(m).length >= (j.TotalItems || 0)) break; } }); } catch (e) {}
+  let vend = {}; try { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (P) P.todos.forEach(x => { vend[x.codigo] = x.unidades; }); } catch (e) {}
+  return C.map(x => ({ codigo: String(x.Codigo || '').trim(), nombre: String(x.Nombre || '').trim(), stock: ctbNum_(x.Stock), precio: ctbNum_(x.PrecioFinal || x.Precio), costo: ctbNum_(x.CostoInterno), estado: String(x.Estado || '') }))
+    .filter(x => x.codigo && !/SS27$/i.test(x.codigo) && x.stock > 0 && !/inactiv|baja/i.test(x.estado))
+    .map(x => Object.assign(x, { palermo: dep.palermo ? (dep.palermo[x.codigo] || 0) : null, lima: dep.lima ? (dep.lima[x.codigo] || 0) : null, temporada: (x.codigo.match(/(SS|AW|FW|OI|PV)\d{2}$/i) || ['sin temporada'])[0].toUpperCase(),
+      valorStock: Math.round(x.stock * x.precio) }))
+    .sort((a, b) => b.stock - a.stock);
+}
+/** Recalcula y guarda (resumido) productos y cobranzas. Lo corre la actualización diaria y «Actualizar datos». */
+function ctbActualizarResumenes_() {
+  if (!ctbConfigurado_()) return null;
+  const out = {};
+  try { const P = ctbProductos_(7); PROPS.setProperty('CTB_PROD', JSON.stringify(P).slice(0, 8500)); out.productos = P.comprobantes; } catch (e) { out.productosError = String(e.message || e).slice(0, 150); }
+  try { const K = ctbCobranzas_(); PROPS.setProperty('CTB_COB', JSON.stringify(K).slice(0, 8500)); out.cobranzas = K.clientes; } catch (e) { out.cobranzasError = String(e.message || e).slice(0, 150); }
+  return out;
+}
+/** Para correr desde el editor: recalcula productos y cobranzas de Contabilium (solo lectura). */
+function actualizarContabilium() { const r = ctbActualizarResumenes_(); console.log('CTB ' + JSON.stringify(r)); return r; }
+/** Excel «Fuera de temporada · Cyber Monday» (permiso Administración y Finanzas). */
+function descargaCyber(token) {
+  const s = sesion_(token, 'finanzas'); if (!ctbConfigurado_()) throw new Error('Contabilium no está conectado.');
+  const L = ctbFueraTemporada_();
+  return { actualizado: new Date().toISOString(), generado: new Date().toISOString(), por: s.user.nombre, titulo: 'Fuera de temporada · Cyber Monday', archivo: 'Cyber-Monday-fuera-de-temporada',
+    hojas: [{ nombre: 'Fuera de temporada', columnas: ['Código', 'Producto', 'Temporada', 'Stock total', 'HB Palermo', 'HB Lima', 'Precio', 'Valor del stock', 'Vendidas última semana'], dinero: [6, 7],
+      filas: L.map(x => [x.codigo, x.nombre, x.temporada, x.stock, x.palermo == null ? '' : x.palermo, x.lima == null ? '' : x.lima, Math.round(x.precio), x.valorStock, (JSON.parse(PROPS.getProperty('CTB_PROD') || '{"todos":[]}').todos.find(t => t.codigo === x.codigo) || {}).unidades || 0]) },
+      { nombre: 'Resumen por temporada', columnas: ['Temporada', 'Productos', 'Unidades', 'Valor del stock'], dinero: [3],
+        filas: Object.entries(L.reduce((o, x) => { const t = o[x.temporada] = o[x.temporada] || [0, 0, 0]; t[0]++; t[1] += x.stock; t[2] += x.valorStock; return o; }, {})).sort((a, b) => b[1][2] - a[1][2]).map(([k, v]) => [k, v[0], v[1], v[2]]) }] };
 }
 /* =================== 3.7 · Contexto que puede impactar a Hey Blackk (dólar + noticias) =================== */
 /* Fuentes públicas y gratuitas, sin clave: DolarApi (cotizaciones) y Google Noticias (titulares en español, Argentina).
@@ -4121,6 +4216,7 @@ function actualizarPlanillas_(s) {
     try { const R = finanzas_(true), k = R.contabilium || {};
       out.push({ planilla: 'Templete registro actividades (Dropbox)', ok: true, ts: R.leida, modificado: R.modificado });
       if (k.configurado) out.push({ planilla: 'Contabilium · ventas facturadas (COT)', ok: !!k.ok, ts: k.leida || R.leida, modificado: null, error: k.ok ? null : k.error });
+      if (k.configurado) { const r2 = ctbActualizarResumenes_() || {}; out.push({ planilla: 'Contabilium · productos y cobranzas', ok: !r2.productosError && !r2.cobranzasError, ts: new Date().toISOString(), modificado: null, error: r2.productosError || r2.cobranzasError || null }); }
     } catch (e) { out.push({ planilla: 'Templete registro actividades (Dropbox)', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
   }
   log_(s, 'actualizar_planillas', out.every(x => x.ok) ? 'ok' : 'error', '', out.map(x => x.planilla + ': ' + (x.ok ? 'ok' : x.error)).join(' · ').slice(0, 300));
