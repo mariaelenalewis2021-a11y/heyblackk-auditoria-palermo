@@ -2590,6 +2590,44 @@ function pintarFinanzas(body, D, recargar){
     el("p",{class:"hint",text:"Es plata «parada» en ropa sin vender. Sale de la hoja «cierre» de la planilla."})));
   if (R.retiros.length) fila2.append(el("div",{class:"card"}, el("h3",{text:"👤 Retiros de los socios ("+R.anio+")"}), barrasH(R.retiros.slice(0,5).map(r=>({nombre:r.nombre.replace(/^Dividendos\s*/i,"").trim()||"Sin nombre", monto:r.monto})), "#B45309")));
   if (fila2.children.length) body.append(fila2);
+  // 7b · Anticipos y cobranzas (solo María)
+  if (D.maria && R.anticipos && R.anticipos.clientes.length){ const A = R.anticipos;
+    body.append(el("div",{class:"card ant38"}, el("h2",{text:"💳 Anticipos de temporada y saldo a cobrar"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
+      el("div",{class:"hkpis"}, hk("Pedidos", moneyK(A.pedidos)), hk("Anticipado", moneyK(A.total), A.pedidos?Math.round(A.total/A.pedidos*100)+" % de los pedidos":"","pos"), hk("Falta cobrar", moneyK(A.saldo), "", "neg")),
+      el("div",{class:"ant38-lista"}, A.clientes.map(c=>el("div",{class:"ant38-cli"},
+        el("div",{class:"row"}, el("b",{text:c.cliente}), el("span",{class:"spacer"}), c.pedido?el("span",{class:"hint",text:`Pedido ${moneyK(c.pedido)}`}):null),
+        c.pedido ? el("div",{class:"med-barra",role:"img","aria-label":`${c.cliente}: cobrado ${c.pct} %`}, el("i",{class:c.pct>=50?"ok":"bad",style:`width:${Math.min(100,c.pct)}%`})) : null,
+        el("p",{class:"hint",text:`Anticipado ${moneyK(c.anticipado)}${c.pedido?` · ${c.pct} % · falta ${moneyK(c.saldo)}`:""}${c.pagadoPlanilla!=null?` · Control ingreso: ${moneyK(c.pagadoPlanilla)}`:""}${c.terceros?` · pagaron también: ${c.terceros.join(", ")}`:""}`}),
+        c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null))),
+      el("p",{class:"hint",text:"El cliente sale del detalle del anticipo (a veces paga un tercero). El pedido y lo abonado vienen de «Control ingreso Nueva temporada 27». El detalle pago por pago está en la descarga."})));
+  }
+  // 7c · Ventas facturadas: Contabilium ↔ Templete
+  const K = R.contabilium || {};
+  { const card = el("div",{class:"card"}, el("h2",{text:"🧾 Ventas facturadas: Contabilium y Templete"}));
+    if (!K.configurado) card.append(el("p",{class:"lead",text:"Cuando se conecte Contabilium, acá vas a ver lo facturado (COT) en Palermo 0001, Lima 0005 y Janette 0007, ya descontadas las notas de crédito. Lo que todavía no esté en el Templete se suma solo al mes, y cuando lo cargues se concilia por número de factura, sin duplicar."}));
+    else if (!K.ok) card.append(el("p",{class:"notice warn",text:"No se pudo leer Contabilium: "+(K.error||"error")+". El panel sigue con los datos del Templete."}));
+    else K.conciliacion.forEach(c=>{
+      card.append(el("h3",{text:capi(mesLargo(c.mes))}),
+        el("div",{class:"hkpis"}, hk("Facturado", moneyK(c.ctbNeto), c.ctbNc?`ya descontadas notas de crédito por ${moneyK(c.ctbNc)}`:`${c.facturas} facturas`),
+          hk("Ya está en el Templete", moneyK(c.montoConciliado), `${c.conciliadas} facturas conciliadas`, "pos"),
+          hk("Falta cargar", moneyK(c.montoFalta), c.faltaCargar.length?`${c.faltaCargar.length} facturas · ya sumadas al panel`:"nada pendiente", c.montoFalta?"neg":"")),
+        Object.keys(c.porLocal).length ? barrasH(Object.keys(c.porLocal).map(k=>({nombre:k,monto:c.porLocal[k]})).sort((a,b)=>b.monto-a.monto), "#0F766E") : null,
+        el("ul",{class:"ant38-av"},
+          c.franquicias.length?el("li",{text:`🟡 ${c.franquicias.length} facturas a franquicias (${moneyK(c.franquicias.reduce((a,x)=>a+x.monto,0))}) no se suman: se aplican contra sus anticipos.`}):null,
+          c.diferencias.length?el("li",{text:`🟡 ${c.diferencias.length} facturas con importe distinto entre Contabilium y el Templete.`}):null,
+          c.noEnCtb.length?el("li",{text:`🟡 ${c.noEnCtb.length} facturas están en el Templete pero no en Contabilium.`}):null,
+          c.anuladas.length?el("li",{text:`🟡 ${c.anuladas.length} facturas anuladas con nota de crédito total siguen cargadas como venta en el Templete.`}):null,
+          c.ncSueltas.length?el("li",{text:`🟡 ${c.ncSueltas.length} notas de crédito sin factura asociada.`}):null));
+    });
+    const Dd = R.duplicados || {duplicados:[],mismoNumero:[]};
+    card.append(el("h3",{text:"Control de facturas del Templete"}),
+      !Dd.duplicados.length && !Dd.mismoNumero.length ? el("p",{class:"hint",text:"✅ Sin facturas repetidas."}) :
+      el("ul",{class:"ant38-av"},
+        Dd.duplicados.length?el("li",{text:`🟡 ${Dd.duplicados.length} facturas cargadas dos veces (mismo número y cliente): ${moneyK(Dd.montoDeMas)} de más en ventas. Ej.: ${Dd.duplicados.slice(0,3).map(x=>x.factura+" ("+x.clientes[0]+")").join(", ")}.`}):null,
+        Dd.mismoNumero.length?el("li",{text:`🟡 ${Dd.mismoNumero.length} números de factura repetidos con clientes distintos (error de tipeo): ${Dd.mismoNumero.slice(0,4).map(x=>x.factura).join(", ")}…`}):null),
+      el("p",{class:"hint",text:"La lista completa, con las filas del Templete, está en «Descargar Excel» → hoja «Control de facturas»."}));
+    body.append(card);
+  }
   // 8 · Qué hacer
   if (R.recomendaciones.length || R.alertas.length) body.append(el("div",{class:"card"}, el("h2",{text:"✅ Qué conviene hacer"}),
     el("ul",{class:"alertas-rrhh"},
