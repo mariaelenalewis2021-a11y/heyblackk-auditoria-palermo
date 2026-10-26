@@ -942,9 +942,13 @@ function finLeerCierre_(xml, shared) {
 }
 /** Plata corta para leer rápido: «$ 99,6 M». */
 const $M_ = n => Math.abs(n) >= 1e6 ? '$ ' + (n / 1e6).toFixed(1).replace('.', ',') + ' M' : $_(n);
-const FIN_FRANQ = [['La Plata', /la plata|no look|no loock|noloo/], ['Rosario', /rosario|sabetta/], ['Uruguay', /uruguay/], ['Córdoba', /cordoba/]];
+/* Franquicias. Por cliente/pagador (reglas estrictas: hay clientas que se llaman «Rosario» o se apellidan «Córdoba»):
+   La Plata = Carolina No Look · Rosario = María Sabetta · Uruguay = Joaquín · Córdoba = Martina Eizikovits.
+   En el DETALLE de un anticipo («Anticipo temporada SS27- Rosario») alcanza con el nombre de la plaza. */
+const FIN_FRANQ = [['La Plata', /la plata|no look|no loock/], ['Rosario', /sabetta|\(\s*rosario\s*\)|franquicia rosario/], ['Uruguay', /uruguay/], ['Córdoba', /eizikovit|\(\s*cordoba\s*\)|franquicia cordoba/]];
+const FIN_FRANQ_DET = [['La Plata', /la plata|no look/], ['Rosario', /rosario|sabetta/], ['Uruguay', /uruguay/], ['Córdoba', /cordoba|eizikovit/]];
 const finFranq_ = c => { const n = finNorm_(c); const f = FIN_FRANQ.find(x => x[1].test(n)); return f ? f[0] : null; };
-const finFranqX_ = x => finFranq_(x.contraparte) || (/anticip|temporada|ss2\d/i.test(x.detalle) ? finFranq_(x.detalle) : null);
+const finFranqX_ = x => finFranq_(x.contraparte) || (/anticip|temporada|ss2\d/i.test(x.detalle) ? (n => { const f = FIN_FRANQ_DET.find(y => y[1].test(n)); return f ? f[0] : null; })(finNorm_(x.detalle)) : null);
 const finCli_ = c => { const n = finNorm_(c).replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim(); return n ? n.replace(/(^| )\S/g, x => x.toUpperCase()) : 'Sin nombre'; };
 /** Resumen financiero: meses, semanas, rubros, cuentas, canales, clientes, franquicias, retiros de socios y alertas. */
 function finResumen_(F, hoy) {
@@ -1039,13 +1043,17 @@ function finAnticipos_(F) {
     pedido: c.montoTotal || c.monto || 0, pagadoPlanilla: c.pagado != null ? c.pagado : null })); } catch (e) {}
   ped.forEach(p => { const C = cli[p.cliente] = cli[p.cliente] || { cliente: p.cliente, anticipado: 0, pagos: [], avisos: [] };
     C.pedido = (C.pedido || 0) + p.pedido; C.tipo = p.tipo; if (p.pagadoPlanilla != null) C.pagadoPlanilla = (C.pagadoPlanilla || 0) + p.pagadoPlanilla; });
+  const anio = hoy_().slice(0, 4), fac = {};
+  F.filter(x => !x.origen && x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro) && !(/anticipo/i.test(x.cuenta) || /anticip/i.test(x.detalle)) && x.mes && x.mes.slice(0, 4) === anio)
+    .forEach(x => { const k = finFranqX_(x); if (k) { const f = fac[k] = fac[k] || { monto: 0, ultimo: null }; f.monto += x.monto; if (x.fecha && (!f.ultimo || x.fecha > f.ultimo)) f.ultimo = x.fecha; } });
   const L = Object.keys(cli).map(k => cli[k]);
+  L.forEach(C => { if (fac[C.cliente]) { C.facturasAnio = fac[C.cliente].monto; C.ultimaFactura = fac[C.cliente].ultimo; } });
   L.forEach(C => {
     C.pagos.sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
     const vistos = {}; C.pagos.forEach(p => { const key = p.fecha + '|' + Math.round(p.monto); if (vistos[key]) C.avisos.push('Dos pagos iguales el mismo día (' + fdm_(p.fecha) + ', ' + $M_(p.monto) + ', filas ' + vistos[key] + ' y ' + p.fila + '): confirmá que no esté cargado dos veces.'); else vistos[key] = p.fila; });
     const sinMedio = C.pagos.filter(p => !p.medio || /^medio de pago$/i.test(p.medio)); if (sinMedio.length) C.avisos.push(sinMedio.length + ' pago(s) sin medio de pago cargado (filas ' + sinMedio.map(p => p.fila).join(', ') + ').');
     const terceros = Array.from(new Set(C.pagos.map(p => p.pagador).filter(n => n && !finFranq_(n)))); if (terceros.length) C.terceros = terceros;
-    if (C.pedido) { C.saldo = Math.max(0, C.pedido - C.anticipado); C.pct = Math.round(C.anticipado / C.pedido * 100); if (!C.anticipado) C.avisos.unshift('Tiene pedido de ' + $M_(C.pedido) + ' y no figura ningún anticipo en el Templete.'); }
+    if (C.pedido) { C.saldo = Math.max(0, C.pedido - C.anticipado); C.pct = Math.round(C.anticipado / C.pedido * 100); if (!C.anticipado) C.avisos.unshift('Tiene pedido de ' + $M_(C.pedido) + ' y no figura ningún anticipo de temporada en el Templete' + (C.facturasAnio ? ' (en el año pagó ' + $M_(C.facturasAnio) + ' en facturas, la última el ' + fdm_(C.ultimaFactura) + ').' : '.')); }
     if (C.pagadoPlanilla != null && Math.abs(C.pagadoPlanilla - C.anticipado) > Math.max(10000, C.anticipado * 0.01))
       C.avisos.push('No coincide con «Control ingreso»: ahí figura abonado ' + $M_(C.pagadoPlanilla) + ' y en el Templete ' + $M_(C.anticipado) + '.');
   });

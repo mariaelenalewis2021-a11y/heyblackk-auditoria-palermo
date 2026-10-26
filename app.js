@@ -2622,7 +2622,7 @@ function pintarFinanzas(body, D, recargar){
       el("div",{class:"ant38-lista"}, A.clientes.map(c=>el("div",{class:"ant38-cli"},
         el("div",{class:"row"}, el("b",{text:c.cliente}), el("span",{class:"spacer"}), c.pedido?el("span",{class:"hint",text:`Pedido ${moneyK(c.pedido)}`}):null),
         c.pedido ? el("div",{class:"med-barra",role:"img","aria-label":`${c.cliente}: cobrado ${c.pct} %`}, el("i",{class:c.pct>=50?"ok":"bad",style:`width:${Math.min(100,c.pct)}%`})) : null,
-        el("p",{class:"hint",text:`Anticipado ${moneyK(c.anticipado)}${c.pedido?` · ${c.pct} % · falta ${moneyK(c.saldo)}`:""}${c.pagadoPlanilla!=null?` · Control ingreso: ${moneyK(c.pagadoPlanilla)}`:""}${c.terceros?` · pagaron también: ${c.terceros.join(", ")}`:""}`}),
+        el("p",{class:"hint",text:`Anticipado ${moneyK(c.anticipado)}${c.pedido?` · ${c.pct} % · falta ${moneyK(c.saldo)}`:""}${c.pagadoPlanilla!=null?` · Control ingreso: ${moneyK(c.pagadoPlanilla)}`:""}${c.facturasAnio?` · facturas pagadas en el año: ${moneyK(c.facturasAnio)}`:""}${c.terceros?` · pagaron también: ${c.terceros.join(", ")}`:""}`}),
         c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null))),
       el("p",{class:"hint",text:"El cliente sale del detalle del anticipo (a veces paga un tercero). El pedido y lo abonado vienen de «Control ingreso Nueva temporada 27». El detalle pago por pago está en la descarga."})));
   }
