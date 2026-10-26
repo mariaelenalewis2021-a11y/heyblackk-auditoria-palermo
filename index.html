@@ -443,6 +443,28 @@ form h3{margin:16px 0 2px}
 .barra-hoy{height:8px;border-radius:4px;background:color-mix(in srgb,var(--ink) 10%,transparent);overflow:hidden} .barra-hoy i{display:block;height:100%;background:#0D9488}
 
 .ctx-lista{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:10px} .ctx-lista li{line-height:1.4} .ctx-lista a{color:inherit;font-weight:600}
+
+/* 3.8 · Finanzas */
+.ie38{display:flex;gap:6px;align-items:flex-end;overflow-x:auto;padding-bottom:4px}
+.ie-col{flex:1 0 46px;display:grid;justify-items:center;gap:3px;min-width:46px}
+.ie-barras{height:120px;display:flex;gap:3px;align-items:flex-end;width:100%;justify-content:center}
+.ie-barras i{display:block;width:40%;border-radius:4px 4px 0 0;min-height:2px} .ie-barras .ing{background:#16A34A} .ie-barras .egr{background:#DC2626}
+.ie-res{font-size:10.5px;font-weight:700;white-space:nowrap} .ie-res.pos{color:#166534} .ie-res.neg{color:#B91C1C}
+.ie-lab{font-size:11px;color:var(--muted);white-space:nowrap}
+.sem38{border-width:2px} .sem38.sem-verde{border-color:var(--ok);background:var(--ok-bg)} .sem38.sem-rojo{border-color:var(--bad);background:var(--bad-bg,#FEF2F2)} .sem38.sem-amarillo{border-color:#D97706;background:#FFFBEB}
+.sem38-cab{display:flex;gap:12px;align-items:flex-start} .sem38-luz{font-size:40px;line-height:1} .sem38-cab h2{margin:2px 0} .sem38-cab .k{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.sem38-lista{margin:10px 0 4px;padding-left:20px;display:grid;gap:6px;font-size:16px;line-height:1.45}
+.medidor{margin-top:10px} .med-barra{height:16px;border-radius:99px;background:var(--line);overflow:hidden} .med-barra i{display:block;height:100%;border-radius:99px} .med-barra i.ok{background:#16A34A} .med-barra i.bad{background:#DC2626}
+.med-txt{justify-content:space-between;margin-top:4px}
+.c100{display:grid;gap:10px;margin-top:8px} .c100-barra{position:relative;display:flex;height:26px;border-radius:8px;overflow:hidden;background:var(--line)} .c100-barra i{display:block;height:100%}
+.c100-100{position:absolute;top:-3px;bottom:-3px;width:3px;background:var(--fg,#111);border-radius:2px}
+.c100-lista{list-style:none;margin:0;padding:0;display:grid;gap:6px} .c100-lista li{display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center;font-size:14px} .c100-lista b{font-variant-numeric:tabular-nums}
+.seg38{gap:6px;margin:6px 0} .seg38 .btn[aria-pressed="true"]{background:var(--brand,#111);color:#fff;border-color:transparent}
+.pasos38{margin:10px 0 0;padding-left:22px;display:grid;gap:6px;line-height:1.45}
+.glos38 summary{cursor:pointer;font-weight:700;font-size:16px} .glos38 dl{margin:10px 0 0;display:grid;gap:4px} .glos38 dt{font-weight:700;margin-top:6px} .glos38 dd{margin:0;color:var(--muted)}
+.bh38{display:grid;gap:8px} .bh-fila{display:grid;grid-template-columns:minmax(90px,38%) 1fr auto;gap:8px;align-items:center;font-size:13px}
+.bh-n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .bh-b{height:10px;border-radius:5px;background:color-mix(in srgb,var(--ink) 8%,transparent);overflow:hidden} .bh-b i{display:block;height:100%}
+.bh-v{font-size:12.5px;white-space:nowrap}
 </style>
 </head>
 <body>

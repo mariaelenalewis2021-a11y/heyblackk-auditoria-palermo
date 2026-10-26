@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.7';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.8';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -34,7 +34,7 @@ const FALLAS_GLOBAL = 60, VENTANA_GLOBAL_SEG = 10 * 60;
 const MAX_FOTO_B64 = 2500000;
 const CIERRE_FILE_DEF = '1NuRUTwd9RwMWC5DdnDR0OS0_0XuPKMH1';
 
-const MODULOS = ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'historial', 'cierre', 'rrhh', 'otros', 'personal', 'config', 'vacaciones', 'clientes', 'produccion'];   // 3.6: clientes y produccion (un jefe nuevo arranca sin ellas)
+const MODULOS = ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'historial', 'cierre', 'rrhh', 'otros', 'personal', 'config', 'vacaciones', 'clientes', 'produccion', 'finanzas'];   // 3.6: clientes y produccion (un jefe nuevo arranca sin ellas)
 const PERMS_ROL = {
   empleado: [],
   responsable: ['ingresos', 'auditar', 'auditoria', 'acciones', 'kpi', 'cierre', 'otros', 'vacaciones'],
@@ -159,7 +159,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -804,6 +804,334 @@ function vozNeural(token, texto, genero, vel) {
     bytes = bytes.concat(Utilities.base64Decode(JSON.parse(r.getContentText()).audioContent));
   }
   return { disponible: true, voz: voz, audio: Utilities.base64Encode(bytes) };
+}
+/* =================== 3.8 · Dropbox (SOLO LECTURA): planilla financiera «Templete registro actividades» =================== */
+/* Conexión privada: una app de Dropbox de la administración con permisos SOLO de lectura (files.content.read, files.metadata.read).
+   Propiedades del script (nunca en el código ni en el teléfono): DROPBOX_APP_KEY, DROPBOX_APP_SECRET y, una sola vez, DROPBOX_CODE
+   (el código que da Dropbox al autorizar). dropboxConectar() lo cambia por un token de renovación (DROPBOX_REFRESH) y borra el código.
+   La app solo DESCARGA el archivo para leerlo: no puede subir, mover, editar ni borrar nada en Dropbox. */
+const DBX_ARCHIVO_DEF = '/RESULTADOS/Templete registro actividades - 2026 OK OK.xlsx';   // carpeta compartida (se actualiza con cada carga)
+const DBX_ARCHIVO_ALT = '/Templete registro actividades - 2026 OK OK.xlsx';               // respaldo: copia suelta en la raíz
+function dbxArchivo_(alt) { return PROPS.getProperty('DROPBOX_ARCHIVO') || (alt ? DBX_ARCHIVO_ALT : DBX_ARCHIVO_DEF); }
+/** Link para autorizar (lo abre la administración, con su sesión de Dropbox). La app key no es secreta. */
+function dropboxLinkAutorizar() {
+  const k = PROPS.getProperty('DROPBOX_APP_KEY'); if (!k) throw new Error('Falta DROPBOX_APP_KEY en Propiedades del script.');
+  const u = 'https://www.dropbox.com/oauth2/authorize?client_id=' + encodeURIComponent(k) + '&response_type=code&token_access_type=offline';
+  Logger.log('DROPBOX_AUTORIZAR ' + u); return u;
+}
+/** Cambia el código de autorización (DROPBOX_CODE) por el token de renovación. Se corre una vez desde el editor. */
+function dropboxConectar() {
+  const k = PROPS.getProperty('DROPBOX_APP_KEY'), sec = PROPS.getProperty('DROPBOX_APP_SECRET'), code = PROPS.getProperty('DROPBOX_CODE');
+  if (!k || !sec || !code) throw new Error('Faltan DROPBOX_APP_KEY, DROPBOX_APP_SECRET o DROPBOX_CODE en Propiedades del script.');
+  const r = UrlFetchApp.fetch('https://api.dropboxapi.com/oauth2/token', { method: 'post', muteHttpExceptions: true,
+    payload: { code: code.trim(), grant_type: 'authorization_code', client_id: k, client_secret: sec } });
+  let j = {}; try { j = JSON.parse(r.getContentText()); } catch (e) {}
+  if (r.getResponseCode() !== 200 || !j.refresh_token) throw new Error('Dropbox no aceptó el código (HTTP ' + r.getResponseCode() + (j.error_description ? ': ' + j.error_description : '') + '). Generá uno nuevo con el link de autorización.');
+  PROPS.setProperty('DROPBOX_REFRESH', j.refresh_token); PROPS.deleteProperty('DROPBOX_CODE');
+  if (j.access_token) try { CACHE.put('DBX_TOKEN', j.access_token, Math.max(60, (Number(j.expires_in) || 14400) - 300)); } catch (e) {}
+  Logger.log('DROPBOX conectado (scopes: ' + (j.scope || '') + ')');
+  return true;
+}
+function dbxConfigurado_() { return !!(PROPS.getProperty('DROPBOX_REFRESH') && PROPS.getProperty('DROPBOX_APP_KEY') && PROPS.getProperty('DROPBOX_APP_SECRET')); }
+function dbxToken_(forzar) {
+  if (!forzar) { const c = CACHE.get('DBX_TOKEN'); if (c) return c; }
+  if (!dbxConfigurado_()) throw new Error('Dropbox no está conectado todavía.');
+  const r = UrlFetchApp.fetch('https://api.dropboxapi.com/oauth2/token', { method: 'post', muteHttpExceptions: true,
+    payload: { grant_type: 'refresh_token', refresh_token: PROPS.getProperty('DROPBOX_REFRESH'), client_id: PROPS.getProperty('DROPBOX_APP_KEY'), client_secret: PROPS.getProperty('DROPBOX_APP_SECRET') } });
+  let j = {}; try { j = JSON.parse(r.getContentText()); } catch (e) {}
+  if (r.getResponseCode() !== 200 || !j.access_token) throw new Error('Dropbox rechazó la conexión (HTTP ' + r.getResponseCode() + '). Puede que se haya revocado el acceso.');
+  try { CACHE.put('DBX_TOKEN', j.access_token, Math.max(60, (Number(j.expires_in) || 14400) - 300)); } catch (e) {}
+  return j.access_token;
+}
+/** Descarga (solo lectura) la planilla financiera de Dropbox. Devuelve {blob, modificado, rev}. */
+function dbxDescargar_() {
+  let alt = false;
+  for (let i = 0; i < 3; i++) {
+    const r = UrlFetchApp.fetch('https://content.dropboxapi.com/2/files/download', { method: 'post', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + dbxToken_(i > 0 && !alt), 'Dropbox-API-Arg': JSON.stringify({ path: dbxArchivo_(alt) }).replace(/[\u007f-￿]/g, c => '\\u' + ('000' + c.charCodeAt(0).toString(16)).slice(-4)) } });
+    const code = r.getResponseCode();
+    if (code === 401 && i === 0) continue;
+    if (code === 409 && !alt && !PROPS.getProperty('DROPBOX_ARCHIVO')) { alt = true; continue; }
+    if (code === 409) throw new Error('No encuentro el archivo en Dropbox (' + dbxArchivo_(alt) + '). ¿Le cambiaron el nombre o lo movieron?');
+    if (code !== 200) throw new Error('Dropbox respondió HTTP ' + code + ' al leer el archivo.');
+    let meta = {}; try { meta = JSON.parse(r.getHeaders()['dropbox-api-result'] || r.getHeaders()['Dropbox-API-Result'] || '{}'); } catch (e) {}
+    return { blob: r.getBlob(), modificado: meta.server_modified || null, rev: meta.rev || null, nombre: meta.name || dbxArchivo_(alt), ruta: dbxArchivo_(alt) };
+  }
+}
+/** Diagnóstico (desde el editor, solo lee): hojas, filas y ENCABEZADOS de texto (sin números) para mapear pagos, ventas y egresos. */
+function dropboxProbar() {
+  const out = { conectado: dbxConfigurado_(), archivo: dbxArchivo_() };
+  if (!out.conectado) { Logger.log('DBX ' + JSON.stringify(out)); return out; }
+  const d = dbxDescargar_(); out.modificado = d.modificado; out.bytes = d.blob.getBytes().length;
+  const hojas = leerXlsx_(d.blob);
+  out.hojas = hojas.map(h => {
+    const refs = Object.keys(h.celdas), filas = {}; let maxF = 0, maxC = '';
+    refs.forEach(r => { const m = r.match(/^([A-Z]+)(\d+)$/), f = Number(m[2]); if (f > maxF) maxF = f; if (m[1].length > maxC.length || (m[1].length === maxC.length && m[1] > maxC)) maxC = m[1];
+      if (typeof h.celdas[r] === 'string' && f <= 12) (filas[f] = filas[f] || []).push(m[1] + ':' + String(h.celdas[r]).slice(0, 40)); });
+    return { nombre: h.nombre, celdas: refs.length, ultimaFila: maxF, ultimaCol: maxC, textosFilas1a12: filas };
+  });
+  Logger.log('DBX ' + JSON.stringify(out).slice(0, 8500));
+  return out;
+}
+/* =================== 3.8 · Finanzas Hey Blackk (planilla «Templete registro actividades», Dropbox, SOLO LECTURA) =================== */
+/* Se lee la hoja «Data» (encabezado en la fila 4): B Fecha factura · D Mes devengado (aa-mm) · E Detalle · F Tipo (Ingreso/Egreso) ·
+   G Rubro · H Cuenta · I Cliente/Proveedor · K Punto de venta · M Nro factura · N Monto transacción · O Medio de pago · P Monto sin IVA.
+   Solo se parsea esa hoja (la planilla tiene ~1 millón de filas con formato): rápido y sin tocar el archivo. */
+function finNorm_(t) { return String(t == null ? '' : t).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ()]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function finSerial_(v) { if (typeof v !== 'number' || v < 20000 || v > 80000) return null; const d = new Date(Math.round((v - 25569) * 86400000)); return d.toISOString().slice(0, 10); }
+function finMes_(v, fecha) {
+  if (typeof v === 'number') { const f = finSerial_(v); return f ? f.slice(0, 7) : null; }
+  const m = String(v || '').trim().match(/^(\d{2}|\d{4})[-\/](\d{1,2})$/);
+  if (m) return (m[1].length === 2 ? '20' + m[1] : m[1]) + '-' + ('0' + m[2]).slice(-2);
+  return fecha ? fecha.slice(0, 7) : null;
+}
+/** Lee solo la hoja «Data» del .xlsx. Devuelve las filas con tipo y monto. */
+function finLeerData_(blob) {
+  blob.setContentType('application/zip');
+  const partes = {}; Utilities.unzip(blob).forEach(b => { partes[b.getName()] = b; });
+  const str = n => partes[n] ? partes[n].getDataAsString('UTF-8') : '';
+  const wb = str('xl/workbook.xml'), rels = str('xl/_rels/workbook.xml.rels');
+  const sh = (wb.match(/<sheet [^>]*name="Data"[^>]*\/>/) || [])[0]; if (!sh) throw new Error('La planilla no tiene la hoja «Data».');
+  const rid = (sh.match(/r:id="([^"]+)"/) || [])[1], tgt = ((rels.match(new RegExp('<Relationship [^>]*Id="' + rid + '"[^>]*>')) || [])[0] || '').match(/Target="([^"]+)"/);
+  const xml = str(tgt ? tgt[1].replace(/^\/?(xl\/)?/, 'xl/') : '');
+  const hojaXml = nombre => { const t = (wb.match(new RegExp('<sheet [^>]*name="' + nombre + '\\s*"[^>]*/>', 'i')) || [])[0]; if (!t) return '';
+    const id = (t.match(/r:id="([^"]+)"/) || [])[1], g = ((rels.match(new RegExp('<Relationship [^>]*Id="' + id + '"[^>]*>')) || [])[0] || '').match(/Target="([^"]+)"/);
+    return str(g ? g[1].replace(/^\/?(xl\/)?/, 'xl/') : ''); };
+  const shared = []; (str('xl/sharedStrings.xml').match(/<si>[\s\S]*?<\/si>/g) || []).forEach(si => shared.push(xmlTexto_((si.match(/<t[^>]*>([\s\S]*?)<\/t>/g) || []).map(t => t.replace(/<t[^>]*>|<\/t>/g, '')).join(''))));
+  const COLS = { B: 'fechaF', C: 'fechaP', D: 'mes', E: 'detalle', F: 'tipo', G: 'rubro', H: 'cuenta', I: 'contraparte', K: 'pv', M: 'factura', N: 'monto', O: 'medio', P: 'sinIva' };
+  const out = [];
+  const reRow = /<row [^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g; let m;
+  while ((m = reRow.exec(xml))) {
+    if (Number(m[1]) < 5) continue;
+    const o = {}; let hay = false;
+    (m[2].match(/<c [^>]*?(?:\/>|>[\s\S]*?<\/c>)/g) || []).forEach(c => {
+      const ref = (c.match(/ r="([A-Z]+)\d+"/) || [])[1], k = COLS[ref]; if (!k) return;
+      const t = (c.match(/ t="([^"]+)"/) || [])[1], v = (c.match(/<v>([\s\S]*?)<\/v>/) || [])[1];
+      let val = null;
+      if (t === 's' && v != null) val = shared[Number(v)]; else if (t === 'inlineStr') val = xmlTexto_(((c.match(/<t[^>]*>([\s\S]*?)<\/t>/) || [])[1]) || '');
+      else if (t === 'str' && v != null) val = xmlTexto_(v); else if (v != null && v !== '') val = isNaN(Number(v)) ? xmlTexto_(v) : Number(v);
+      if (val !== null && val !== '') { o[k] = val; hay = true; }
+    });
+    if (!hay || !/^(ingreso|egreso)$/i.test(String(o.tipo || '').trim())) continue;
+    const fecha = finSerial_(o.fechaF) || finSerial_(o.fechaP);
+    out.push({ fila: Number(m[1]), fecha: fecha, mes: finMes_(o.mes, fecha), tipo: /^i/i.test(String(o.tipo).trim()) ? 'ingreso' : 'egreso',
+      rubro: String(o.rubro || 'Sin rubro').trim(), cuenta: String(o.cuenta || 'Sin cuenta').trim(), contraparte: String(o.contraparte || '').trim(),
+      detalle: String(o.detalle || '').trim().slice(0, 120), pv: String(o.pv || '').trim(), factura: String(o.factura || '').trim(), medio: String(o.medio || '').trim(),
+      monto: Math.abs(Number(o.monto) || 0), sinIva: Number(o.sinIva) || 0 });
+  }
+  try { out.stock = finLeerCierre_(hojaXml('cierre'), shared); } catch (e) { out.stock = null; }
+  out.ultimaCarga = out.reduce((a, x) => x.fecha && x.fecha > a ? x.fecha : a, '');
+  return out;
+}
+/** Hoja «cierre» (solo lectura): mercadería valorizada por local al cierre de cada mes (fila «TOTAL Inventarios»). Toma el último mes cargado. */
+function finLeerCierre_(xml, shared) {
+  if (!xml) return null;
+  const celdas = {}; let m; const re = /<c [^>]*?r="([A-Z]+)(\d+)"[^>]*?(?:\/>|>([\s\S]*?)<\/c>)/g;
+  while ((m = re.exec(xml))) { if (Number(m[2]) > 40 || !m[3]) continue; const v = (m[3].match(/<v>([\s\S]*?)<\/v>/) || [])[1]; if (v == null) continue;
+    const t = (m[0].match(/ t="([^"]+)"/) || [])[1]; celdas[m[1] + m[2]] = t === 's' ? shared[Number(v)] : (t === 'str' ? xmlTexto_(v) : Number(v)); }
+  const filaDe = txt => { for (let f = 1; f <= 40; f++) if (finNorm_(celdas['A' + f]) === finNorm_(txt)) return f; return 0; };
+  const fT = filaDe('TOTAL Inventarios'); if (!fT) return null;
+  const COLS = 'BCDEFGHIJKLM'.split(''); let col = null, mesIdx = -1;
+  COLS.forEach((c, i) => { if (typeof celdas[c + fT] === 'number' && celdas[c + fT] > 0) { col = c; mesIdx = i; } });
+  if (!col) return null;
+  const locales = [];
+  for (let f = fT - 8; f < fT; f++) { const n = String(celdas['A' + f] || ''); const mm = n.match(/Inventarios\s*-\s*(.+)$/i);
+    if (mm && typeof celdas[col + f] === 'number' && celdas[col + f] > 0) locales.push({ nombre: mm[1].trim().replace(/^LP$/i, 'La Plata').replace(/^MIA$/i, 'Miami').toLowerCase().replace(/(^| )\S/g, x => x.toUpperCase()), monto: celdas[col + f] }); }
+  const previo = mesIdx > 0 && typeof celdas[COLS[mesIdx - 1] + fT] === 'number' ? celdas[COLS[mesIdx - 1] + fT] : null;
+  return { mesNum: mesIdx + 1, total: celdas[col + fT], previo: previo, locales: locales.sort((a, b) => b.monto - a.monto) };
+}
+/** Plata corta para leer rápido: «$ 99,6 M». */
+const $M_ = n => Math.abs(n) >= 1e6 ? '$ ' + (n / 1e6).toFixed(1).replace('.', ',') + ' M' : $_(n);
+const FIN_FRANQ = [['La Plata', /la plata|no look|no loock|noloo/], ['Rosario', /rosario|sabetta/], ['Uruguay', /uruguay/], ['Córdoba', /cordoba/]];
+const finFranq_ = c => { const n = finNorm_(c); const f = FIN_FRANQ.find(x => x[1].test(n)); return f ? f[0] : null; };
+const finCli_ = c => { const n = finNorm_(c).replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim(); return n ? n.replace(/(^| )\S/g, x => x.toUpperCase()) : 'Sin nombre'; };
+/** Resumen financiero: meses, semanas, rubros, cuentas, canales, clientes, franquicias, retiros de socios y alertas. */
+function finResumen_(F, hoy) {
+  hoy = hoy || hoy_(); const mesHoy = hoy.slice(0, 7);
+  const validas = F.filter(x => x.mes && x.mes <= mesHoy), futuras = F.filter(x => x.mes && x.mes > mesHoy), sinMes = F.filter(x => !x.mes);
+  const anio = mesHoy.slice(0, 4), delAnio = validas.filter(x => x.mes.slice(0, 4) === anio);
+  const meses = {}; validas.forEach(x => { const M = meses[x.mes] = meses[x.mes] || { mes: x.mes, ingresos: 0, egresos: 0, ventas: 0, retiros: 0, filas: 0 };
+    M[x.tipo === 'ingreso' ? 'ingresos' : 'egresos'] += x.monto; M.filas++;
+    if (x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro)) M.ventas += x.monto;
+    if (x.tipo === 'egreso' && /^caja$/i.test(x.rubro)) M.retiros += x.monto; });
+  const L = Object.keys(meses).sort().map(k => { const M = meses[k]; M.neto = M.ingresos - M.egresos; M.operativo = M.ingresos - (M.egresos - M.retiros); return M; });
+  const cerrados = L.filter(M => M.mes < mesHoy), ult = cerrados[cerrados.length - 1] || null, enCurso = L.find(M => M.mes === mesHoy) || null;
+  const prev3 = cerrados.slice(-4, -1), prom = k => prev3.length ? prev3.reduce((a, M) => a + M[k], 0) / prev3.length : null;
+  // Semanas (por fecha de factura), últimas 10
+  const lunes = f => { const d = new Date(f + 'T12:00:00Z'), w = (d.getUTCDay() + 6) % 7; d.setUTCDate(d.getUTCDate() - w); return d.toISOString().slice(0, 10); };
+  const desdeS = lunes(sumarDias_(hoy, -69)), sem = {};
+  validas.filter(x => x.fecha && x.fecha >= desdeS && x.fecha <= hoy).forEach(x => { const w = lunes(x.fecha); const S = sem[w] = sem[w] || { semana: w, ingresos: 0, egresos: 0 }; S[x.tipo === 'ingreso' ? 'ingresos' : 'egresos'] += x.monto; });
+  const semanas = Object.keys(sem).sort().map(k => sem[k]);
+  // Rubros y cuentas (egresos): año y último mes cerrado
+  const agrupa = (lista, kf) => { const o = {}; lista.forEach(x => { const k = kf(x); o[k] = (o[k] || 0) + x.monto; }); return Object.keys(o).map(k => ({ nombre: k, monto: o[k] })).sort((a, b) => b.monto - a.monto); };
+  const egA = delAnio.filter(x => x.tipo === 'egreso'), egU = ult ? validas.filter(x => x.tipo === 'egreso' && x.mes === ult.mes) : [];
+  const ctaK = x => /^ventas$/i.test(x.rubro) ? 'Devoluciones y ajustes de ventas' : x.cuenta;
+  const rubrosAnio = agrupa(egA, x => x.rubro), cuentasUlt = agrupa(egU, ctaK).slice(0, 5);
+  const cuentasPrev = {}; validas.filter(x => x.tipo === 'egreso' && prev3.some(M => M.mes === x.mes)).forEach(x => { cuentasPrev[ctaK(x)] = (cuentasPrev[ctaK(x)] || 0) + x.monto / Math.max(1, prev3.length); });
+  cuentasUlt.forEach(c => { c.promedio = cuentasPrev[c.nombre] || 0; c.vsPromPct = c.promedio ? Math.round((c.monto / c.promedio - 1) * 100) : null; });
+  // Ventas por canal (punto de venta) y clientes
+  const ventasA = delAnio.filter(x => x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro));
+  const canales = agrupa(ventasA, x => x.pv ? x.pv.replace(/^\d+\s*-\s*/, '') : (finFranq_(x.contraparte) ? 'Franquicias' : 'Mayoristas y otros (sin punto de venta)'));
+  const clientes = agrupa(ventasA, x => finFranq_(x.contraparte) ? finFranq_(x.contraparte) + ' (franquicia)' : finCli_(x.contraparte)).slice(0, 5);
+  // Franquicias: lo cobrado a cada una (ingresos cuyo cliente coincide)
+  const franq = {}; validas.filter(x => x.tipo === 'ingreso' && finFranq_(x.contraparte)).forEach(x => { const k = finFranq_(x.contraparte), f = franq[k] = franq[k] || { franquicia: k, cobrado: 0, cobradoAnio: 0, ultimo: null, porMes: {} };
+    f.cobrado += x.monto; if (x.mes.slice(0, 4) === anio) f.cobradoAnio += x.monto; f.porMes[x.mes] = (f.porMes[x.mes] || 0) + x.monto; if (x.fecha && (!f.ultimo || x.fecha > f.ultimo)) f.ultimo = x.fecha; });
+  // Retiros de socios (rubro Caja), por cuenta, en el año
+  const retiros = agrupa(delAnio.filter(x => x.tipo === 'egreso' && /^caja$/i.test(x.rubro)), x => /^dividendos\s*$/i.test(x.cuenta) ? 'Dividendos sin asignar a un socio' : x.cuenta);
+  const alertas = [];
+  if (ult && ult.neto < 0) alertas.push({ nivel: 'rojo', texto: 'En ' + MES_NOM(ult.mes).split(' ')[0] + ' salió más plata de la que entró: salieron ' + $M_(ult.egresos) + ' y entraron ' + $M_(ult.ingresos) + '. Faltaron ' + $M_(-ult.neto) + '.' });
+  cuentasUlt.filter(c => c.vsPromPct != null && c.vsPromPct >= 40 && c.monto >= 1000000 && c.promedio >= 1000000).slice(0, 2).forEach(c => alertas.push({ nivel: 'amarillo', texto: 'Se gastó más de lo normal en ' + c.nombre.toLowerCase() + ': ' + $M_(c.monto) + ' en ' + MES_NOM(ult.mes).split(' ')[0] + ', ' + c.vsPromPct + ' % más que el promedio de los 3 meses anteriores.' }));
+  const devol = ult ? validas.filter(x => x.tipo === 'egreso' && /^ventas$/i.test(x.rubro) && x.mes === ult.mes && x.monto >= 1000000) : [];
+  devol.slice(0, 2).forEach(x => alertas.push({ nivel: 'amarillo', texto: 'Hay una salida de ' + $M_(x.monto) + ' cargada como «venta»' + (x.contraparte ? ' (' + finCli_(x.contraparte) + ')' : '') + ' en ' + MES_NOM(ult.mes).split(' ')[0] + '. Conviene revisar si es una devolución o un error de carga.' }));
+  if (futuras.length) alertas.push({ nivel: 'amarillo', texto: futuras.length + (futuras.length === 1 ? ' movimiento tiene' : ' movimientos tienen') + ' fecha futura (' + Array.from(new Set(futuras.map(x => MES_NOM(x.mes)))).slice(0, 3).join(', ') + '): seguramente es un error de tipeo en la planilla. Quedan afuera de las cuentas.' });
+  if (sinMes.length) alertas.push({ nivel: 'amarillo', texto: sinMes.length + ' movimientos no tienen mes ni fecha: quedan afuera de las cuentas.' });
+  const recomendaciones = [];
+  if (cuentasUlt[0]) recomendaciones.push('Mirar en detalle lo que se pagó en ' + cuentasUlt[0].nombre.toLowerCase() + ': fue el gasto más grande de ' + MES_NOM(ult.mes).split(' ')[0] + ' (' + $M_(cuentasUlt[0].monto) + ').');
+  const fr = Object.keys(franq).map(k => franq[k]).sort((a, b) => (a.ultimo || '').localeCompare(b.ultimo || ''));
+  if (fr[0] && fr[0].ultimo && fr[0].ultimo < sumarDias_(hoy, -30)) recomendaciones.push('Llamar a la franquicia de ' + fr[0].franquicia + ' para cobrar: su último pago cargado es del ' + fdm_(fr[0].ultimo) + '.');
+  // ---- Panel del jefe (palabras simples): a dónde va la plata, cuánto hay que vender para no perder, semáforo y mercadería ----
+  const GRUPO = r => /^ventas$/i.test(r) ? 'devol' : /^costos?_directos$/i.test(r) ? 'ropa' : /^gtos_admin$/i.test(r) ? 'empresa' : /^gtos_comerciales$/i.test(r) ? 'vender' : /^impuestos$/i.test(r) ? 'impuestos' : /^caja$/i.test(r) ? 'socios' : 'otros';
+  const GRUPO_TXT = { ropa: 'Hacer la ropa (talleres, telas, insumos, envíos)', empresa: 'Mantener la empresa (sueldos, alquileres, bancos)', vender: 'Vender y hacer publicidad', impuestos: 'Impuestos', socios: 'Retiros de los socios', devol: 'Devoluciones y ajustes de ventas', otros: 'Otros gastos' };
+  const destinoDe = lista => { const o = {}; lista.filter(x => x.tipo === 'egreso').forEach(x => { const g = GRUPO(x.rubro); o[g] = (o[g] || 0) + x.monto; });
+    const ent = lista.filter(x => x.tipo === 'ingreso').reduce((a, x) => a + x.monto, 0);
+    return Object.keys(o).map(g => ({ grupo: g, nombre: GRUPO_TXT[g], monto: o[g], cada100: ent ? Math.round(o[g] / ent * 100) : null })).sort((a, b) => b.monto - a.monto); };
+  const destinoAnio = destinoDe(delAnio), destinoMes = ult ? destinoDe(validas.filter(x => x.mes === ult.mes)) : [];
+  // Punto de equilibrio con los 3 últimos meses cerrados: gastos fijos por mes ÷ (1 − parte de cada venta que se va en hacer la ropa)
+  const ult3 = cerrados.slice(-3), en3 = validas.filter(x => ult3.some(M => M.mes === x.mes));
+  const sum3 = f => en3.filter(f).reduce((a, x) => a + x.monto, 0);
+  const ent3 = sum3(x => x.tipo === 'ingreso'), ropa3 = sum3(x => x.tipo === 'egreso' && GRUPO(x.rubro) === 'ropa');
+  const fijos3 = sum3(x => x.tipo === 'egreso' && /^(empresa|vender|impuestos|otros)$/.test(GRUPO(x.rubro)));
+  const pctRopa = ent3 ? ropa3 / ent3 : null, fijosMes = ult3.length ? fijos3 / ult3.length : null;
+  const equilibrio = (pctRopa != null && pctRopa < 0.95 && fijosMes) ? { necesario: fijosMes / (1 - pctRopa), fijosMes: fijosMes, ropaCada100: Math.round(pctRopa * 100),
+    conSocios: (fijosMes + (ult3.length ? sum3(x => x.tipo === 'egreso' && GRUPO(x.rubro) === 'socios') / ult3.length : 0)) / (1 - pctRopa),
+    vendido: ult ? ult.ingresos : 0, mes: ult ? ult.mes : null, meses: ult3.map(M => M.mes) } : null;
+  // Semáforo del último mes cerrado
+  let semaforo = null;
+  if (ult) { const sinSocios = ult.operativo;
+    semaforo = ult.neto >= 0 ? { color: 'verde', titulo: 'Mes positivo', texto: 'En ' + MES_NOM(ult.mes).split(' ')[0] + ' entró más plata de la que salió.' }
+      : sinSocios >= 0 ? { color: 'amarillo', titulo: 'Justo', texto: 'El negocio cubrió sus gastos, pero con los retiros de los socios salió más plata de la que entró.' }
+      : { color: 'rojo', titulo: 'Mes en rojo', texto: 'En ' + MES_NOM(ult.mes).split(' ')[0] + ' salió más plata de la que entró, aun sin contar los retiros de los socios.' }; }
+  const conNeto = L.filter(M => M.mes < mesHoy && M.mes.slice(0, 4) === anio);
+  const mejor = conNeto.slice().sort((a, b) => b.neto - a.neto)[0] || null, peor = conNeto.slice().sort((a, b) => a.neto - b.neto)[0] || null;
+  const ventasMax = conNeto.slice().sort((a, b) => b.ingresos - a.ingresos)[0] || null;
+  if (equilibrio && ult && ult.ingresos < equilibrio.necesario) recomendaciones.unshift('Vender más o bajar gastos: para no perder plata hacen falta unos ' + $M_(Math.round(equilibrio.necesario / 1e5) * 1e5) + ' por mes y en ' + MES_NOM(ult.mes).split(' ')[0] + ' entraron ' + $M_(ult.ingresos) + '.');
+  const stock = F.stock ? Object.assign({}, F.stock, { mes: anio + '-' + ('0' + F.stock.mesNum).slice(-2) }) : null;
+  if (stock && stock.mes < (ult ? ult.mes : mesHoy)) recomendaciones.push('Actualizar el valor de la mercadería en la hoja «cierre»: el último dato cargado es de ' + MES_NOM(stock.mes).split(' ')[0] + '.');
+  const simple = { destinoAnio: destinoAnio, destinoMes: destinoMes, equilibrio: equilibrio, semaforo: semaforo, mejor: mejor, peor: peor, ventasMax: ventasMax, stock: stock, ultimaCarga: F.ultimaCarga || null };
+  return { mesHoy: mesHoy, anio: anio, meses: L, ultimoCerrado: ult, enCurso: enCurso, simple: simple,
+    promedio3: prev3.length ? { ingresos: prom('ingresos'), egresos: prom('egresos'), neto: prom('neto'), ventas: prom('ventas') } : null,
+    anioTotales: { ingresos: delAnio.filter(x => x.tipo === 'ingreso').reduce((a, x) => a + x.monto, 0), egresos: egA.reduce((a, x) => a + x.monto, 0), ventas: ventasA.reduce((a, x) => a + x.monto, 0),
+      retiros: retiros.reduce((a, r) => a + r.monto, 0) },
+    semanas: semanas, rubrosAnio: rubrosAnio, cuentasUltimoMes: cuentasUlt, canales: canales, topClientes: clientes,
+    franquicias: Object.keys(franq).map(k => { const f = franq[k]; return { franquicia: f.franquicia, cobrado: f.cobrado, cobradoAnio: f.cobradoAnio, ultimo: f.ultimo, ultimoMes: ult ? (f.porMes[ult.mes] || 0) : 0 }; }).sort((a, b) => b.cobradoAnio - a.cobradoAnio),
+    retiros: retiros, filas: F.length, fuera: futuras.length + sinMes.length, alertas: alertas, recomendaciones: recomendaciones };
+}
+/** Lee la planilla de Dropbox (o la caché de 30 min / misma versión del archivo). */
+function finanzas_(forzar) {
+  if (!forzar) { const c = CACHE.get('FIN38_R'); if (c) { try { return JSON.parse(c); } catch (e) {} } }
+  const d = dbxDescargar_(), F = finLeerData_(d.blob), R = finResumen_(F);
+  R.archivo = d.nombre; R.modificado = d.modificado; R.leida = new Date().toISOString();
+  const s = JSON.stringify(R); if (s.length < 95000) try { CACHE.put('FIN38_R', s, 1800); } catch (e) {}
+  CACHE.put('FIN38_F', 'x', 1);   // marca de lectura
+  PROPS.setProperty('FIN_SYNC', JSON.stringify({ ts: R.leida, ok: true, modificado: d.modificado, filas: F.length }));
+  return R;
+}
+/** Millones redondeados, para decir en voz alta: «casi 78 millones», «más de 113 millones». */
+function millones_(n) {
+  n = Math.abs(Number(n) || 0); if (n < 1e6) return dinero_(n);
+  const m = n / 1e6, r = Math.round(m);
+  return (Math.abs(m - r) < 0.15 ? '' : m < r ? 'casi ' : 'más de ') + (m < r ? r : Math.floor(m)) + ' millones de pesos';
+}
+function audioFinanzas_(u, R) {
+  if (!R || !R.meses.length) return '';
+  const nombre = String(u && u.nombre || '').trim().split(' ')[0], P = [], U = R.ultimoCerrado, C = R.enCurso, S = R.simple || {};
+  P.push((nombre ? 'Hola ' + nombre + '. ' : 'Hola. ') + 'Te cuento, en pocas palabras, cómo viene la plata de Hey Blackk.');
+  if (U) P.push('En ' + MES_NOM(U.mes).split(' ')[0] + ' entraron ' + millones_(U.ingresos) + ' y salieron ' + millones_(U.egresos) + '. ' +
+    (U.neto >= 0 ? 'Quedaron ' + millones_(U.neto) + ' a favor.' : 'Faltaron ' + millones_(-U.neto) + '.') +
+    (U.retiros ? ' De lo que salió, ' + millones_(U.retiros) + ' fueron retiros de los socios.' : ''));
+  if (S.equilibrio) P.push('Para no perder plata, hoy hay que vender ' + millones_(S.equilibrio.necesario).replace(/^(\d)/, 'unos $1') + ' por mes. ' +
+    (U && U.ingresos >= S.equilibrio.necesario ? 'En ' + MES_NOM(U.mes).split(' ')[0] + ' se llegó.' : 'En ' + MES_NOM(U.mes).split(' ')[0] + ' no se llegó.'));
+  if (S.destinoAnio && S.destinoAnio.length) { const d = S.destinoAnio.filter(x => x.cada100 != null).slice(0, 2);
+    if (d.length) P.push('En el año, de cada cien pesos que entraron, ' + d.map(x => x.cada100 + ' se fueron en ' + x.nombre.split(' (')[0].toLowerCase()).join(' y ') + '.'); }
+  if (C) P.push('En lo que va de ' + MES_NOM(C.mes).split(' ')[0] + ' entraron ' + millones_(C.ingresos) + ' y salieron ' + millones_(C.egresos) + '; faltan cargar cobros.');
+  if (R.franquicias.length) P.push('Lo que pagaron las franquicias en el año: ' + lista37_(R.franquicias.slice(0, 4).map(f => f.franquicia + ', ' + millones_(f.cobradoAnio))) + '.');
+  const rec = R.recomendaciones.filter(t => !/^Vender más o bajar gastos/.test(t))[0];
+  if (rec) P.push('Para revisar: ' + hablar_(rec.charAt(0).toLowerCase() + rec.slice(1).replace(/\$ ?([\d.,]+) M/g, (m, n) => millones_(Number(n.replace(',', '.')) * 1e6)).replace(/\$ ?[\d.]+/g, m => millones_(Number(m.replace(/[^\d]/g, ''))))));
+  return P.join(' ').replace(/\s+/g, ' ').trim();
+}
+function finanzasPanel(token, forzar) {
+  const s = sesion_(token, 'finanzas');
+  if (!dbxConfigurado_()) return { conectado: false };
+  const R = finanzas_(!!forzar);
+  return { conectado: true, resumen: R, audio: audioFinanzas_(s.user, R), sync: JSON.parse(PROPS.getProperty('FIN_SYNC') || 'null') };
+}
+/** Descarga (Excel/PDF) del detalle financiero: meses, rubros por mes, semanas, cuentas y franquicias. */
+function descargaFinanzas(token) {
+  const s = sesion_(token, 'finanzas'); if (!dbxConfigurado_()) throw new Error('La planilla de Dropbox no está conectada.');
+  const d = dbxDescargar_(), F = finLeerData_(d.blob), R = finResumen_(F);
+  const meses = R.meses.map(M => M.mes), rub = {}, mesHoy = R.mesHoy;
+  F.filter(x => x.tipo === 'egreso' && x.mes && x.mes <= mesHoy).forEach(x => { const k = x.rubro + ' · ' + x.cuenta; (rub[k] = rub[k] || {})[x.mes] = (rub[k][x.mes] || 0) + x.monto; });
+  const filasRub = Object.keys(rub).sort().map(k => [k.split(' · ')[0], k.split(' · ')[1]].concat(meses.map(m => Math.round(rub[k][m] || 0)), [Math.round(meses.reduce((a, m) => a + (rub[k][m] || 0), 0))]));
+  return { actualizado: new Date().toISOString(), modificado: d.modificado, generado: new Date().toISOString(), por: s.user.nombre, titulo: 'Finanzas Hey Blackk', archivo: 'Finanzas-Hey-Blackk',
+    hojas: [
+      { nombre: 'Resumen mensual', columnas: ['Mes', 'Ingresos', 'Egresos', 'Resultado', 'Ventas', 'Retiros de socios', 'Resultado sin retiros', 'Movimientos'], dinero: [1, 2, 3, 4, 5, 6],
+        filas: R.meses.map(M => [M.mes, Math.round(M.ingresos), Math.round(M.egresos), Math.round(M.neto), Math.round(M.ventas), Math.round(M.retiros), Math.round(M.operativo), M.filas]) },
+      { nombre: 'Egresos por cuenta y mes', columnas: ['Rubro', 'Cuenta'].concat(meses, ['Total']), dinero: meses.map((m, i) => i + 2).concat([meses.length + 2]), filas: filasRub },
+      { nombre: 'Semanas', columnas: ['Semana del', 'Ingresos', 'Egresos', 'Resultado'], dinero: [1, 2, 3], filas: R.semanas.map(w => [fdm_(w.semana), Math.round(w.ingresos), Math.round(w.egresos), Math.round(w.ingresos - w.egresos)]) },
+      { nombre: 'Ventas por canal (año)', columnas: ['Canal', 'Ventas'], dinero: [1], filas: R.canales.map(c => [c.nombre, Math.round(c.monto)]) },
+      { nombre: 'Franquicias cobrado', columnas: ['Franquicia', 'Cobrado total', 'Cobrado en el año', 'Último mes cerrado', 'Último pago'], dinero: [1, 2, 3], filas: R.franquicias.map(f => [f.franquicia, Math.round(f.cobrado), Math.round(f.cobradoAnio), Math.round(f.ultimoMes), f.ultimo ? fdm_(f.ultimo) : '']) },
+      { nombre: 'Retiros de socios (año)', columnas: ['Cuenta', 'Monto'], dinero: [1], filas: R.retiros.map(r => [r.nombre, Math.round(r.monto)]) }] };
+}
+/* =================== 3.8 · Contabilium (SOLO LECTURA) =================== */
+/* Conexión con la API de Contabilium (https://rest.contabilium.com). Las credenciales viven SOLO en Propiedades del script:
+   CONTABILIUM_ID (email del usuario de la API) y CONTABILIUM_SECRET (API key). Nunca viajan al teléfono ni se escriben en el código.
+   Solo se permiten consultas GET de una lista cerrada: la app no puede crear, modificar ni borrar nada en Contabilium. */
+const CTB_BASE = 'https://rest.contabilium.com';
+const CTB_LECTURAS = [/^\/api\/usuarios\/tieneAcceso$/, /^\/api\/usuarios\/obtenerinfo$/, /^\/api\/comprobantes\/search$/, /^\/api\/clientes\/search$/,
+  /^\/api\/inventarios\/getDepositos$/, /^\/api\/inventarios\/getStockByDeposito$/, /^\/api\/conceptos\/search$/, /^\/api\/puntosdeventa\/search$/];
+function ctbConfigurado_() { return !!(PROPS.getProperty('CONTABILIUM_ID') && PROPS.getProperty('CONTABILIUM_SECRET')); }
+function ctbToken_(forzar) {
+  if (!forzar) { const c = CACHE.get('CTB_TOKEN'); if (c) return c; }
+  const id = PROPS.getProperty('CONTABILIUM_ID'), sec = PROPS.getProperty('CONTABILIUM_SECRET');
+  if (!id || !sec) throw new Error('Contabilium no está configurado (faltan las credenciales en Propiedades del script).');
+  const r = UrlFetchApp.fetch(CTB_BASE + '/token', { method: 'post', muteHttpExceptions: true, contentType: 'application/x-www-form-urlencoded',
+    payload: 'grant_type=client_credentials&client_id=' + encodeURIComponent(id) + '&client_secret=' + encodeURIComponent(sec) });
+  const code = r.getResponseCode(); let j = {}; try { j = JSON.parse(r.getContentText()); } catch (e) {}
+  if (code !== 200 || !j.access_token) throw new Error('Contabilium rechazó las credenciales (HTTP ' + code + (j.error_description ? ': ' + String(j.error_description).slice(0, 120) : '') + ').');
+  try { CACHE.put('CTB_TOKEN', j.access_token, Math.max(60, Math.min(21000, (Number(j.expires_in) || 3600) - 120))); } catch (e) {}
+  return j.access_token;
+}
+/** GET de solo lectura a Contabilium (lista cerrada de rutas). Reintenta una vez si el token venció. */
+function ctbGet_(path, q) {
+  if (!CTB_LECTURAS.some(re => re.test(path))) throw new Error('Ruta de Contabilium no permitida: ' + path);
+  const qs = q ? '?' + Object.keys(q).filter(k => q[k] != null && q[k] !== '').map(k => k + '=' + encodeURIComponent(q[k])).join('&') : '';
+  for (let i = 0; i < 2; i++) {
+    const r = UrlFetchApp.fetch(CTB_BASE + path + qs, { method: 'get', muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + ctbToken_(i > 0), Accept: 'application/json' } });
+    const code = r.getResponseCode();
+    if (code === 401 && i === 0) continue;
+    if (code !== 200) throw new Error('Contabilium respondió HTTP ' + code + ' en ' + path);
+    return JSON.parse(r.getContentText());
+  }
+}
+/** Diagnóstico (se corre desde el editor, solo lee): verifica el acceso y muestra la ESTRUCTURA de los datos (nombres de campos y
+    cantidades, sin importes ni datos personales en el registro) para mapear ventas, cobranzas y stock con los nombres reales. */
+function contabiliumProbar() {
+  const out = { configurado: ctbConfigurado_() };
+  if (!out.configurado) { Logger.log('CTB ' + JSON.stringify(out)); return out; }
+  const forma = o => o && typeof o === 'object' ? Object.keys(o).map(k => k + ':' + (Array.isArray(o[k]) ? 'lista(' + o[k].length + ')' : o[k] === null ? 'null' : typeof o[k])) : typeof o;
+  const paso = (n, f) => { try { out[n] = f(); } catch (e) { out[n] = 'ERROR ' + String(e.message || e).slice(0, 160); } };
+  paso('token', () => !!ctbToken_(true));
+  paso('acceso', () => forma(ctbGet_('/api/usuarios/tieneAcceso')));
+  const hasta = hoy_(), desde = sumarDias_(hasta, -30);
+  paso('comprobantes', () => { const j = ctbGet_('/api/comprobantes/search', { fechaDesde: desde, fechaHasta: hasta, page: 1 });
+    const L = j.Items || j.items || (Array.isArray(j) ? j : []); return { raiz: forma(j), cantidadPagina: L.length, item: forma(L[0]), detalleItem: L[0] && (L[0].Items || L[0].Detalle) ? forma((L[0].Items || L[0].Detalle)[0]) : null }; });
+  paso('clientes', () => { const j = ctbGet_('/api/clientes/search', { page: 1 }); const L = j.Items || j.items || (Array.isArray(j) ? j : []); return { raiz: forma(j), item: forma(L[0]) }; });
+  paso('depositos', () => { const j = ctbGet_('/api/inventarios/getDepositos'); const L = Array.isArray(j) ? j : (j.Items || []); return { cantidad: L.length, item: forma(L[0]), nombres: L.map(d => d.Nombre || d.nombre || d.Descripcion || '').slice(0, 10) }; });
+  paso('stock', () => { const d = ctbGet_('/api/inventarios/getDepositos'), L = Array.isArray(d) ? d : (d.Items || []); if (!L.length) return 'sin depósitos';
+    const j = ctbGet_('/api/inventarios/getStockByDeposito', { id: L[0].Id || L[0].ID || L[0].id }); const S = Array.isArray(j) ? j : (j.Items || []); return { cantidad: S.length, item: forma(S[0]) }; });
+  Logger.log('CTB ' + JSON.stringify(out));
+  PROPS.setProperty('CTB_PRUEBA', JSON.stringify({ ts: new Date().toISOString(), ok: out.token === true }));
+  return out;
 }
 /* =================== 3.7 · Contexto que puede impactar a Hey Blackk (dólar + noticias) =================== */
 /* Fuentes públicas y gratuitas, sin clave: DolarApi (cotizaciones) y Google Noticias (titulares en español, Argentina).
@@ -3613,7 +3941,7 @@ function setTipoCliente(token, clave, tipo) {
   return { clave: k, tipo: tipo };
 }
 /* ---------- Permisos por jefe (solo administración) ---------- */
-const SECCIONES_JEFE = [['clientes', 'Clientes y pedidos'], ['produccion', 'Producción'], ['ingresos', 'Fichaje y horas / RRHH'], ['vacaciones', 'Vacaciones'], ['rrhh', 'Novedades RR. HH.'],
+const SECCIONES_JEFE = [['finanzas', 'Panel del jefe (la plata del negocio)'], ['clientes', 'Clientes y pedidos'], ['produccion', 'Producción'], ['ingresos', 'Fichaje y horas / RRHH'], ['vacaciones', 'Vacaciones'], ['rrhh', 'Novedades RR. HH.'],
   ['kpi', 'KPIs comerciales'], ['cierre', 'Cierre diario'], ['auditar', 'Auditar'], ['auditoria', 'Registro de auditorías'], ['acciones', 'Acciones correctivas'], ['historial', 'Historial'], ['personal', 'Personal'], ['config', 'Configuración'], ['otros', 'Otros']];
 function permisosJefes(token) {
   const s = sesion_(token, 'personal'); if (s.user.rol !== 'admin') throw new Error('PERM');

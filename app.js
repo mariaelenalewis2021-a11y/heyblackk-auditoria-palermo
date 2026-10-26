@@ -34,7 +34,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido"]);
+const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -247,7 +247,7 @@ function pintarVista(id){
   if (id==="otros") return vOtros(main);
   if (!S.user) return loginCard(main, "Ingresá con tu usuario y PIN para abrir este módulo.");
   if (!puedeVer(m)) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
-  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, produccion:vProduccion}[id];
+  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, produccion:vProduccion, finanzas:vFinanzas}[id];
   V(main);
 }
 addEventListener("hashchange", route);
@@ -398,6 +398,7 @@ const ICONOS = {
   vacaciones: '<path d="M3 20h18"/><path d="M12 20V9"/><path d="M4.5 9.5a7.5 7.5 0 0 1 15 0z"/><path d="M12 2.5V4"/><path d="M12 20c0 0-3 .5-4 2"/>',
   feriado: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/><path d="m10.5 16 1.5-3 1.5 3M10 15.5h4"/>',
   clientes: '<path d="M3 8l9-4 9 4-9 4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/>',
+  finanzas: '<path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/><path d="M19 6.5c0-1-1-1.6-2.2-1.6S14.6 5.5 14.6 6.4s1 1.2 2.2 1.4 2.2.6 2.2 1.5-1 1.5-2.2 1.5-2.4-.5-2.4-1.5M16.8 4v1M16.8 10.4v1"/>',
   produccion: '<path d="M4 20V10l5 3V10l5 3V6h6v14z"/><path d="M8 17h2M13 17h2"/>',
   audio: '<path d="M4 10v4h3l4 3.5v-11L7 10z"/><path d="M15 9.5a3.5 3.5 0 0 1 0 5"/><path d="M17.5 7a7 7 0 0 1 0 10"/>'
 };
@@ -418,6 +419,7 @@ const MODULOS = [
   {id:"cierre",    t:"Cierre diario", d:"Cierres de caja de la planilla.", c:"#EA580C", perm:"cierre"},
   {id:"rrhh",      t:"Novedades RR. HH.", d:"Llegadas tarde y ausencias.", c:"#DB2777", perm:"rrhh"},
   {id:"vacaciones",t:"Vacaciones", d:"Solicitudes del equipo.", c:"#0891B2", perm:"vacaciones"},
+  {id:"finanzas",  t:"Panel del jefe", d:"La plata del negocio en palabras simples: qué entró, qué salió, a dónde se fue y qué hacer.", c:"#15803D", perm:"finanzas"},
   {id:"clientes",  t:"Clientes y pedidos", d:"Qué pidió cada cliente, qué se entregó y qué falta.", c:"#B45309", perm:"clientes"},
   {id:"produccion",t:"Producción", d:"Planificado, ingresado, talleres y lo que falta fabricar.", c:"#4F46E5", perm:"produccion"},
   {id:"otros",     t:"Otros", d:"Instalar la app y cambiar tu PIN.", c:"#CA8A04", perm:null},
@@ -2442,6 +2444,167 @@ function cardsControlResumen(K){
       P.taller?hk("Taller: llegó",u36(P.taller.llegado)):null, P.taller&&P.taller.enProduccion?hk("En producción",u36(P.taller.enProduccion)):null, P.taller&&P.taller.porLlegar?hk("Por llegar",u36(P.taller.porLlegar)):null),
     (P.alertas||[]).length ? el("ul",{class:"lista-avisos"}, P.alertas.slice(0,3).map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
   return out;
+}
+/* ===================== 3.8 · Finanzas Hey Blackk (planilla «Templete registro actividades» en Dropbox, solo lectura) =====================
+   En pantalla: tarjetas, gráficos simples y Top 5. El detalle completo va en «Descargar Excel / PDF». */
+const mesTxt = m => { const [y,mm] = String(m).split("-"); return ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][Number(mm)-1]+" "+y.slice(2); };
+const mesLargo = m => { const [y,mm] = String(m).split("-"); return ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"][Number(mm)-1]+" "+y; };
+const pctFin = (a,b) => b ? Math.round((a/b-1)*100) : null;
+const vsTxt = (a,b) => { const p = pctFin(a,b); return p==null ? "" : `${p>=0?"▲ +":"▼ "}${p} % vs. promedio 3 meses`; };
+async function vFinanzas(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  const cargar = async (forzar)=>{
+    VOZ.detener(); body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Leyendo la planilla financiera de Dropbox…"));
+    let D; try{ D = await apiS("finanzasPanel", !!forzar); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    body.textContent=""; pintarFinanzas(body, D, cargar);
+  };
+  cargar(false);
+}
+function botonesDescargaFin(){
+  const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar PDF"});
+  const ir = async (b, fmt)=>{ spinBtn(b, fmt==="xlsx"?"Armando el Excel…":"Armando el PDF…");
+    try{ const D = await apiS("descargaFinanzas"); await (fmt==="xlsx" ? exportarXLSX37(D) : exportarPDF37(D)); }
+    catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); }
+    unspin(b); };
+  bx.onclick = ()=>ir(bx,"xlsx"); bp.onclick = ()=>ir(bp,"pdf");
+  return el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Todo el detalle para guardar o imprimir (meses, gastos por cuenta, semanas, canales, franquicias y retiros):"}), bx, bp);
+}
+/** Barras dobles por período (ingresos vs egresos). */
+function barrasIE(L, etiqueta){
+  const max = Math.max(1, ...L.map(x=>Math.max(x.ingresos, x.egresos)));
+  return el("div",{class:"ie38",role:"img",tabindex:"0","aria-label":L.map(x=>`${etiqueta(x)}: ingresos ${moneyK(x.ingresos)}, egresos ${moneyK(x.egresos)}`).join("; ")},
+    L.map(x=>el("div",{class:"ie-col"},
+      el("div",{class:"ie-barras"}, el("i",{class:"ing",style:`height:${(x.ingresos/max*100).toFixed(1)}%`,title:"Ingresos "+moneyK(x.ingresos)}), el("i",{class:"egr",style:`height:${(x.egresos/max*100).toFixed(1)}%`,title:"Egresos "+moneyK(x.egresos)})),
+      el("span",{class:"ie-res "+(x.ingresos-x.egresos>=0?"pos":"neg"),text:moneyK(x.ingresos-x.egresos)}),
+      el("span",{class:"ie-lab",text:etiqueta(x)}))));
+}
+function barrasH(L, color){
+  const max = Math.max(1, ...L.map(x=>x.monto));
+  return el("div",{class:"bh38"}, L.map(x=>el("div",{class:"bh-fila"}, el("span",{class:"bh-n",text:x.nombre}), el("span",{class:"bh-b"}, el("i",{style:`width:${(x.monto/max*100).toFixed(1)}%;background:${color}`})), el("b",{class:"bh-v",text:moneyK(x.monto)}))));
+}
+const MESL = m => mesLargo(m).split(" ")[0];
+const capi = t => String(t).replace(/^./,c=>c.toUpperCase());
+/** «Normal» = promedio de los 3 meses anteriores. Devuelve palabras, no porcentajes sueltos. */
+function vsNormal(a, b, gasto){
+  const p = pctFin(a,b); if (p==null) return "";
+  if (Math.abs(p) < 8) return "parecido a lo normal";
+  return `${Math.abs(p)} % ${p>0?"más":"menos"} que lo normal`;
+}
+const COLOR_DEST = {ropa:"#7C3AED", empresa:"#2563EB", vender:"#0891B2", impuestos:"#64748B", socios:"#B45309", devol:"#DB2777", otros:"#94A3B8"};
+/** Barra apilada «de cada $100 que entran». */
+function barraCada100(L){
+  const tot = L.reduce((a,x)=>a+(x.cada100||0),0), escala = Math.max(100, tot);
+  return el("div",{class:"c100"},
+    el("div",{class:"c100-barra",role:"img","aria-label":L.map(x=>`${x.nombre}: ${x.cada100} de cada 100 pesos`).join("; ")},
+      L.filter(x=>x.cada100>0).map(x=>el("i",{style:`width:${(x.cada100/escala*100).toFixed(1)}%;background:${COLOR_DEST[x.grupo]||"#94A3B8"}`,title:`${x.nombre}: $${x.cada100}`})),
+      tot>100 ? el("span",{class:"c100-100",style:`left:${(100/escala*100).toFixed(1)}%`,title:"Hasta acá llega lo que entró"}) : null),
+    el("ul",{class:"c100-lista"}, L.map(x=>el("li",{}, el("i",{class:"dot",style:`background:${COLOR_DEST[x.grupo]||"#94A3B8"}`}),
+      el("span",{text:x.nombre}), el("b",{text:x.cada100!=null?`$ ${x.cada100}`:"–"}), el("span",{class:"hint",text:moneyK(x.monto)})))),
+    tot>100 ? el("p",{class:"notice warn",text:`Suman $ ${tot} de cada $ 100: se gastó más de lo que entró. La diferencia sale de la caja o de deudas.`}) : el("p",{class:"hint",text:`Quedan $ ${100-tot} de cada $ 100 como ganancia.`}));
+}
+function medidorVenta(vendido, necesario){
+  const pct = necesario ? Math.round(vendido/necesario*100) : 0, ok = pct>=100;
+  return el("div",{class:"medidor"}, el("div",{class:"med-barra",role:"img","aria-label":`Se vendió el ${pct} % de lo necesario`},
+      el("i",{class:ok?"ok":"bad",style:`width:${Math.min(100,pct)}%`})),
+    el("div",{class:"row med-txt"}, el("b",{text:`${pct} % de lo necesario`}), el("span",{class:"hint",text: ok?"✅ se llegó":"Faltó vender "+moneyK(necesario-vendido)})));
+}
+function pintarFinanzas(body, D, recargar){
+  if (!D.conectado){
+    body.append(el("div",{class:"card notice warn"}, el("b",{text:"El panel todavía no está conectado a la planilla."}),
+      el("p",{text:"Falta autorizar una sola vez la conexión de solo lectura con Dropbox (la hace la administración). Apenas esté, acá se ve en palabras simples qué plata entró, qué salió, a dónde se fue y qué conviene hacer."})));
+    return;
+  }
+  const R = D.resumen, U = R.ultimoCerrado, C = R.enCurso, P = R.promedio3, S = R.simple || {};
+  const bAct = el("button",{class:"btn sm",type:"button",text:"🔄 Actualizar"});
+  bAct.onclick = ()=>{ spinBtn(bAct,"Leyendo la planilla…"); recargar(true); };
+  body.append(el("div",{class:"card row act36"},
+    el("span",{class:"pill",text:"📦 Planilla de Dropbox (solo lectura)"}),
+    S.ultimaCarga ? el("span",{class:"pill",text:"Último movimiento cargado: "+fmtF(S.ultimaCarga)}) : null,
+    el("span",{class:"pill",text:"Leída: "+fechaHora(R.leida)}), el("span",{class:"spacer"}), bAct));
+  const ba = barraSeccion(D.audio, "Panel del jefe"); if (ba) body.append(ba);
+  // 1 · En pocas palabras
+  if (U){
+    const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""}, E = S.equilibrio;
+    const em = {verde:"🟢",amarillo:"🟡",rojo:"🔴"}[sem.color];
+    const bullets = [
+      `En ${MESL(U.mes)} entraron ${moneyK(U.ingresos)} y salieron ${moneyK(U.egresos)}. ${U.neto>=0?"Quedaron "+moneyK(U.neto)+" a favor.":"Faltaron "+moneyK(-U.neto)+"."}`,
+      E ? `Para no perder plata hay que vender unos ${moneyK(E.necesario)} por mes. En ${MESL(U.mes)} entraron ${moneyK(U.ingresos)}.` : null,
+      S.mejor && S.peor && S.mejor.mes!==S.peor.mes ? `El mejor mes del año fue ${MESL(S.mejor.mes)} (${S.mejor.neto>=0?"quedaron ":"faltaron "}${moneyK(Math.abs(S.mejor.neto))}). El más flojo, ${MESL(S.peor.mes)}.` : null,
+      C ? `En lo que va de ${MESL(C.mes)}: entraron ${moneyK(C.ingresos)} y salieron ${moneyK(C.egresos)} (todavía faltan cargar cobros).` : null].filter(Boolean);
+    body.append(el("div",{class:"card sem38 sem-"+sem.color},
+      el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:em}), el("div",{}, el("span",{class:"k",text:"En pocas palabras"}), el("h2",{text:sem.titulo}), el("p",{class:"lead",text:sem.texto}))),
+      el("ul",{class:"sem38-lista"}, bullets.map(t=>el("li",{text:t}))),
+      E ? medidorVenta(U.ingresos, E.necesario) : null));
+  }
+  // 2 · El último mes en números
+  if (U) body.append(el("div",{class:"card"}, el("h2",{text:"📊 "+capi(mesLargo(U.mes))+" en números"}),
+    el("div",{class:"hkpis"},
+      hk("💵 Entró", moneyK(U.ingresos), P?vsNormal(U.ingresos,P.ingresos):"", "pos"),
+      hk("💸 Salió", moneyK(U.egresos), P?vsNormal(U.egresos,P.egresos):"", "neg"),
+      hk(U.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"salió más de lo que entró", U.neto<0?"neg":"pos"),
+      U.retiros ? hk("👤 Retiros de socios", moneyK(U.retiros), "sin estos retiros: "+(U.operativo>=0?"quedaban ":"faltaban ")+moneyK(Math.abs(U.operativo))) : null),
+    el("p",{class:"hint",text:"«Lo normal» = el promedio de los 3 meses anteriores."})));
+  // 3 · A dónde se va la plata
+  if ((S.destinoAnio||[]).length){
+    const caja = el("div",{}), tabs = el("div",{class:"row seg38"});
+    const ver = (L, t)=>{ caja.textContent=""; caja.append(barraCada100(L)); [...tabs.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.k===t)); };
+    [["anio","Todo "+R.anio, S.destinoAnio], ["mes", U?capi(MESL(U.mes)):"", S.destinoMes]].filter(x=>(x[2]||[]).length).forEach(([k,t,L])=>{
+      const b = el("button",{class:"btn sm",type:"button",text:t,"data-k":k}); b.onclick=()=>ver(L,k); tabs.append(b); });
+    body.append(el("div",{class:"card"}, el("h2",{text:"🧭 ¿A dónde se va la plata?"}),
+      el("p",{class:"lead",text:"De cada $ 100 que entran a Hey Blackk, cuánto se va en cada cosa:"}), tabs, caja));
+    ver(S.destinoAnio,"anio");
+  }
+  // 4 · Cuánto hay que vender
+  if (S.equilibrio){ const E = S.equilibrio;
+    body.append(el("div",{class:"card"}, el("h2",{text:"🎯 ¿Cuánto hay que vender para no perder plata?"}),
+      el("div",{class:"hkpis"}, hk("Vender por mes", moneyK(E.necesario), "para cubrir todos los gastos"), hk("Con los retiros de socios", moneyK(E.conSocios), "si además se retira lo de siempre")),
+      el("ol",{class:"pasos38"},
+        el("li",{text:`Gastos fijos por mes (sueldos, alquileres, publicidad, bancos, impuestos): ${moneyK(E.fijosMes)}.`}),
+        el("li",{text:`De cada $ 100 que se vende, $ ${E.ropaCada100} se van en hacer la ropa (talleres, telas, insumos, envíos).`}),
+        el("li",{text:`Entonces solo quedan $ ${100-E.ropaCada100} de cada $ 100 para pagar los gastos fijos: por eso hay que vender unos ${moneyK(E.necesario)}.`})),
+      el("p",{class:"hint",text:"Calculado con "+E.meses.map(MESL).join(", ")+"."})));
+  }
+  // 5 · Mes a mes y semana a semana
+  const meses = R.meses.slice(-9);
+  if (meses.length) body.append(el("div",{class:"card"}, el("h3",{text:"📅 Mes a mes: lo que entró y lo que salió"}), barrasIE(meses, x=>mesTxt(x.mes)),
+    el("div",{class:"row leyenda"}, el("span",{}, el("i",{class:"dot",style:"background:#16A34A"})," Entró"), el("span",{}, el("i",{class:"dot",style:"background:#DC2626"})," Salió"), el("span",{class:"hint",text:"El número de abajo es lo que quedó (en rojo, lo que faltó)."})),
+    el("p",{class:"hint",text:`En ${R.anio}: entraron ${moneyK(R.anioTotales.ingresos)} y salieron ${moneyK(R.anioTotales.egresos)}. De eso, ${moneyK(R.anioTotales.retiros)} fueron retiros de socios.`})));
+  const sem = R.semanas.slice(-8);
+  if (sem.length) body.append(el("div",{class:"card"}, el("h3",{text:"🗓️ Semana a semana"}), barrasIE(sem, x=>fmtF(x.semana).slice(0,5)),
+    el("p",{class:"hint",text:"Si una semana aparece sin «entró», casi siempre es porque los cobros todavía no se cargaron."})));
+  // 6 · Quién compra y quién paga
+  const fila = el("div",{class:"split"});
+  if (R.canales.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🛍️ ¿Por dónde se vende? ("+R.anio+")"}), barrasH(R.canales.slice(0,6), "#4F46E5")));
+  if (R.franquicias.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que pagó cada franquicia ("+R.anio+")"}),
+    el("ol",{class:"top5"}, R.franquicias.slice(0,5).map(f=>el("li",{}, el("b",{text:f.franquicia}), ` · ${moneyK(f.cobradoAnio)}`, el("span",{class:"hint",text:f.ultimo?` · último pago ${fmtF(f.ultimo)}`:""}))))));
+  if (R.topClientes.length) fila.append(el("div",{class:"card"}, el("h3",{text:"⭐ Los 5 que más compraron ("+R.anio+")"}), el("ol",{class:"top5"}, R.topClientes.map(c=>el("li",{}, el("b",{text:c.nombre}), " · "+moneyK(c.monto))))));
+  if (fila.children.length) body.append(fila);
+  // 7 · Gastos, mercadería y socios
+  const fila2 = el("div",{class:"split"});
+  if (U && R.cuentasUltimoMes.length) fila2.append(el("div",{class:"card"}, el("h3",{text:"💸 En qué más se gastó en "+MESL(U.mes)}),
+    el("ol",{class:"top5"}, R.cuentasUltimoMes.map(c=>el("li",{}, el("b",{text:c.nombre}), ` · ${moneyK(c.monto)}`,
+      c.vsPromPct!=null && c.promedio>=1000000 ? el("span",{class:"pill "+(c.vsPromPct>=40?"bad":c.vsPromPct<=-20?"ok":""),text: Math.abs(c.vsPromPct)<8?"normal":c.vsPromPct>0?`+${c.vsPromPct} % que lo normal`:`${c.vsPromPct} % que lo normal`}) : null)))));
+  if (S.stock) fila2.append(el("div",{class:"card"}, el("h3",{text:"📦 Mercadería guardada (al cierre de "+MESL(S.stock.mes)+")"}),
+    el("div",{class:"hkpis"}, hk("Vale", moneyK(S.stock.total), S.stock.previo?(S.stock.total>=S.stock.previo?"▲ ":"▼ ")+moneyK(Math.abs(S.stock.total-S.stock.previo))+" vs. mes anterior":"")),
+    barrasH(S.stock.locales.slice(0,6), "#0F766E"),
+    el("p",{class:"hint",text:"Es plata «parada» en ropa sin vender. Sale de la hoja «cierre» de la planilla."})));
+  if (R.retiros.length) fila2.append(el("div",{class:"card"}, el("h3",{text:"👤 Retiros de los socios ("+R.anio+")"}), barrasH(R.retiros.slice(0,5).map(r=>({nombre:r.nombre.replace(/^Dividendos\s*/i,"").trim()||"Sin nombre", monto:r.monto})), "#B45309")));
+  if (fila2.children.length) body.append(fila2);
+  // 8 · Qué hacer
+  if (R.recomendaciones.length || R.alertas.length) body.append(el("div",{class:"card"}, el("h2",{text:"✅ Qué conviene hacer"}),
+    el("ul",{class:"alertas-rrhh"},
+      R.recomendaciones.slice(0,4).map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))),
+      R.alertas.filter(a=>a.nivel!=="rojo").slice(0,3).map(a=>el("li",{class:"al-amarillo"}, el("span",{class:"sem",text:"🟡"}), el("div",{text:a.texto}))))));
+  // 9 · Palabras
+  body.append(el("details",{class:"card glos38"}, el("summary",{text:"📖 ¿Qué quiere decir cada cosa?"}),
+    el("dl",{}, ...[["Entró","Toda la plata que cobró Hey Blackk en el mes (ventas, franquicias, mayoristas)."],
+      ["Salió","Toda la plata que se pagó: talleres, telas, sueldos, alquileres, publicidad, impuestos y retiros de socios."],
+      ["Quedó / Faltó","La diferencia entre lo que entró y lo que salió. Si «faltó», se pagó con plata de antes o quedó deuda."],
+      ["Retiros de socios","Plata que se llevan los dueños. No es un gasto del negocio, pero sale de la caja."],
+      ["Lo normal","El promedio de los 3 meses anteriores."],
+      ["Vender para no perder","La venta mínima por mes para cubrir todos los gastos sin poner plata."],
+      ["Mercadería guardada","Lo que vale la ropa que está en los locales y todavía no se vendió."]].flatMap(([t,d])=>[el("dt",{text:t}), el("dd",{text:d})]))));
+  body.append(el("div",{class:"card"}, botonesDescargaFin(), el("p",{class:"hint",text:`${R.filas} movimientos leídos de la planilla${R.fuera?` · ${R.fuera} quedaron afuera por fecha mal cargada`:""}. La app solo lee: no cambia nada de la planilla.`})));
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
    El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
