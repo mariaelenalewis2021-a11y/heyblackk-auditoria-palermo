@@ -1091,9 +1091,9 @@ function ctbNormCbte_(c) {
   let clave = finClave_(nro); if (!clave && pv != null && nro != null) clave = finClave_(pv + '-' + nro);
   if (!clave) clave = finClave_(ctbPick_(c, ['NumeroCompleto', 'Comprobante', 'Nombre']));
   const f = String(ctbPick_(c, ['FechaEmision', 'Fecha', 'FechaComprobante', 'fecha']) || '').slice(0, 10);
-  return { id: ctbPick_(c, ['Id', 'ID', 'id']), asociadoId: ctbPick_(c, ['IdComprobanteAsociado']), saldo: Number(ctbPick_(c, ['Saldo'])) || 0, vence: String(ctbPick_(c, ['FechaVencimiento']) || '').slice(0, 10),
+  return { id: ctbPick_(c, ['Id', 'ID', 'id']), asociadoId: ctbPick_(c, ['IdComprobanteAsociado']), saldo: ctbNum_(ctbPick_(c, ['Saldo'])), vence: String(ctbPick_(c, ['FechaVencimiento']) || '').slice(0, 10),
     tipo: tipo, clave: clave, pv: clave.slice(0, 4), fecha: f, mes: f.slice(0, 7),
-    total: Math.abs(Number(ctbPick_(c, ['ImporteTotalNeto', 'Total', 'ImporteTotal', 'TotalNeto', 'Importe'])) || 0),
+    total: Math.abs(ctbNum_(ctbPick_(c, ['ImporteTotalNeto', 'Total', 'ImporteTotal', 'TotalNeto', 'Importe']))),
     cliente: String(ctbPick_(c, ['RazonSocial', 'Cliente', 'NombreCliente']) || '').trim(),
     asociado: finClave_(ctbPick_(c, ['ComprobanteAsociado', 'NumeroComprobanteAsociado', 'CbteAsociado', 'ComprobanteOrigen'])) };
 }
@@ -1348,7 +1348,14 @@ function contabiliumProbar2() {
 /* =================== 3.8 · Productos, temporada y cobranzas desde Contabilium (SOLO LECTURA) =================== */
 /* Todo se LEE con GET (lista cerrada en CTB_LECTURAS): la app no crea, modifica ni borra nada en Contabilium.
    Lo pesado (detalle de comprobantes, deuda de clientes) se calcula en la actualización diaria y se guarda resumido. */
-const ctbNum_ = v => Number(String(v == null ? 0 : v).replace(',', '.')) || 0;
+/* Contabilium manda importes como texto en formato argentino ("1.234.567,89"): punto = miles, coma = decimales. */
+function ctbNum_(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v == null ? '' : v).trim().replace(/[^\d,.\-]/g, '');
+  if (s.indexOf(',') >= 0) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  return Number(s) || 0;
+}
 /** Detalle (ítems) de un comprobante, con caché de 6 h por comprobante. */
 function ctbItems_(id) {
   const ck = 'CTBI_' + id, c = CACHE.get(ck); if (c) { try { return JSON.parse(c); } catch (e) {} }
