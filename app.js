@@ -1867,6 +1867,7 @@ async function vKPI(main){
     tiene("cierre") ? el("button",{class:"btn sm",type:"button",text:"↻ Sincronizar",onclick:async e=>{ spinBtn(e.target,"Leyendo…"); try{ await apiS("sincronizarCierre"); main.textContent=""; route(); }catch(x){ unspin(e.target); toast(msgErr(x)); } }}) : null));
   // ----- 3.3: resumen hablado (arriba del tablero) y feriados
   body.append(barraAudio(K.audio));
+  { const cx = cardContexto(K.contexto); if (cx) body.append(cx); }   // 3.7: dólar y noticias que pueden impactar
   const fb = bannerFeriados(K.feriados, {confirmar: tiene("cierre"), alConfirmar: ()=>{ main.textContent=""; route(); }});
   if (!fb.hidden) body.append(fb);
   // 3.5 · Regla: solo se muestra lo que tiene datos (sin avisos de "no hay datos"). Orden: comercial → auditoría → RRHH.
@@ -2002,6 +2003,19 @@ function cardAccionesComerciales(C){
   card.append(ol);
   return card;
 }
+
+/* 3.7 · Contexto que puede impactar a Hey Blackk: dólar (compra/venta) y titulares del día con su impacto (fuentes públicas, sin C5N). */
+function cardContexto(X){
+  if (!X || (!X.dolar && !(X.noticias||[]).length)) return null;
+  const D = X.dolar, $ = n => "$ "+Math.round(n).toLocaleString("es-AR");
+  const dol = (k, t) => D && D[k] ? el("div",{class:"hk"}, el("span",{class:"k",text:t}), el("b",{text:`${$(D[k].compra)} / ${$(D[k].venta)}`}), el("span",{class:"hint",text:"compra / venta"})) : null;
+  return el("section",{class:"card ctx37"}, el("h3",{text:"🌎 Contexto que puede impactar a Hey Blackk"}),
+    D ? el("div",{class:"hkpis"}, dol("oficial","Dólar oficial"), dol("blue","Dólar blue"), dol("mayorista","Mayorista")) : null,
+    (X.noticias||[]).length ? el("ul",{class:"ctx-lista"}, X.noticias.map(n=>el("li",{},
+      el("span",{class:"pill",text:n.titulo}), " ", n.link ? el("a",{href:n.link,target:"_blank",rel:"noopener noreferrer",text:n.titular}) : el("span",{text:n.titular}),
+      el("span",{class:"hint",text:` · ${n.fuente||""} · ${fechaHora(n.fecha)}`}), el("div",{class:"hint",text:"Para Hey Blackk: "+n.impacto+"."})))) : null,
+    el("p",{class:"hint",text:`Fuentes: ${X.fuentes} · actualizado ${fechaHora(X.ts)}. Se lee también en «Escuchar resumen».`}));
+}
 /* ===================== 3.5 · Días flojos, fechas especiales, Panorama RRHH y borrado de fichajes =====================
    Regla del resumen: solo se muestra lo que tiene datos. Si una sección queda vacía, no aparece (ni título ni aviso).
    El Panorama RRHH es informativo: no sanciona ni descuenta nada, y solo lo ven jefes y administración (lo valida el servidor). */
@@ -2129,7 +2143,7 @@ function editorUmbrales(U, recargar){
 
 /* ---------- Borrado de fichajes (solo administración) ---------- */
 async function vBorradoFich(body){
-  if (!(S.user && S.user.rol==="admin")) return body.append(el("div",{class:"card notice bad",text:"Solo la administración puede borrar registros de fichaje."}));
+  if (!(S.user && S.user.rol==="admin")) return body.append(el("div",{class:"card notice bad",text:"Solo la administración puede borrar registros del personal."}));
   body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando personal…"));
   let L; try{ L = await apiS("listarPersonal"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
   body.textContent="";
@@ -2149,30 +2163,36 @@ async function vBorradoFich(body){
     spinBtn(bCalc,"Contando…"); let r;
     try{ r = await apiS("previaBorrado", c); }catch(e){ unspin(bCalc); return toast(msgErr(e)); }
     unspin(bCalc); prev.textContent="";
-    const n = r.fichajes + r.solicitudes;
-    if (!n) return prev.append(el("div",{class:"notice ok",text:`${r.nombre} no tiene registros de fichaje ${r.rango==="todos los registros"?"":r.rango}. No hay nada para borrar.`}));
+    const n = r.fichajes + r.solicitudes + (r.vacaciones||0) + (r.novedades||0);
+    const quitar = el("input",{type:"checkbox"});
+    if (!n){ prev.append(el("div",{class:"notice ok",text:`${r.nombre} no tiene registros ${r.rango==="todos los registros"?"":r.rango}. No hay nada para borrar.`})); if (!r.quitable) return; }
     const conf = el("input",{type:"text",autocomplete:"off",placeholder:"Escribí BORRAR","aria-label":"Escribí BORRAR para confirmar"});
-    const bBorrar = el("button",{class:"btn danger",type:"button",text:`🗑️ Borrar ${n} registro${n===1?"":"s"} definitivamente`,disabled:true});
+    const bBorrar = el("button",{class:"btn danger",type:"button",text:n?`🗑️ Borrar ${n} registro${n===1?"":"s"} definitivamente`:"🗑️ Quitar a la persona",disabled:true});
     conf.oninput = ()=>{ bBorrar.disabled = conf.value.trim().toUpperCase()!=="BORRAR"; };
     bBorrar.onclick = async ()=>{
-      if (!(await confirmar(`Vas a borrar ${n} registro${n===1?"":"s"} de ${r.nombre} (${r.rango}). No se puede deshacer. ¿Seguís?`, "Sí, borrar", true))) return;
+      if (!n && !quitar.checked) return toast("No hay registros: marcá «Quitar también a la persona» si querés sacarla de Personal.");
+      if (!(await confirmar(`Vas a borrar ${n} registro${n===1?"":"s"} de ${r.nombre} (${r.rango})${quitar.checked?" y quitarla de Personal":""}. No se puede deshacer. ¿Seguís?`, "Sí, borrar", true))) return;
       spinBtn(bBorrar,"Borrando…");
-      try{ const x = await apiS("borrarFichajes", Object.assign(crit(), {confirmacion:conf.value, esperado:r.fichajes}));
-        toast(`✅ Borrados: ${x.fichajes} fichaje(s) y ${x.solicitudes} solicitud(es) de ${x.nombre}`);
-        prev.textContent=""; prev.append(el("div",{class:"notice ok",text:`✅ Listo: se borraron ${x.fichajes} fichaje(s), ${x.solicitudes} solicitud(es) y ${x.fotos} foto(s) fueron a la papelera. Quedó registrado en el Historial.`}));
+      try{ const x = await apiS("borrarFichajes", Object.assign(crit(), {confirmacion:conf.value, esperado:r.fichajes, quitarPersona: quitar.checked}));
+        toast(`✅ Borrado todo lo de ${x.nombre}`);
+        prev.textContent=""; prev.append(el("div",{class:"notice ok",text:`✅ Listo: se borraron ${x.fichajes} fichaje(s), ${x.solicitudes} solicitud(es), ${x.vacaciones||0} pedido(s) de vacaciones y ${x.novedades||0} novedad(es); ${x.fotos} foto(s) fueron a la papelera${x.quitada?". La persona ya no figura en Personal":""}. Quedó registrado en el Historial.`}));
+        if (x.quitada){ const o = [...emp.options].find(z=>z.value===r.uid); if (o) o.remove(); }
       }catch(e){ unspin(bBorrar); toast(msgErr(e)); }
     };
     prev.append(el("div",{class:"notice bad"},
-      el("b",{text:`Se van a borrar ${n} registro${n===1?"":"s"} de ${r.nombre}${r.estado!=="activo"?" (dado de baja)":""}:`}),
+      el("b",{text: n ? `Se van a borrar ${n} registro${n===1?"":"s"} de ${r.nombre}${r.estado!=="activo"?" (dado de baja)":""}:` : `Podés quitar a ${r.nombre} de Personal:`}),
       el("ul",{}, r.fichajes ? el("li",{text:`${r.fichajes} fichaje${r.fichajes===1?"":"s"}${r.primero?` (del ${fmtF(r.primero)} al ${fmtF(r.ultimo)})`:""}`}) : null,
         r.solicitudes ? el("li",{text:`${r.solicitudes} solicitud${r.solicitudes===1?"":"es"} de fichaje manual o corrección`}) : null,
+        r.vacaciones ? el("li",{text:`${r.vacaciones} pedido${r.vacaciones===1?"":"s"} de vacaciones`}) : null,
+        r.novedades ? el("li",{text:`${r.novedades} novedad${r.novedades===1?"":"es"} de RR. HH.`}) : null,
         r.fotos ? el("li",{text:`${r.fotos} foto${r.fotos===1?"":"s"} (van a la papelera de Drive)`}) : null),
+      r.quitable ? el("label",{class:"check"}, quitar, " Quitar también a la persona de Personal (no aparece más en ninguna lista)") : null,
       el("p",{style:"margin:6px 0",text:"Esta acción no se puede deshacer. Para confirmar escribí BORRAR y te vamos a pedir tu PIN."}),
       el("div",{class:"row"}, conf, bBorrar)));
     setTimeout(()=>conf.focus(),60);
   };
-  body.append(el("div",{class:"card"}, el("h2",{text:"🗑️ Borrar registros de fichaje"}),
-    el("p",{class:"lead",text:"Solo administración. Sirve para limpiar registros de prueba o de personas que ya no están. Los registros borrados no cuentan en horas ni en el Panorama RRHH."}),
+  body.append(el("div",{class:"card"}, el("h2",{text:"🗑️ Borrar registros del personal"}),
+    el("p",{class:"lead",text:"Solo administración. Borra TODO lo de la persona elegida: fichajes, fotos, solicitudes de fichaje manual o corrección, pedidos de vacaciones y novedades de RR. HH. Sirve para limpiar registros de prueba o de personas que ya no están."}),
     el("label",{class:"f"},"Empleado (incluye dados de baja)",emp),
     el("label",{class:"check"}, todos, " Todos los registros de ese empleado"), rango, bCalc, prev,
     el("p",{class:"hint",text:"En el Historial queda quién borró, cuándo, de qué empleado y cuántos registros. Los datos borrados no se guardan en ningún lado. Para borrar un solo registro, abrilo en «Fichadas» y tocá «Borrar este registro»."})));
@@ -2191,19 +2211,17 @@ const SEM36 = {completo:["🟢","Completo","ok"], parcial:["🟡","Parcial","war
 const u36 = n => (Math.round(n||0)).toLocaleString("es-AR")+" u";
 const tsTxt = iso => iso ? fechaHora(iso) : "";
 
-/* Barra de audio de una sección: Escuchar resumen · Pausar/Reanudar · Detener · voz femenina/masculina (se recuerda). */
+/* Barra de audio de una sección: Escuchar resumen · Pausar/Reanudar · Detener (voz femenina). */
 function barraSeccion(texto, titulo){
   if (!texto) return null;
   const box = el("section",{class:"card audio","aria-label":"Resumen hablado"});
   const estado = el("span",{class:"hint estado"}), txt = el("p",{class:"audio-txt",hidden:true,text:texto});
-  const gen = el("select",{"aria-label":"Voz"}, ...[["femenina","Femenina"],["masculina","Masculina"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.genero()===v})));
-  gen.onchange = ()=>{ VOZ.setGenero(gen.value); toast("Voz "+gen.value+" guardada"); };
   const bPausa = el("button",{class:"btn",type:"button",text:"⏸️ Pausar",disabled:true,onclick:()=>{ if (VOZ.pausado()){ VOZ.reanudar(); bPausa.textContent="⏸️ Pausar"; } else { VOZ.pausar(); bPausa.textContent="▶️ Reanudar"; } }});
   VOZ.onEstado = on => { box.classList.toggle("hablando", on); bPausa.disabled = !on; if (!on) bPausa.textContent="⏸️ Pausar"; estado.textContent = on ? "🔊 Leyendo…" : ""; };
   box.append(el("h3",{},icono("audio",20)," Resumen hablado · "+titulo),
     el("div",{class:"row"},
       el("button",{class:"btn primary",type:"button",text:"🔊 Escuchar resumen","data-audio":"seccion",onclick:()=>{ txt.hidden=false; if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible."; return; } VOZ.hablar(texto); }}),
-      bPausa, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Voz",gen)),
+      bPausa, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()})),
     estado, txt);
   return box;
 }
@@ -2436,7 +2454,7 @@ const VOZ = {
   voces(){ try{ return speechSynthesis.getVoices()||[]; }catch(e){ return []; } },
   /* 3.5 · Voz femenina o masculina (se recuerda por usuario en este teléfono). Por defecto, femenina. */
   claveGenero(){ return "hb35_voz_genero_"+((S.user&&(S.user.usuario||S.user.legajo||S.user.id))||"anon"); },
-  genero(){ const g = lsGet(this.claveGenero()); return g==="masculina" ? "masculina" : "femenina"; },
+  genero(){ return "femenina"; },   // 3.7: solo voz femenina (se quitó la masculina)
   setGenero(g){ lsSet(this.claveGenero(), g==="masculina"?"masculina":"femenina"); },
   /* Género de una voz por su nombre o identificador. En Android (Samsung, Google) Chrome suele exponer voces sin nombre de persona:
      se reconocen los códigos del motor de Google (es-us-x-esd = masculina, es-us-x-esf/sfb = femenina, etc.). */
@@ -2521,8 +2539,6 @@ function barraAudio(A){
   const titulo = el("b",{text:""}), txt = el("p",{class:"audio-txt",hidden:true}), estado = el("span",{class:"hint estado",text:""});
   const sel = el("select",{"aria-label":"Velocidad de lectura"}, ...[["lenta","Lenta"],["normal","Normal"],["rapida","Rápida"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.velocidad()===v})));
   sel.onchange = ()=>{ VOZ.setVelocidad(sel.value); toast("Velocidad de lectura: "+sel.selectedOptions[0].text); };
-  const gen = el("select",{"aria-label":"Voz"}, ...[["femenina","Femenina"],["masculina","Masculina"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.genero()===v})));
-  gen.onchange = ()=>{ VOZ.setGenero(gen.value); toast("Voz "+gen.value+" guardada"); };
   const leer = (k, t) => { titulo.textContent = t.charAt(0).toUpperCase()+t.slice(1); txt.textContent = A[k]; txt.hidden=false;
     if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible para leerlo."; return; }
     VOZ.hablar(A[k]); };
@@ -2530,7 +2546,7 @@ function barraAudio(A){
   const B = [["general","🔊 Escuchar resumen"],["comercial","🔊 Escuchar KPIs comerciales"],["auditoria","🔊 Escuchar KPIs de auditoría"],["acciones","🔊 Escuchar acciones para Palermo"],["rrhh","🔊 Escuchar RRHH"]]
     .filter(([k])=>A[k] && String(A[k]).trim()).map(([k,t])=>el("button",{class:"btn"+(k==="general"?" primary":""),type:"button",text:t,"data-audio":k,onclick:()=>leer(k, t.replace("🔊 Escuchar ",""))}));
   box.append(...[el("h3",{},icono("audio",20)," Resumen hablado"),
-    el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Voz",gen), el("label",{class:"f inline"},"Velocidad",sel)),
+    el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Velocidad",sel)),
     !VOZ.soporta() ? el("div",{class:"notice warn",text:"Tu navegador no tiene síntesis de voz. Al tocar un botón, el texto se muestra igual."}) : null,
     estado, el("div",{class:"audio-panel"}, titulo, txt)].filter(Boolean));
   return box;
