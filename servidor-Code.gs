@@ -792,7 +792,7 @@ function vozNeural(token, texto, genero, vel) {
   sesion_(token);
   const key = PROPS.getProperty('TTS_KEY'); if (!key) return { disponible: false };
   const t = String(texto || '').replace(/\s+/g, ' ').trim().slice(0, 9000); if (!t) return { disponible: false };
-  const voz = genero === 'masculina' ? (PROPS.getProperty('TTS_VOZ_M') || 'es-US-Neural2-B') : (PROPS.getProperty('TTS_VOZ_F') || 'es-US-Neural2-A');
+  const voz = PROPS.getProperty('TTS_VOZ_F') || 'es-US-Neural2-A';   // solo voz femenina
   const rate = { lenta: 0.92, normal: 1.06, rapida: 1.2 }[vel] || 1.06;
   const ora = t.match(/[^.!?]+[.!?]+\s*|[^.!?]+$/g) || [t], partes = []; let b = '';
   ora.forEach(o => { if (Utilities.newBlob(b + o).getBytes().length > 4500 && b) { partes.push(b); b = o; } else b += o; }); if (b) partes.push(b);
@@ -804,6 +804,57 @@ function vozNeural(token, texto, genero, vel) {
     bytes = bytes.concat(Utilities.base64Decode(JSON.parse(r.getContentText()).audioContent));
   }
   return { disponible: true, voz: voz, audio: Utilities.base64Encode(bytes) };
+}
+/* =================== 3.7 · Contexto que puede impactar a Hey Blackk (dólar + noticias) =================== */
+/* Fuentes públicas y gratuitas, sin clave: DolarApi (cotizaciones) y Google Noticias (titulares en español, Argentina).
+   Se excluye C5N. Caché de 2 h; ante un error devuelve lo que pudo (nunca rompe el resumen). */
+const CTX37_TEMAS = [
+  { id: 'textil', titulo: 'Textil', q: '"industria textil" OR indumentaria Argentina', impacto: 'marca costos, competencia de importados y demanda de indumentaria' },
+  { id: 'uruguay', titulo: 'Uruguay', q: 'Uruguay Argentina exportaciones OR frontera OR aduana', impacto: 'pega en los envíos y la cobranza de la franquicia de Uruguay' },
+  { id: 'clima', titulo: 'Clima', q: '"El Niño" OR tormentas OR "alerta meteorológica" Argentina', impacto: 'lluvias y tormentas pueden demorar envíos y cambiar la circulación en el local' },
+  { id: 'combustibles', titulo: 'Combustibles', q: 'aumento combustibles nafta gasoil YPF', impacto: 'sube el costo de fletes y logística, incluidos los envíos a Uruguay' },
+  { id: 'petroleo', titulo: 'Petróleo', q: 'petróleo Brent precio', impacto: 'anticipa ajustes de combustibles y del costo de fibras sintéticas como el poliéster' }];
+function ctx37Fetch_(url) {
+  const r = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true, validateHttpsCertificates: true });
+  if (r.getResponseCode() !== 200) throw new Error('HTTP ' + r.getResponseCode());
+  return r.getContentText();
+}
+function ctx37Dolar_() {
+  const L = JSON.parse(ctx37Fetch_('https://dolarapi.com/v1/dolares')), out = {};
+  L.forEach(x => { if (['oficial', 'blue', 'mayorista'].indexOf(x.casa) >= 0) out[x.casa] = { compra: Number(x.compra), venta: Number(x.venta), fecha: x.fechaActualizacion || null }; });
+  return out.oficial || out.blue ? out : null;
+}
+function ctx37Noticia_(T, limite) {
+  const xml = ctx37Fetch_('https://news.google.com/rss/search?q=' + encodeURIComponent(T.q + ' when:3d') + '&hl=es-419&gl=AR&ceid=AR:es-419');
+  const items = XmlService.parse(xml).getRootElement().getChild('channel').getChildren('item');
+  for (let i = 0; i < items.length && i < 15; i++) {
+    const it = items[i], tit = String(it.getChildText('title') || ''), link = String(it.getChildText('link') || ''), src = it.getChild('source');
+    const fuente = src ? String(src.getText() || '') : (tit.split(' - ').pop() || ''), fecha = new Date(it.getChildText('pubDate') || 0);
+    if (/c5n/i.test(fuente + ' ' + link + ' ' + (src ? src.getAttribute('url') && src.getAttribute('url').getValue() : ''))) continue;   // C5N excluido
+    if (!(fecha.getTime() > limite)) continue;
+    const limpio = tit.replace(new RegExp('\\s+-\\s+' + fuente.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), '').trim();
+    if (!limpio) continue;
+    return { tema: T.id, titulo: T.titulo, titular: limpio.slice(0, 180), fuente: fuente.slice(0, 60), link: /^https:\/\//.test(link) ? link : null, fecha: fecha.toISOString(), impacto: T.impacto };
+  }
+  return null;
+}
+function contexto37_() {
+  const c = CACHE.get('CTX37'); if (c) { try { return JSON.parse(c); } catch (e) {} }
+  const out = { dolar: null, noticias: [], ts: new Date().toISOString(), fuentes: 'DolarApi · Google Noticias' };
+  try { out.dolar = ctx37Dolar_(); } catch (e) {}
+  const limite = Date.now() - 3 * 86400000;
+  CTX37_TEMAS.forEach(T => { try { const n = ctx37Noticia_(T, limite); if (n) out.noticias.push(n); } catch (e) {} });
+  try { CACHE.put('CTX37', JSON.stringify(out), out.dolar || out.noticias.length ? 7200 : 1800); } catch (e) {}
+  return out;
+}
+/** Texto hablado del contexto: dólar (compra y venta) y hasta 5 titulares con su impacto para Hey Blackk. */
+function audioContexto37_(X) {
+  if (!X || (!X.dolar && !X.noticias.length)) return '';
+  const P = ['Contexto que puede impactar a Hey Blackk.'], D = X.dolar, pesos = n => palabras_(Math.round(n)) + ' pesos';
+  if (D && D.oficial) P.push('El dólar oficial ' + (D.oficial.fecha ? 'cerró' : 'está') + ' a ' + pesos(D.oficial.compra) + ' la compra y ' + pesos(D.oficial.venta) + ' la venta' +
+    (D.blue ? '; el blue, ' + pesos(D.blue.compra) + ' la compra y ' + pesos(D.blue.venta) + ' la venta' : '') + '. Impacta en insumos importados y en lo que rinde lo que cobramos de Uruguay.');
+  X.noticias.slice(0, 5).forEach(n => P.push(n.titulo + ': ' + n.titular.replace(/["«»]/g, '') + (n.fuente ? ', según ' + n.fuente : '') + '. Para Hey Blackk, ' + n.impacto + '.'));
+  return P.join(' ');
 }
 /* =================== 3.7 · Clima (Open-Meteo: servicio público y gratuito, sin clave) =================== */
 /* Pronóstico de la sucursal (por sus coordenadas de la hoja Sucursales) y, con el historial de lluvias, cuánto cambia la venta
@@ -2043,10 +2094,11 @@ function getKPIs(token, desde, hasta) {
   // 3.6: clientes y producción, solo si el jefe tiene esas secciones habilitadas (lo que no tiene permiso ni se lee).
   let cliR = null, proR = null, cliL = [];
   if (s.perms.indexOf('clientes') >= 0 || s.perms.indexOf('produccion') >= 0) { try { const D = control_(false); if (s.perms.indexOf('clientes') >= 0) { cliR = resumenClientes_(D); cliL = D.clientes.filter(c => c.seCuenta !== false); } if (s.perms.indexOf('produccion') >= 0) proR = resumenProduccion_(D); } catch (e) {} }
-  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR, clima: comercial && !comercial.sinDatos ? clima37_() : null });
+  const ctxK = s.perms.indexOf('kpi') >= 0 ? contexto37_() : null;   // 3.7: dólar y noticias que pueden impactar a la marca
+  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR, clima: comercial && !comercial.sinDatos ? clima37_() : null, contexto: ctxK });
   return {
     desde: desde, hasta: hasta, auditoriasN: audN, params: params_(),
-    acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio,
+    acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio, contexto: ctxK,
     clientes36: cliR ? { clientes: cliR.clientes, pedido: cliR.pedido, entregado: cliR.despachado, despachado: cliR.despachado, separado: cliR.separado, pendiente: cliR.pendiente, avance: cliR.avance, cumplimiento: cliR.cumplimiento,
       pagado: cliR.pagado, faltaPagar: cliR.faltaPagar, estados: cliR.estados, alertas: cliR.alertas.slice(0, 3) } : null,
     produccion36: proR ? { planificado: proR.planificado, ingresado: proR.ingresado, enProceso: proR.enProceso, faltaFabricar: proR.faltaFabricar, avance: proR.avance, atrasados: proR.atrasados,
@@ -2539,7 +2591,8 @@ function audio_(u, com, aud, ctx) {
   // ---- Armado
   const intro = t => hola + t + ' ';
   const seccion = (titulo, partes) => partes.filter(Boolean).length ? limpiar(intro(titulo) + partes.filter(Boolean).join(' ')) : '';
-  const comercial = seccion('te cuento los indicadores comerciales de Palermo.', C.concat(F, E, [ferProx, climaTxt]));
+  const ctxTxt = audioContexto37_(ctx.contexto);
+  const comercial = seccion('te cuento los indicadores comerciales de Palermo.', C.concat(F, E, [ferProx, climaTxt, ctxTxt]));
   const auditoria = seccion('te cuento los indicadores de auditoría de Palermo.', A.concat(recA));
   const acciones = seccion('te cuento las acciones comerciales para Palermo.', X);
   const rrhh = seccion('te cuento el panorama de recursos humanos de los últimos treinta días.', R);
@@ -2555,6 +2608,7 @@ function audio_(u, com, aud, ctx) {
     (pr.taller ? 'de los pedidos de taller llegaron ' + unid36_(pr.taller.llegadas) + (pr.taller.estados.en_produccion.unidades ? ' y ' + unid36_(pr.taller.estados.en_produccion.unidades) + ' siguen en producción' : '') : 'avance del ' + palabras_(pr.avance || 0) + ' por ciento') +
     (pr.atrasados ? '; hay ' + palabras_(pr.atrasados) + (pr.atrasados === 1 ? ' pedido atrasado' : ' pedidos atrasados') : '') + '.');
   if (R.length) cuerpo.push('En recursos humanos: ' + R.join(' '));
+  if (ctxTxt) cuerpo.push(ctxTxt);
   const general = cuerpo.length ? limpiar(intro('te cuento las últimas novedades.') + cuerpo.join(' ') + ' Eso es todo por ahora.') : limpiar((nombre ? 'Hola ' + nombre : 'Hola') + ', que tengas un buen día.');
   return { saludo: nombre, general: general, comercial: comercial, auditoria: auditoria, acciones: acciones, rrhh: rrhh };
 }
@@ -2842,14 +2896,18 @@ function criterioBorrado_(d) {
   if (!todos && !desde && !hasta) throw new Error('Elegí un rango de fechas o marcá «todos los registros de ese empleado».');
   if (desde && hasta && desde > hasta) throw new Error('La fecha «desde» es posterior a «hasta».');
   const enRango = f => (!desde || f >= desde) && (!hasta || f <= hasta);
+  // 3.7: además de fichajes y solicitudes, todo lo de esa persona: vacaciones y novedades de RR. HH.
   return { u: u, todos: todos, desde: desde, hasta: hasta, ing: x => x.uid === uid && enRango(x.fecha), cor: c => c.uid === uid && enRango(c.fecha),
+    vac: v => v.uid === uid && (todos || enRango(v.desde) || enRango(v.hasta)), nov: n => (n.uid === uid || (!n.uid && n.legajo === u.legajo)) && enRango(n.fecha),
     texto: todos ? 'todos los registros' : (desde && hasta ? 'del ' + fdm_(desde) + ' al ' + fdm_(hasta) : desde ? 'desde el ' + fdm_(desde) : 'hasta el ' + fdm_(hasta)) };
 }
 /** Vista previa: cuántos registros se borrarían (no borra nada). */
 function previaBorrado(token, d) {
   soloAdmin_(token, false);
-  const c = criterioBorrado_(d), ing = tAll_('Ingresos').filter(c.ing), cor = tAll_('Correcciones').filter(c.cor);
-  return { uid: c.u.id, nombre: c.u.nombre, estado: c.u.estado, rango: c.texto, fichajes: ing.length, solicitudes: cor.length, fotos: ing.filter(x => x.foto).length,
+  const c = criterioBorrado_(d), ing = tAll_('Ingresos').filter(c.ing), cor = tAll_('Correcciones').filter(c.cor), vac = tAll_('Vacaciones').filter(c.vac), nov = tAll_('RRHH').filter(c.nov);
+  const quitable = c.todos && c.u.id !== sesion_(token).user.id && !(c.u.rol === 'admin' && usuarios_().filter(x => x.rol === 'admin' && x.estado === 'activo').length <= 1);
+  return { uid: c.u.id, nombre: c.u.nombre, estado: c.u.estado, rango: c.texto, fichajes: ing.length, solicitudes: cor.length, vacaciones: vac.length, novedades: nov.length, fotos: ing.filter(x => x.foto).length,
+    quitable: quitable, todos: c.todos,
     primero: ing.length ? ing.map(x => x.fecha).sort()[0] : null, ultimo: ing.length ? ing.map(x => x.fecha).sort().slice(-1)[0] : null };
 }
 function borrarFichajes(token, d) {
@@ -2861,10 +2919,17 @@ function borrarFichajes(token, d) {
     const esperado = Number(d.esperado);
     const ing = tDelWhere_('Ingresos', c.ing);
     if (isFinite(esperado) && d.esperado != null && ing.length !== esperado) log_(s, 'borrado_fichajes_aviso', 'alerta', c.u.id, 'La cantidad cambió entre la vista previa (' + esperado + ') y el borrado (' + ing.length + ')');
-    const cor = tDelWhere_('Correcciones', c.cor);
+    const cor = tDelWhere_('Correcciones', c.cor), vac = tDelWhere_('Vacaciones', c.vac), nov = tDelWhere_('RRHH', c.nov);
     let fotos = 0; ing.forEach(x => { if (x.foto) { try { DriveApp.getFileById(x.foto).setTrashed(true); fotos++; } catch (e) {} } });
-    log_(s, 'borrado_fichajes', 'ok', c.u.id, c.u.nombre + ' (' + c.u.legajo + ') · ' + c.texto + ' · ' + ing.length + ' fichaje(s), ' + cor.length + ' solicitud(es), ' + fotos + ' foto(s) a la papelera');
-    return { nombre: c.u.nombre, fichajes: ing.length, solicitudes: cor.length, fotos: fotos };
+    // 3.7: con «todos los registros» se puede quitar también a la persona de Personal (nunca a uno mismo ni al único administrador).
+    let quitada = false;
+    if (d.quitarPersona === true && c.todos) {
+      if (c.u.id === s.user.id) throw new Error('No podés quitarte a vos mismo.');
+      if (c.u.rol === 'admin' && usuarios_().filter(x => x.rol === 'admin' && x.estado === 'activo').length <= 1) throw new Error('Es el único administrador activo.');
+      quitada = tDelWhere_('Usuarios', x => x.id === c.u.id).length > 0; CACHE.remove('usuarios');
+    }
+    log_(s, 'borrado_fichajes', 'ok', c.u.id, c.u.nombre + ' (' + c.u.legajo + ') · ' + c.texto + ' · ' + ing.length + ' fichaje(s), ' + cor.length + ' solicitud(es), ' + vac.length + ' vacaciones, ' + nov.length + ' novedad(es), ' + fotos + ' foto(s) a la papelera' + (quitada ? ' · persona quitada de Personal' : ''));
+    return { nombre: c.u.nombre, fichajes: ing.length, solicitudes: cor.length, vacaciones: vac.length, novedades: nov.length, fotos: fotos, quitada: quitada };
   });
 }
 /** Borrado de un registro individual (desde el detalle de la fichada). */
