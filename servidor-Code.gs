@@ -3941,7 +3941,7 @@ function setTipoCliente(token, clave, tipo) {
   return { clave: k, tipo: tipo };
 }
 /* ---------- Permisos por jefe (solo administración) ---------- */
-const SECCIONES_JEFE = [['finanzas', 'Panel del jefe (la plata del negocio)'], ['clientes', 'Clientes y pedidos'], ['produccion', 'Producción'], ['ingresos', 'Fichaje y horas / RRHH'], ['vacaciones', 'Vacaciones'], ['rrhh', 'Novedades RR. HH.'],
+const SECCIONES_JEFE = [['finanzas', 'Administración y Finanzas (pagos, cobros e ingresos)'], ['clientes', 'Clientes y pedidos'], ['produccion', 'Producción'], ['ingresos', 'Fichaje y horas / RRHH'], ['vacaciones', 'Vacaciones'], ['rrhh', 'Novedades RR. HH.'],
   ['kpi', 'KPIs comerciales'], ['cierre', 'Cierre diario'], ['auditar', 'Auditar'], ['auditoria', 'Registro de auditorías'], ['acciones', 'Acciones correctivas'], ['historial', 'Historial'], ['personal', 'Personal'], ['config', 'Configuración'], ['otros', 'Otros']];
 function permisosJefes(token) {
   const s = sesion_(token, 'personal'); if (s.user.rol !== 'admin') throw new Error('PERM');

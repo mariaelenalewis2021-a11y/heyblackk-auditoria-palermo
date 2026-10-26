@@ -419,7 +419,7 @@ const MODULOS = [
   {id:"cierre",    t:"Cierre diario", d:"Cierres de caja de la planilla.", c:"#EA580C", perm:"cierre"},
   {id:"rrhh",      t:"Novedades RR. HH.", d:"Llegadas tarde y ausencias.", c:"#DB2777", perm:"rrhh"},
   {id:"vacaciones",t:"Vacaciones", d:"Solicitudes del equipo.", c:"#0891B2", perm:"vacaciones"},
-  {id:"finanzas",  t:"Panel del jefe", d:"La plata del negocio en palabras simples: qué entró, qué salió, a dónde se fue y qué hacer.", c:"#15803D", perm:"finanzas"},
+  {id:"finanzas",  t:"Administración y Finanzas", d:"Pagos, cobros e ingresos por ventas: qué entró, qué salió, a dónde se fue y qué hacer. Explicado simple.", c:"#15803D", perm:"finanzas"},
   {id:"clientes",  t:"Clientes y pedidos", d:"Qué pidió cada cliente, qué se entregó y qué falta.", c:"#B45309", perm:"clientes"},
   {id:"produccion",t:"Producción", d:"Planificado, ingresado, talleres y lo que falta fabricar.", c:"#4F46E5", perm:"produccion"},
   {id:"otros",     t:"Otros", d:"Instalar la app y cambiar tu PIN.", c:"#CA8A04", perm:null},
@@ -2521,7 +2521,7 @@ function pintarFinanzas(body, D, recargar){
     el("span",{class:"pill",text:"📦 Planilla de Dropbox (solo lectura)"}),
     S.ultimaCarga ? el("span",{class:"pill",text:"Último movimiento cargado: "+fmtF(S.ultimaCarga)}) : null,
     el("span",{class:"pill",text:"Leída: "+fechaHora(R.leida)}), el("span",{class:"spacer"}), bAct));
-  const ba = barraSeccion(D.audio, "Panel del jefe"); if (ba) body.append(ba);
+  const ba = barraSeccion(D.audio, "Administración y Finanzas"); if (ba) body.append(ba);
   // 1 · En pocas palabras
   if (U){
     const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""}, E = S.equilibrio;
