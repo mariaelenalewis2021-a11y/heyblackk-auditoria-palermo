@@ -1366,12 +1366,12 @@ function ctbItems_(id) {
   return I;
 }
 /** Productos vendidos en los últimos N días (COT menos notas de crédito), por local según el número (0001/0005/0007). */
+/* Solo prendas: afuera envíos, bolsas, descuentos, señas y renglones sin código. */
+function ctbNoProducto_(it) { return !it.codigo || /^(ENVIO|BOLSA|DESC|RECARGO|SENA|ANTICIPO)/i.test(it.codigo) || /\b(bolsas?|env[ií]o|descuento|recargo|se[ñn]a|anticipo|gift ?card)\b/i.test(it.nombre || ''); }
 function ctbProductos_(dias) {
   const hasta = hoy_(), desde = sumarDias_(hasta, -(dias || 7) + 1);
   const L = ctbComprobantes_(desde, hasta).filter(x => x.id != null && FIN_PV[x.pv] && (CTB_ES_VENTA(x.tipo) || CTB_ES_NC(x.tipo)));
-  /* Solo prendas: afuera envíos, bolsas, descuentos, señas y renglones sin código. */
-  const noProducto = it => !it.codigo || /^(ENVIO|BOLSA|DESC|RECARGO|SENA|ANTICIPO)/i.test(it.codigo) || /\b(bolsas?|env[ií]o|descuento|recargo|se[ñn]a|anticipo|gift ?card)\b/i.test(it.nombre || '');
-  const ag = {}, add = (loc, it, signo) => { if (noProducto(it)) return; const k = loc + '|' + (it.codigo || it.nombre), A = ag[k] = ag[k] || { local: loc, codigo: it.codigo, nombre: it.nombre, unidades: 0, monto: 0 };
+  const ag = {}, add = (loc, it, signo) => { if (ctbNoProducto_(it)) return; const k = loc + '|' + (it.codigo || it.nombre), A = ag[k] = ag[k] || { local: loc, codigo: it.codigo, nombre: it.nombre, unidades: 0, monto: 0 };
     A.unidades += signo * it.cant; A.monto += signo * it.monto; };
   let leidos = 0;
   L.forEach(c => { if (leidos >= 400) return; leidos++; const loc = FIN_PV[c.pv], sg = CTB_ES_NC(c.tipo) ? -1 : 1;
@@ -1401,8 +1401,8 @@ function ctbFueraTemporada_() {
         S.forEach(s => { m[String(s.Codigo || '').trim()] = ctbNum_(s.StockActual); }); if (!S.length || Array.isArray(j) || Object.keys(m).length >= (j.TotalItems || 0)) break; } }); } catch (e) {}
   let vend = {}; try { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (P) P.todos.forEach(x => { vend[x.codigo] = x.unidades; }); } catch (e) {}
   return C.map(x => ({ codigo: String(x.Codigo || '').trim(), nombre: String(x.Nombre || '').trim(), stock: ctbNum_(x.Stock), precio: ctbNum_(x.PrecioFinal || x.Precio), costo: ctbNum_(x.CostoInterno), estado: String(x.Estado || '') }))
-    .filter(x => x.codigo && !/SS27$/i.test(x.codigo) && x.stock > 0 && !/inactiv|baja/i.test(x.estado))
-    .map(x => Object.assign(x, { palermo: dep.palermo ? (dep.palermo[x.codigo] || 0) : null, lima: dep.lima ? (dep.lima[x.codigo] || 0) : null, temporada: (x.codigo.match(/(SS|AW|FW|OI|PV)\d{2}$/i) || ['sin temporada'])[0].toUpperCase(),
+    .filter(x => !ctbNoProducto_(x) && !/SS27$/i.test(x.codigo) && x.stock > 0 && !/inactiv|baja/i.test(x.estado))
+    .map(x => Object.assign(x, { palermo: dep.palermo ? (dep.palermo[x.codigo] || 0) : null, lima: dep.lima ? (dep.lima[x.codigo] || 0) : null, temporada: (x.codigo.match(/(SS|AW|FW|OI|PV)\d{2}$/i) || ['Anteriores'])[0].replace(/^[a-z]+\d+$/i, t => t.toUpperCase()),
       valorStock: Math.round(x.stock * x.precio) }))
     .sort((a, b) => b.stock - a.stock);
 }
