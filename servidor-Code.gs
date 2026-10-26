@@ -1369,7 +1369,9 @@ function ctbItems_(id) {
 function ctbProductos_(dias) {
   const hasta = hoy_(), desde = sumarDias_(hasta, -(dias || 7) + 1);
   const L = ctbComprobantes_(desde, hasta).filter(x => x.id != null && FIN_PV[x.pv] && (CTB_ES_VENTA(x.tipo) || CTB_ES_NC(x.tipo)));
-  const ag = {}, add = (loc, it, signo) => { if (!it.codigo && !it.nombre) return; const k = loc + '|' + (it.codigo || it.nombre), A = ag[k] = ag[k] || { local: loc, codigo: it.codigo, nombre: it.nombre, unidades: 0, monto: 0 };
+  /* Solo prendas: afuera envíos, bolsas, descuentos, señas y renglones sin código. */
+  const noProducto = it => !it.codigo || /^(ENVIO|BOLSA|DESC|RECARGO|SENA|ANTICIPO)/i.test(it.codigo) || /\b(bolsas?|env[ií]o|descuento|recargo|se[ñn]a|anticipo|gift ?card)\b/i.test(it.nombre || '');
+  const ag = {}, add = (loc, it, signo) => { if (noProducto(it)) return; const k = loc + '|' + (it.codigo || it.nombre), A = ag[k] = ag[k] || { local: loc, codigo: it.codigo, nombre: it.nombre, unidades: 0, monto: 0 };
     A.unidades += signo * it.cant; A.monto += signo * it.monto; };
   let leidos = 0;
   L.forEach(c => { if (leidos >= 400) return; leidos++; const loc = FIN_PV[c.pv], sg = CTB_ES_NC(c.tipo) ? -1 : 1;
