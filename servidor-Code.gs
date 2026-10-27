@@ -111,7 +111,10 @@ const TABLAS = {
   //       palermo: '' (sin confirmar) · 'cerrado' (estuvo cerrado) · 'abierto' (abrió; el cierre queda pendiente de carga).
   Feriados: ['fecha', 'nombre', 'tipo', 'origen', 'palermo', 'confirmadoPor', 'actualizado'],
   // 3.3 · Vacaciones: solo el usuario (legajo) y el id interno; sin PIN, sin mail. Nombres se resuelven desde Usuarios al leer.
-  Vacaciones: ['id', 'usuario', 'desde', 'hasta', 'dias', 'comentario', 'estado', 'solicitado', 'decididoPor', 'decidido', 'motivo']
+  Vacaciones: ['id', 'usuario', 'desde', 'hasta', 'dias', 'comentario', 'estado', 'solicitado', 'decididoPor', 'decidido', 'motivo'],
+  // 3.9 · Resumen diario de ventas por canal (de Contabilium, solo lectura) y carga manual de Google por local
+  VentasCanal: ['clave', 'fecha', 'canal', 'ventas', 'comprobantes', 'nc', 'actualizado'],
+  Google: ['id', 'local', 'fecha', 'calificacion', 'resenas', 'respondidas', 'fichaPropia', 'observaciones', 'cargadoPor', 'creado']
 };
 
 /* =================== Instalación =================== */
@@ -159,7 +162,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, descargaCyber: descargaCyber, conectarContabilium: conectarContabilium, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, descargaCyber: descargaCyber, descargaCanales: descargaCanales, guardarGoogle: guardarGoogle, auditoriaSorteo10: auditoriaSorteo10, conectarContabilium: conectarContabilium, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -1457,11 +1460,304 @@ function refrescarTemplete() {
   Logger.log('REF4 ' + JSON.stringify({ antClaves: Object.keys(A), clientes: (A.clientes || A.lista || []).slice(0, 10).map(c => [c.cliente, Math.round(c.anticipado || 0), Math.round(c.pedido || 0), Math.round(c.pagado || 0), (c.avisos || []).map(a => String(a.texto || a).slice(0, 90))]), conc: K.map(c => [c.mes, (c.faltaCargar || []).length, Math.round(c.montoFalta || 0), (c.diferencias || []).length, (c.noEnCtb || []).length]) }).slice(0, 7000));
   Logger.log('REF5 ' + JSON.stringify({ mes: R.mes, ultimo: R.ultimo, meses: (R.meses || []).slice(-4) }).slice(0, 4000));
 }
+/* =================== 3.9 · Ventas por canal (Contabilium, SOLO LECTURA) ===================
+   Palermo = punto de venta 0001 · Lima = 0005 · Janette = 0007 · Web = comprobantes con Origen «TiendaNube» (Contabilium los
+   factura por el 0005, por eso se separan por el origen y no por el número). Las facturas a grandes cuentas (franquicias y
+   mayoristas de «Control ingreso») van aparte para no inflar el local que facturó. 0008 (postventa) no es un canal de venta.
+   Se guarda un resumen por día y canal en la hoja «VentasCanal» (de la app): así comparar contra el año pasado no obliga a leer
+   miles de comprobantes en cada consulta. La actualización diaria relee los últimos 10 días (notas de crédito tardías). */
+const CANALES = ['Palermo', 'Lima', 'Janette', 'Web'];
+const CANAL_PV = { '0001': 'Palermo', '0005': 'Lima', '0007': 'Janette' };
+const CANAL_GC = 'Grandes cuentas';
+const VC_HIST_DESDE = '2025-01-01';
+function gcNombres_() {
+  const S = {}; try { (control_(false).clientes || []).forEach(c => { const n = finNorm_(c.nombre || ''); if (n.length >= 4) S[n] = 1; }); } catch (e) {}
+  return S;
+}
+function esGranCuenta_(razon, nombres) { const n = finNorm_(razon || ''); return !!finFranq_(razon) || !!(n && nombres[n]); }
+function canalDe_(c, nombres) {
+  if (/tienda\s*nube|tiendanube/i.test(String(c.Origen || ''))) return 'Web';
+  const pv = String(c.Numero || '').slice(0, 4);
+  if (!CANAL_PV[pv]) return null;
+  if (esGranCuenta_(c.RazonSocial, nombres)) return CANAL_GC;
+  return CANAL_PV[pv];
+}
+const vcEsVenta_ = t => /^(COT|FC)/.test(t), vcEsNc_ = t => /^NC/.test(t);
+/** Lee los comprobantes de un rango (crudos) y los agrupa por día y canal. */
+function vcLeer_(desde, hasta, nombres, limiteMs) {
+  const t0 = Date.now(), raw = []; let completo = true;
+  for (let p = 1; p <= 400; p++) {
+    if (limiteMs && Date.now() - t0 > limiteMs) { completo = false; break; }
+    const j = ctbGet_('/api/comprobantes/search', { fechaDesde: desde, fechaHasta: hasta, page: p }), I = j.Items || [];
+    if (!I.length) break; raw.push.apply(raw, I); if (raw.length >= (Number(j.TotalItems) || 0)) break;
+  }
+  const canalId = {}; raw.forEach(c => { if (vcEsVenta_(String(c.TipoFc || '').toUpperCase())) canalId[c.Id] = canalDe_(c, nombres); });
+  const agg = {};
+  raw.forEach(c => { const t = String(c.TipoFc || '').toUpperCase(), v = vcEsVenta_(t), nc = vcEsNc_(t); if (!v && !nc) return;
+    const canal = (nc && c.IdComprobanteAsociado && canalId[c.IdComprobanteAsociado]) || canalDe_(c, nombres); if (!canal) return;
+    const f = String(c.FechaEmision || '').slice(0, 10); if (!/^\d{4}-\d\d-\d\d$/.test(f)) return;
+    const k = f + '|' + canal, A = agg[k] = agg[k] || { clave: k, fecha: f, canal: canal, ventas: 0, comprobantes: 0, nc: 0 }, m = Math.abs(ctbNum_(c.ImporteTotalNeto));
+    if (v) { A.ventas += m; A.comprobantes++; } else { A.ventas -= m; A.nc += m; } });
+  return { filas: Object.keys(agg).map(k => agg[k]), completo: completo, leidos: raw.length };
+}
+/** Reemplaza en la hoja los días [desde, hasta] por los nuevos. */
+function vcGuardar_(rangos, nuevas) {
+  lock_(() => {
+    const ahora = new Date().toISOString(), dentro = f => rangos.some(r => f >= r[0] && f <= r[1]);
+    const L = tAll_('VentasCanal').filter(r => !dentro(r.fecha)).concat(nuevas.map(r => Object.assign(r, { ventas: Math.round(r.ventas), nc: Math.round(r.nc), actualizado: ahora })))
+      .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.canal.localeCompare(b.canal));
+    const sh = tabla_('VentasCanal'), nc = TABLAS.VentasCanal.length + 1, n = sh.getLastRow() - 1;
+    if (n > 0) sh.getRange(2, 1, n, nc).clearContent();
+    if (L.length) sh.getRange(2, 1, L.length, nc).setValues(L.map(o => filaDe_('VentasCanal', o)));
+    delete MEMO_.VentasCanal;
+  });
+}
+/** Actualización diaria: últimos 10 días; si falta el historial (desde 2025), lo completa por meses con límite de tiempo. */
+function ventasCanalSync_(conHistorial) {
+  if (!ctbConfigurado_()) return null;
+  const hoy = hoy_(), nombres = gcNombres_(), out = {};
+  const d = sumarDias_(hoy, -10), R = vcLeer_(d, hoy, nombres);
+  vcGuardar_([[d, hoy]], R.filas); out.ultimosDias = R.filas.length;
+  if (conHistorial && PROPS.getProperty('VC_HIST') !== 'ok') try { out.historial = ventasCanalHistorial_(240000); } catch (e) { out.historialError = String(e.message || e).slice(0, 150); }
+  PROPS.setProperty('VC_SYNC', JSON.stringify({ ts: new Date().toISOString(), ok: true }));
+  return out;
+}
+function ventasCanalHistorial_(limiteMs) {
+  const t0 = Date.now(), hoy = hoy_(), nombres = gcNombres_();
+  let m = PROPS.getProperty('VC_HIST_PROX') || VC_HIST_DESDE.slice(0, 7); const rangos = [], filas = [];
+  const fin = sumarDias_(hoy, -11).slice(0, 7);
+  while (m <= fin && Date.now() - t0 < limiteMs) {
+    const d = m + '-01', [y, mo] = m.split('-').map(Number), h = Utilities.formatDate(new Date(y, mo, 0), TZ, 'yyyy-MM-dd'), hh = h > sumarDias_(hoy, -11) ? sumarDias_(hoy, -11) : h;
+    const R = vcLeer_(d, hh, nombres, Math.max(20000, limiteMs - (Date.now() - t0))); if (!R.completo) break;
+    rangos.push([d, hh]); filas.push.apply(filas, R.filas);
+    m = mo === 12 ? (y + 1) + '-01' : y + '-' + ('0' + (mo + 1)).slice(-2);
+  }
+  if (rangos.length) vcGuardar_(rangos, filas);
+  PROPS.setProperty('VC_HIST_PROX', m);
+  if (m > fin) PROPS.setProperty('VC_HIST', 'ok');
+  return { hasta: m, meses: rangos.length, completo: m > fin };
+}
+/** Editor: actualiza todo lo que viene de Contabilium y de las planillas vinculadas SIN leer el Templete (solo lectura en todas las fuentes). */
+function actualizarSinTemplete() {
+  SS_ = null; MEMO_ = {}; const out = [], paso = (n, f) => { try { out.push(n + ': ' + JSON.stringify(f()).slice(0, 160)); } catch (e) { out.push(n + ': ERROR ' + String(e.message || e).slice(0, 160)); } };
+  paso('Control ingreso', () => { const d = control_(true, true); return { clientes: (d.clientes || []).length, modificado: d.modificado }; });
+  paso('Ventas Palermo (cierres)', () => { const c = sync_(null); return { ok: c.ok, modificado: c.modificado }; });
+  paso('Contabilium ventas por canal', () => ventasCanalSync_(true));
+  paso('Contabilium productos y cobranzas', () => ctbActualizarResumenes_());
+  paso('Stock HB Palermo (sorteo)', () => stockPalermoArt_(true).length + ' artículos con stock');
+  paso('Noticias y dólar', () => { CACHE.remove('CTX37'); const x = contexto37_(); return { dolar: !!x.dolar, noticias: x.noticias.map(n => n.titulo) }; });
+  try { CACHE.remove('FIN38_R'); } catch (e) {}
+  console.log('ACT ' + out.join(' | ')); return out;
+}
+/** Para correr desde el editor (o la actualización diaria): completa el historial de ventas por canal desde enero 2025. */
+function ventasCanalHistorial() { const r = ventasCanalHistorial_(330000); console.log('VC ' + JSON.stringify(r)); return r; }
+
+const pctVs_ = (a, b) => b > 0 ? Math.round((a - b) / b * 1000) / 10 : null;
+/** KPIs por canal: hoy, ayer, mes, año; vs. mismo período del mes anterior y del año pasado; ticket promedio; participación. */
+function kpiCanales_(hoy, sinGC) {
+  const R = tAll_('VentasCanal'); if (!R.length) return null;
+  hoy = hoy || hoy_();
+  const y = hoy.slice(0, 4), m = hoy.slice(0, 7), dd = hoy.slice(8, 10), ya = String(Number(y) - 1), ayer = sumarDias_(hoy, -1);
+  const ma = finMesAnt_(m), [may, mam] = ma.split('-').map(Number), finMa = Utilities.formatDate(new Date(may, mam, 0), TZ, 'yyyy-MM-dd');
+  const maMismo = (ma + '-' + dd) > finMa ? finMa : ma + '-' + dd;
+  const mAA = ya + '-' + m.slice(5), finMAA = Utilities.formatDate(new Date(Number(ya), Number(m.slice(5)), 0), TZ, 'yyyy-MM-dd');
+  const mAAMismo = (mAA + '-' + dd) > finMAA ? finMAA : mAA + '-' + dd, yaMismo = ya + hoy.slice(4);
+  const desdeHist = R.reduce((a, r) => r.fecha < a ? r.fecha : a, '9999').slice(0, 7) + '-01';   // el historial se carga por meses completos
+  const S = (canal, d, h) => { let v = 0, n = 0; R.forEach(r => { if (r.canal === canal && r.fecha >= d && r.fecha <= h) { v += r.ventas; n += r.comprobantes; } }); return { v: Math.round(v), n: n, ticket: n ? Math.round(v / n) : null }; };
+  const conHist = d => desdeHist <= d;   // solo se compara si hay historia para ese período
+  const canales = CANALES.concat(sinGC ? [] : [CANAL_GC]).map(c => {
+    const o = { canal: c, hoy: S(c, hoy, hoy), ayer: S(c, ayer, ayer), mes: S(c, m + '-01', hoy), mesAntMismo: conHist(ma + '-01') ? S(c, ma + '-01', maMismo) : null,
+      mesAnt: conHist(ma + '-01') ? S(c, ma + '-01', finMa) : null, mesAnioAnt: conHist(mAA + '-01') ? S(c, mAA + '-01', mAAMismo) : null,
+      anio: S(c, y + '-01-01', hoy), anioAntMismo: conHist(ya + '-01-01') ? S(c, ya + '-01-01', yaMismo) : null, anioAnt: conHist(ya + '-01-01') ? S(c, ya + '-01-01', ya + '-12-31') : null };
+    o.vsMesAnt = o.mesAntMismo ? pctVs_(o.mes.v, o.mesAntMismo.v) : null; o.vsAnioAnt = o.mesAnioAnt ? pctVs_(o.mes.v, o.mesAnioAnt.v) : null;
+    o.vsAnioAntAcum = o.anioAntMismo ? pctVs_(o.anio.v, o.anioAntMismo.v) : null;
+    o.ticketVsMesAnt = o.mes.ticket && o.mesAntMismo && o.mesAntMismo.ticket ? pctVs_(o.mes.ticket, o.mesAntMismo.ticket) : null;
+    const diasMes = Number(dd); o.promDiaMes = diasMes > 1 ? Math.round((o.mes.v - o.hoy.v) / (diasMes - 1)) : null;
+    o.conDatos = !!(o.mes.v || o.anio.v || (o.mesAntMismo && o.mesAntMismo.v)); return o; }).filter(o => o.conDatos);
+  if (!canales.length) return null;
+  const totMes = canales.reduce((a, c) => a + Math.max(0, c.mes.v), 0), totAnio = canales.reduce((a, c) => a + Math.max(0, c.anio.v), 0);
+  canales.forEach(c => { c.partMes = totMes ? Math.round(Math.max(0, c.mes.v) / totMes * 1000) / 10 : null; c.partAnio = totAnio ? Math.round(Math.max(0, c.anio.v) / totAnio * 1000) / 10 : null; });
+  const sumK = k => canales.reduce((a, c) => a + (c[k] ? c[k].v : 0), 0);
+  // Las variaciones del total se calculan solo con los canales que tienen dato en los dos períodos (un canal nuevo no infla la comparación).
+  const vsK = (act, ref) => { const cs = canales.filter(c => c[ref] && c[ref].v > 0); if (!cs.length) return null; const a = cs.reduce((t, c) => t + c[act].v, 0), b = cs.reduce((t, c) => t + c[ref].v, 0); return { v: b, pct: pctVs_(a, b), canales: cs.length }; };
+  const total = { mes: totMes, anio: totAnio, hoy: sumK('hoy'), ayer: sumK('ayer') }, m1 = vsK('mes', 'mesAntMismo'), m2 = vsK('mes', 'mesAnioAnt'), m3 = vsK('anio', 'anioAntMismo');
+  total.mesAntMismo = m1 && m1.v; total.mesAnioAnt = m2 && m2.v; total.anioAntMismo = m3 && m3.v;
+  total.vsMesAnt = m1 ? m1.pct : null; total.vsAnioAnt = m2 ? m2.pct : null; total.vsAnioAntAcum = m3 ? m3.pct : null;
+  total.comparaParcial = [m1, m2, m3].some(x => x && x.canales < canales.length);
+  return { hoy: hoy, mes: m, mesAnt: ma, anioAnt: ya, desde: desdeHist, canales: canales, total: total, acciones: accionesCanal_(canales, hoy), sync: JSON.parse(PROPS.getProperty('VC_SYNC') || 'null'),
+    fuente: 'Contabilium (solo lectura): Palermo 0001 · Lima 0005 · Janette 0007 · Web = origen Tienda Nube · Grandes cuentas = clientes de «Control ingreso» y franquicias. Ventas netas de notas de crédito.' };
+}
+/** Acciones comerciales por canal para días o meses flojos (siempre con el dato que las justifica). */
+const ACC_CANAL = {
+  Palermo: ['Activar a las clientas frecuentes de Palermo', 'Mandar por WhatsApp las novedades SS27 con foto a las clientas que compraron en los últimos 90 días e invitarlas al showroom; reforzar vidriera y probadores con lo que más rota.'],
+  Lima: ['Mover el salón de Lima', 'Armar exhibición con los artículos de mayor rotación y una promo por cantidad (2da unidad) para la clienta de paso; difundir el stock disponible.'],
+  Janette: ['Reforzar el punto Janette', 'Reponer talles faltantes de los más vendidos y coordinar una acción en el punto (prenda destacada, cartel de novedades).'],
+  Web: ['Empujar la tienda online', 'Campaña en Instagram y mail con los 10 más vendidos, revisar que el stock publicado en Tienda Nube esté al día y probar envío gratis desde un monto.'],
+  'Grandes cuentas': ['Llamar a las grandes cuentas', 'Contactar a las cuentas con pedido o saldo pendiente para cerrar reposición y cobro antes de fin de mes.']
+};
+function accionesCanal_(canales, hoy) {
+  const out = [], ayerNom = NOMBRE_DIA[new Date(sumarDias_(hoy, -1) + 'T12:00:00Z').getUTCDay()];
+  canales.forEach(c => { const A = ACC_CANAL[c.canal]; if (!A) return;
+    if (c.vsMesAnt != null && c.vsMesAnt <= -10) out.push({ canal: c.canal, prioridad: c.vsMesAnt <= -25 ? 1 : 2, titulo: A[0], accion: A[1], porQue: c.canal + ' lleva ' + $_(c.mes.v) + ' en el mes, ' + Math.abs(c.vsMesAnt) + ' % menos que el mes anterior a esta altura.' });
+    else if (c.promDiaMes && c.canal !== CANAL_GC && c.ayer.v < c.promDiaMes * 0.5 && (c.canal === 'Web' || c.ayer.v > 0 || ayerNom !== 'domingo'))
+      out.push({ canal: c.canal, prioridad: 3, titulo: A[0], accion: A[1], porQue: 'Ayer (' + ayerNom + ') ' + c.canal + ' vendió ' + $_(c.ayer.v) + ', menos de la mitad de su promedio diario del mes (' + $_(c.promDiaMes) + ').' }); });
+  return out.sort((a, b) => a.prioridad - b.prioridad);
+}
+/** Grandes cuentas (franquicias y mayoristas) desde «Control ingreso Nueva temporada 27»: pedido, entregado, cobrado, saldo y quiénes más compran. */
+function kpiGrandesCuentas_(D) {
+  const L = (D && D.clientes || []).filter(c => c.seCuenta !== false); if (!L.length) return null;
+  const u = (c, a, b) => v37_(c, a, b), sum = f => L.reduce((t, c) => t + (f(c) || 0), 0);
+  const conPago = L.filter(c => c.pagado != null);
+  const o = { clientes: L.length, pedidoU: sum(c => u(c, 'pedidoTotal', 'pedido')), entregadoU: sum(c => u(c, 'despachado', 'entregado')),
+    pedido$: sum(c => c.montoTotal || c.monto), entregado$: sum(c => c.montoDespachado), cobrado: conPago.length ? sum(c => c.pagado) : null, saldo: conPago.length ? sum(c => c.faltaPagar) : null };
+  o.avance = o.pedidoU ? Math.round(o.entregadoU / o.pedidoU * 100) : null;
+  o.top = L.slice().sort((a, b) => ((b.montoTotal || 0) - (a.montoTotal || 0)) || (u(b, 'pedidoTotal', 'pedido') - u(a, 'pedidoTotal', 'pedido'))).slice(0, 5)
+    .map(c => ({ nombre: c.nombre, tipo: c.tipo || '', pedido$: c.montoTotal || null, pedidoU: u(c, 'pedidoTotal', 'pedido'), entregadoU: u(c, 'despachado', 'entregado'), cobrado: c.pagado, saldo: c.faltaPagar }));
+  o.lista = L.map(c => [c.nombre, c.tipo || '', u(c, 'pedidoTotal', 'pedido'), u(c, 'despachado', 'entregado'), c.montoTotal || null, c.montoDespachado || null, c.pagado, c.faltaPagar]);
+  return o;
+}
+/** Excel / PDF: ventas por día y canal (los últimos 90 días), por mes, y grandes cuentas. Las listas largas van acá, no en pantalla. */
+function descargaCanales(token) {
+  const s = sesion_(token, 'kpi'), hoy = hoy_(), R = tAll_('VentasCanal');
+  const desde = sumarDias_(hoy, -90), dias = {}, meses = {};
+  R.forEach(r => { if (r.canal === 'Grandes cuentas' && s.perms.indexOf('clientes') < 0) return;
+    if (r.fecha >= desde) { const d = dias[r.fecha] = dias[r.fecha] || {}; d[r.canal] = (d[r.canal] || 0) + r.ventas; }
+    const k = r.fecha.slice(0, 7), M = meses[k] = meses[k] || {}; M[r.canal] = M[r.canal] || { v: 0, n: 0 }; M[r.canal].v += r.ventas; M[r.canal].n += r.comprobantes; });
+  const cs = CANALES.concat(s.perms.indexOf('clientes') >= 0 ? [CANAL_GC] : []);
+  const hojas = [
+    { nombre: 'Por día (90 días)', columnas: ['Fecha'].concat(cs, ['Total']), dinero: cs.map((x, i) => i + 1).concat([cs.length + 1]),
+      filas: Object.keys(dias).sort().reverse().map(f => [fdm_(f)].concat(cs.map(c => Math.round(dias[f][c] || 0)), [Math.round(cs.reduce((a, c) => a + (dias[f][c] || 0), 0))])) },
+    { nombre: 'Por mes', columnas: ['Mes'].concat(cs.map(c => c + ' ventas'), cs.map(c => c + ' ticket'), ['Total']), dinero: cs.map((x, i) => i + 1).concat(cs.map((x, i) => cs.length + i + 1), [2 * cs.length + 1]),
+      filas: Object.keys(meses).sort().reverse().map(m => [MES_NOM(m)].concat(cs.map(c => Math.round((meses[m][c] || {}).v || 0)), cs.map(c => { const x = meses[m][c]; return x && x.n ? Math.round(x.v / x.n) : null; }), [Math.round(cs.reduce((a, c) => a + ((meses[m][c] || {}).v || 0), 0))])) }];
+  if (s.perms.indexOf('clientes') >= 0) { try { const G = kpiGrandesCuentas_(control_(false)); if (G) hojas.push({ nombre: 'Grandes cuentas', columnas: ['Cliente', 'Tipo', 'Pedido (u)', 'Entregado (u)', 'Pedido ($)', 'Entregado ($)', 'Cobrado', 'Saldo'], dinero: [4, 5, 6, 7], filas: G.lista }); } catch (e) {} }
+  try { const G2 = tAll_('Google').sort((a, b) => b.fecha.localeCompare(a.fecha)); if (G2.length) hojas.push({ nombre: 'Google', columnas: ['Fecha', 'Local', 'Calificación', 'Reseñas', 'Respondidas', '% respondidas', 'Ficha propia', 'Observaciones', 'Cargó'],
+    filas: G2.map(g => [fdm_(g.fecha), g.local, g.calificacion, g.resenas, g.respondidas, g.resenas ? Math.round(g.respondidas / g.resenas * 100) + ' %' : '', g.fichaPropia === 'no' ? 'No' : 'Sí', g.observaciones || '', g.cargadoPor || '']) }); } catch (e) {}
+  log_(s, 'descarga', 'ok', 'canales', 'Ventas por canal');
+  return { actualizado: (JSON.parse(PROPS.getProperty('VC_SYNC') || 'null') || {}).ts || null, generado: new Date().toISOString(), por: s.user.nombre, titulo: 'Ventas por canal', archivo: 'Ventas-por-canal', hojas: hojas };
+}
+
+/* =================== 3.9 · Experiencia en Google (carga manual por local; la app no lee Google Maps) =================== */
+const LOCALES_GOOGLE = ['Palermo', 'Lima', 'Janette'];
+function guardarGoogle(token, data) {
+  const s = sesion_(token, 'kpi'); data = data || {};
+  const local = LOCALES_GOOGLE.indexOf(data.local) >= 0 ? data.local : null; if (!local) throw new Error('Elegí el local.');
+  const fecha = fechaOk_(data.fecha) || hoy_(); if (fecha > hoy_()) throw new Error('La fecha no puede ser futura.');
+  const ficha = data.fichaPropia === 'no' ? 'no' : 'si';
+  const cal = Math.round(Number(String(data.calificacion == null ? '' : data.calificacion).replace(',', '.')) * 10) / 10;
+  const res = Math.round(Number(data.resenas)), resp = Math.round(Number(data.respondidas));
+  if (ficha === 'si') {
+    if (!(cal >= 1 && cal <= 5)) throw new Error('La calificación va de 1 a 5 (por ejemplo 4,6).');
+    if (!(res >= 0 && res < 100000)) throw new Error('Cantidad de reseñas inválida.');
+    if (!(resp >= 0 && resp <= res)) throw new Error('Las reseñas respondidas no pueden ser más que el total.');
+  }
+  const o = { id: Utilities.getUuid(), local: local, fecha: fecha, calificacion: ficha === 'si' ? cal : null, resenas: ficha === 'si' ? res : null, respondidas: ficha === 'si' ? resp : null,
+    fichaPropia: ficha, observaciones: txt_(data.observaciones, 300), cargadoPor: s.user.nombre, creado: new Date().toISOString() };
+  lock_(() => tAdd_('Google', o));
+  log_(s, 'google_carga', 'ok', local, fecha + ' · ' + (o.calificacion || 'sin ficha') + ' · ' + (o.resenas || 0) + ' reseñas');
+  return { ok: true, panel: googlePanel_(hoy_()) };
+}
+function googlePanel_(hoy) {
+  const T = tAll_('Google'); if (!T.length) return null;
+  hoy = hoy || hoy_(); const hace30 = sumarDias_(hoy, -30);
+  const locales = LOCALES_GOOGLE.map(loc => {
+    const L = T.filter(g => g.local === loc).sort((a, b) => (a.fecha + a.creado).localeCompare(b.fecha + b.creado)); if (!L.length) return null;
+    const u = L[L.length - 1], ant = L.length > 1 ? L[L.length - 2] : null;
+    const mes = L.filter(g => g.fecha <= sumarDias_(u.fecha, -25)).pop() || null;   // la carga de hace ~1 mes (o la más vieja anterior a eso)
+    const o = { local: loc, fecha: u.fecha, calificacion: u.calificacion, resenas: u.resenas, respondidas: u.respondidas, fichaPropia: u.fichaPropia !== 'no', observaciones: u.observaciones || '',
+      pctRespondidas: u.resenas ? Math.round(u.respondidas / u.resenas * 100) : null, sinResponder: u.resenas != null ? Math.max(0, u.resenas - u.respondidas) : null, desactualizado: u.fecha < hace30,
+      vsAnterior: ant && ant.calificacion != null && u.calificacion != null ? { fecha: ant.fecha, calif: Math.round((u.calificacion - ant.calificacion) * 10) / 10, resenas: u.resenas - ant.resenas } : null,
+      vsMes: mes && mes.calificacion != null && u.calificacion != null ? { fecha: mes.fecha, calif: Math.round((u.calificacion - mes.calificacion) * 10) / 10, resenas: u.resenas - mes.resenas } : null };
+    const al = [], sug = [];
+    if (!o.fichaPropia) { al.push({ nivel: 'rojo', texto: loc + ' no tiene ficha propia en Google.' }); sug.push({ p: 1, t: 'Crear y verificar la ficha propia de ' + loc + ' en Google (Perfil de Empresa) con dirección, horario, teléfono y fotos.' }); }
+    else {
+      const baja = (o.vsAnterior && o.vsAnterior.calif < 0) || (o.vsMes && o.vsMes.calif < 0);
+      if (baja) al.push({ nivel: 'rojo', texto: 'Bajó la calificación de ' + loc + ': ' + String(u.calificacion).replace('.', ',') + (o.vsMes && o.vsMes.calif < 0 ? ' (' + String(o.vsMes.calif).replace('.', ',') + ' en el mes)' : ' (' + String(o.vsAnterior.calif).replace('.', ',') + ' vs. la carga anterior)') + '.' });
+      if (o.sinResponder) { al.push({ nivel: o.sinResponder >= 5 ? 'rojo' : 'amarillo', texto: loc + ' tiene ' + o.sinResponder + (o.sinResponder === 1 ? ' reseña sin responder.' : ' reseñas sin responder.') });
+        sug.push({ p: 1, t: 'Responder las ' + o.sinResponder + ' reseñas pendientes de ' + loc + ', primero las negativas, y desde ahora contestar todas en menos de 48 h.' }); }
+      if (baja || u.calificacion < 4.5) sug.push({ p: 2, t: 'Pedir reseñas a clientas satisfechas en ' + loc + ' con un QR en caja y en la bolsa; el objetivo es subir la calificación' + (u.calificacion < 4.5 ? ' por encima de 4,5' : '') + '.' });
+      else if ((o.vsMes && o.vsMes.resenas < 5) || u.resenas < 50) sug.push({ p: 3, t: 'Sumar reseñas en ' + loc + ' (' + (o.vsMes ? o.vsMes.resenas + ' nuevas en el mes' : u.resenas + ' en total') + '): QR en caja y un mensaje post-compra pidiéndola.' });
+      if (o.desactualizado) sug.push({ p: 3, t: 'Actualizar la carga de Google de ' + loc + ' (la última es del ' + fdm_(u.fecha) + ') y de paso revisar fotos, horarios y teléfono.' });
+    }
+    if (/duplic|vieja|desactualiz|otra ficha|cerrad/i.test(o.observaciones)) { al.push({ nivel: 'amarillo', texto: loc + ': hay una ficha duplicada o desactualizada (según la observación).' }); sug.push({ p: 2, t: 'Verificar y pedir a Google la baja o fusión de la ficha duplicada o desactualizada de ' + loc + '.' }); }
+    if (!sug.length) sug.push({ p: 3, t: 'Mantener ' + loc + ': responder cada reseña, renovar fotos cada mes y revisar horarios en feriados.' });
+    o.alertas = al; o.sugerencias = sug.sort((a, b) => a.p - b.p).map(x => x.t); o.accion = o.sugerencias[0];
+    return o; }).filter(Boolean);
+  return locales.length ? { locales: locales, generales: ['Revisar que horarios (incluidos feriados), teléfono y fotos estén actualizados en cada ficha.', 'Buscar en Google el nombre de la marca y verificar que no haya fichas duplicadas o de locales cerrados.'] } : null;
+}
+
+/* =================== 3.9 · Auditoría: perchero del showroom y control de 10 artículos al azar ===================
+   Los dos ítems nuevos se guardan dentro del registro (JSON) sin mover las columnas de la hoja «Registro», y cuentan en el
+   promedio, en las infracciones y en los KPIs de auditoría. «Otros» pasa a ser opcional.
+   Stock: Contabilium, depósito «HB PALERMO» (la misma fuente que el Excel de Cyber Monday). SOLO LECTURA.
+   El conteo es a ciegas: el auditor no ve el stock del sistema hasta guardar. */
+const PUNTOS_EXTRA = [['perchero', 'Perchero del showroom', 'Perchero con problemas'], ['stock10', 'Control de 10 artículos al azar', 'Artículos con diferencia de stock']];
+const PUNTOS_KPI = PUNTOS.concat(PUNTOS_EXTRA);
+const PERCHERO_PUNTAJE = { ok: 5, obs: 3, mal: 1 }, PERCHERO_TXT = { ok: 'OK', obs: 'Con observaciones', mal: 'Mal' };
+const stock10Puntaje_ = pct => pct >= 100 ? 5 : pct >= 90 ? 4 : pct >= 70 ? 3 : pct >= 50 ? 2 : 1;
+const COLORES_ = ['negro', 'negra', 'blanco', 'blanca', 'beige', 'granate', 'habano', 'rosa', 'celeste', 'oseo', 'óseo', 'brown', 'nude', 'azul', 'rojo', 'roja', 'verde', 'gris', 'marron', 'marrón', 'crudo', 'cruda', 'camel',
+  'chocolate', 'lila', 'natural', 'arena', 'tostado', 'bordo', 'bordó', 'mostaza', 'oliva', 'plata', 'dorado', 'cuadros', 'cuadro', 'pelaje', 'manchas', 'rayas', 'jean', 'denim', 'hueso', 'terracota', 'khaki', 'kaki',
+  'militar', 'salmon', 'salmón', 'coral', 'fucsia', 'violeta', 'amarillo', 'naranja', 'menta', 'petroleo', 'petróleo', 'vison', 'visón', 'champagne', 'perla', 'off', 'white', 'print', 'animal', 'leopardo', 'cebra', 'vaca',
+  'gold', 'silver', 'black', 'cream', 'tiza', 'piedra', 'cobre', 'malva', 'uva', 'vino', 'cereza', 'turquesa', 'aqua', 'jade', 'topo', 'carbon', 'carbón', 'mocca', 'moka', 'capuccino', 'canela', 'caramelo'];
+const TALLE_RE_ = /^(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|U|UN|ÚN|UNICO|ÚNICO|TU|\d{1,2})$/i;
+function talleColor_(nombre) {
+  const w = String(nombre || '').replace(/\(([^)]*)\)/g, ' $1 ').replace(/\btalle\b/ig, ' ').replace(/\s+/g, ' ').trim().split(' ');
+  let talle = ''; if (w.length > 1 && TALLE_RE_.test(w[w.length - 1])) { talle = w.pop().toUpperCase(); if (/^(U|UN|ÚN|UNICO|ÚNICO|TU)$/.test(talle)) talle = 'Único'; }
+  const col = w.filter((x, i) => i > 0 && COLORES_.indexOf(x.toLowerCase()) >= 0);
+  return { talle: talle || '—', color: col.length ? col.map(x => x.charAt(0).toUpperCase() + x.slice(1).toLowerCase()).join(' ') : '—' };
+}
+/** Stock de HB Palermo con nombre (caché 6 h, se precalienta en la actualización diaria). Solo artículos con stock > 0. */
+function stockPalermoArt_(forzar) {
+  if (!forzar) { const c = CACHE.get('STK_PAL10'); if (c) try { return JSON.parse(c); } catch (e) {} }
+  const d = ctbGet_('/api/inventarios/getDepositos'), D = Array.isArray(d) ? d : (d.Items || []), pal = D.find(x => /hb palermo/i.test(x.Nombre) && !/falla/i.test(x.Nombre));
+  if (!pal) throw new Error('No encuentro el depósito «HB PALERMO» en Contabilium.');
+  const st = {};
+  for (let p = 1; p <= 120; p++) { const j = ctbGet_('/api/inventarios/getStockByDeposito', { id: pal.Id, page: p }); const S = Array.isArray(j) ? j : (j.Items || []);
+    S.forEach(s => { const q = ctbNum_(s.StockActual); if (q > 0 && s.Codigo) st[String(s.Codigo).trim()] = q; }); if (!S.length || Array.isArray(j) || p * 50 >= (Number(j.TotalItems) || 0)) break; }
+  const nom = {};
+  for (let p = 1; p <= 120; p++) { const j = ctbGet_('/api/conceptos/search', { page: p }); const I = j.Items || [];
+    I.forEach(x => { const k = String(x.Codigo || '').trim(); if (st[k] != null) nom[k] = String(x.Nombre || '').trim(); }); if (!I.length || p * 50 >= (Number(j.TotalItems) || 0)) break; }
+  const L = Object.keys(st).filter(k => nom[k] && !ctbNoProducto_({ codigo: k, nombre: nom[k] })).map(k => [k, nom[k].slice(0, 60), st[k]]);
+  const s = JSON.stringify(L); if (s.length < 95000) try { CACHE.put('STK_PAL10', s, 21600); } catch (e) {}
+  return L;
+}
+/** Sortea 10 artículos al azar (que no estén en la auditoría anterior). Devuelve código, descripción, talle y color; NO el stock. */
+function auditoriaSorteo10(token) {
+  const s = sesion_(token, 'auditar');
+  if (!ctbConfigurado_()) throw new Error('Contabilium no está conectado: no se puede sortear el control de stock.');
+  const L = stockPalermoArt_(false); if (L.length < 10) throw new Error('No hay suficientes artículos con stock en HB Palermo para sortear.');
+  let prev = []; try { prev = JSON.parse(PROPS.getProperty('AUD_ULT10') || '[]'); } catch (e) {}
+  const pool = L.filter(x => prev.indexOf(x[0]) < 0), base = pool.length >= 10 ? pool : L;
+  for (let i = base.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = base[i]; base[i] = base[j]; base[j] = t; }
+  const items = base.slice(0, 10).map(x => Object.assign({ codigo: x[0], descripcion: x[1] }, talleColor_(x[1])));
+  const id = Utilities.getUuid().slice(0, 13);
+  CACHE.put('AUD10_' + id, JSON.stringify({ ts: new Date().toISOString(), sistema: base.slice(0, 10).map(x => [x[0], x[2]]), por: s.user.id }), 21600);
+  log_(s, 'auditoria_sorteo10', 'ok', id, items.map(x => x.codigo).join(','));
+  return { id: id, items: items, fuente: 'Stock de Contabilium · depósito HB PALERMO', vence: 'El sorteo vale 6 horas.' };
+}
+/** Valida y arma el resultado del control de stock (se llama al guardar la auditoría). */
+function stock10Resultado_(d) {
+  if (!d || !d.id) return null;
+  const c = CACHE.get('AUD10_' + String(d.id).replace(/[^\w-]/g, '')); if (!c) throw new Error('El sorteo de los 10 artículos venció (dura 6 horas). Tocá «Sortear de nuevo» y volvé a contar.');
+  const S = JSON.parse(c), cont = d.conteos || {}, items = (d.items || []);
+  const res = S.sistema.map(([cod, sis]) => { const it = items.find(x => x.codigo === cod) || { codigo: cod };
+    const v = cont[cod]; if (v === '' || v == null || !(Number(v) >= 0)) throw new Error('Falta el conteo de ' + cod + '.');
+    const n = Math.round(Number(v)), dif = n - Math.round(sis);
+    return { codigo: cod, descripcion: txt_(it.descripcion, 80), talle: txt_(it.talle, 10), color: txt_(it.color, 40), sistema: Math.round(sis), contado: n, diferencia: dif, estado: dif === 0 ? 'ok' : dif < 0 ? 'faltante' : 'sobrante' }; });
+  const coinciden = res.filter(r => r.diferencia === 0).length, exactitud = Math.round(coinciden / res.length * 100);
+  return { id: d.id, sorteado: S.ts, items: res, coinciden: coinciden, total: res.length, exactitud: exactitud,
+    faltantes: res.filter(r => r.diferencia < 0).reduce((a, r) => a - r.diferencia, 0), sobrantes: res.filter(r => r.diferencia > 0).reduce((a, r) => a + r.diferencia, 0) };
+}
+
 /* =================== 3.7 · Contexto que puede impactar a Hey Blackk (dólar + noticias) =================== */
 /* Fuentes públicas y gratuitas, sin clave: DolarApi (cotizaciones) y Google Noticias (titulares en español, Argentina).
    Se excluye C5N. Caché de 2 h; ante un error devuelve lo que pudo (nunca rompe el resumen). */
 const CTX37_TEMAS = [
   { id: 'textil', titulo: 'Textil', q: '"industria textil" OR indumentaria Argentina', impacto: 'marca costos, competencia de importados y demanda de indumentaria' },
+  // 3.9 · Temas que pidió administración (27/10/2026): consumo, importados por courier, CyberMonday/Black Friday e inflación
+  { id: 'consumo', titulo: 'Consumo', q: 'CAME "ventas minoristas" pyme', impacto: 'muestra si la gente está comprando: anticipa el ritmo de ventas de los locales y de la web' },
+  { id: 'importados', titulo: 'Importados', q: 'Shein OR Temu OR courier ARCA ropa importada', impacto: 'la ropa importada barata compite en precio con la marca, sobre todo en la web' },
+  { id: 'cyber', titulo: 'Fechas de venta', q: 'CyberMonday OR "Black Friday" Argentina 2026', impacto: 'fechas de descuentos online: preparar stock, precios y campaña de la tienda web' },
+  { id: 'inflacion', titulo: 'Inflación', q: 'INDEC inflación "prendas de vestir"', impacto: 'si la ropa sube menos que la inflación, se achica el margen: revisar precios y costos' },
   { id: 'uruguay', titulo: 'Uruguay', q: 'Uruguay Argentina exportaciones OR frontera OR aduana', impacto: 'pega en los envíos y la cobranza de la franquicia de Uruguay' },
   { id: 'clima', titulo: 'Clima', q: '"El Niño" OR tormentas OR "alerta meteorológica" Argentina', impacto: 'lluvias y tormentas pueden demorar envíos y cambiar la circulación en el local' },
   { id: 'combustibles', titulo: 'Combustibles', q: 'aumento combustibles nafta gasoil YPF', impacto: 'sube el costo de fletes y logística, incluidos los envíos a Uruguay' },
@@ -2228,13 +2524,21 @@ function guardarAuditoria(token, data, fotos) {
   if (rec.fecha > hoy_()) throw new Error('La fecha no puede ser futura.');
   PUNTOS.forEach(x => {
     const v = Math.round(Number(data.puntajes && data.puntajes[x[0]]));
+    if (x[0] === 'otros' && !(v >= 1 && v <= 5)) return;   // 3.9: «Otros» es opcional
     if (!(v >= 1 && v <= 5)) throw new Error('Faltan puntos por evaluar.');
     rec.puntajes[x[0]] = v;
     rec.infracciones[x[0]] = Math.max(0, Math.min(999, Math.round(Number(data.infracciones && data.infracciones[x[0]]) || 0)));
     const c = txt_(data.comentarios && data.comentarios[x[0]], 200); if (c) rec.comentarios[x[0]] = c;
   });
-  const prom = PUNTOS.reduce((a, x) => a + rec.puntajes[x[0]], 0) / PUNTOS.length;
-  const tot = PUNTOS.reduce((a, x) => a + rec.infracciones[x[0]], 0);
+  // 3.9 · Perchero del showroom (obligatorio) y control de 10 artículos al azar (obligatorio salvo que no se haya podido sortear)
+  const pe = data.perchero || {}; if (!PERCHERO_PUNTAJE[pe.estado]) throw new Error('Falta evaluar el perchero del showroom.');
+  rec.perchero = { estado: pe.estado, texto: PERCHERO_TXT[pe.estado], comentario: txt_(pe.comentario, 300) };
+  rec.puntajes.perchero = PERCHERO_PUNTAJE[pe.estado]; rec.infracciones.perchero = pe.estado === 'mal' ? 1 : 0; if (rec.perchero.comentario) rec.comentarios.perchero = rec.perchero.comentario;
+  if (data.stock10 && data.stock10.id) { rec.stock10 = stock10Resultado_(data.stock10); rec.puntajes.stock10 = stock10Puntaje_(rec.stock10.exactitud); rec.infracciones.stock10 = rec.stock10.total - rec.stock10.coinciden; }
+  else if (!data.stock10SinDatos) throw new Error('Falta el control de los 10 artículos al azar.');
+  const claves = Object.keys(rec.puntajes);
+  const prom = claves.reduce((a, k) => a + rec.puntajes[k], 0) / claves.length;
+  const tot = Object.keys(rec.infracciones).reduce((a, k) => a + (rec.infracciones[k] || 0), 0);
   rec.promedio = Math.round(prom * 100) / 100;
   rec.resultado = prom >= p.promExc ? 'Excelente' : prom >= p.promAdv ? 'Advertencia' : 'Reclamo';
   rec.totalInfracciones = tot;
@@ -2244,7 +2548,7 @@ function guardarAuditoria(token, data, fotos) {
   const subidas = [];
   try {
     // Cada foto puede venir asociada a un punto evaluado: {punto, data}. Texto suelto = foto general (compatibilidad).
-    const claves = PUNTOS.map(x => x[0]);
+    const claves = PUNTOS_KPI.map(x => x[0]);
     rec.fotoPuntos = []; rec.fotosDescartadas = 0;
     (Array.isArray(fotos) ? fotos : []).slice(0, 12).forEach((f, i) => {
       const data = typeof f === 'string' ? f : f && f.data;
@@ -2257,8 +2561,8 @@ function guardarAuditoria(token, data, fotos) {
     lock_(() => {
       const sh = hoja_();
       const [y, mo, d] = rec.fecha.split('-').map(Number);
-      sh.appendRow([rec.id, new Date(y, mo - 1, d), celda_(rec.auditor), ...PUNTOS.map(x => rec.puntajes[x[0]]), rec.promedio, rec.resultado,
-        ...PUNTOS.map(x => rec.infracciones[x[0]]), rec.totalInfracciones, rec.resultadoChecklist, rec.diasPedido == null ? '' : rec.diasPedido,
+      sh.appendRow([rec.id, new Date(y, mo - 1, d), celda_(rec.auditor), ...PUNTOS.map(x => rec.puntajes[x[0]] == null ? '' : rec.puntajes[x[0]]), rec.promedio, rec.resultado,
+        ...PUNTOS.map(x => rec.infracciones[x[0]] == null ? '' : rec.infracciones[x[0]]), rec.totalInfracciones, rec.resultadoChecklist, rec.diasPedido == null ? '' : rec.diasPedido,
         rec.pedidoFueraDePlazo ? 'Sí' : 'No', celda_(rec.comentarioGeneral), ...PUNTOS.map(x => celda_(rec.comentarios[x[0]] || '')),
         rec.fotos.length, Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm'), JSON.stringify(rec)]);
       const r = sh.getLastRow(), N = PUNTOS.length, C = HEAD.length;
@@ -2267,7 +2571,7 @@ function guardarAuditoria(token, data, fotos) {
       const col = { Excelente: ['#DCFCE7', '#15803D'], Advertencia: ['#FEF3C7', '#B45309'], Reclamo: ['#FEE2E2', '#C81E1E'] };
       const sc = { 1: ['#FEE4E2', '#D92D20'], 2: ['#FFE8D9', '#E8590C'], 3: ['#FEF3C7', '#A16207'], 4: ['#DCFCE7', '#16A34A'], 5: ['#C9F2D9', '#0E7A3E'] };
       const bg = Array(C).fill(null), fc = Array(C).fill(null), fw = Array(C).fill(null), ha = Array(C).fill(null);
-      PUNTOS.forEach((x, j) => { const v = rec.puntajes[x[0]]; bg[3 + j] = sc[v][0]; fc[3 + j] = sc[v][1]; fw[3 + j] = 'bold'; ha[3 + j] = 'center'; });
+      PUNTOS.forEach((x, j) => { const v = rec.puntajes[x[0]]; if (!v) return; bg[3 + j] = sc[v][0]; fc[3 + j] = sc[v][1]; fw[3 + j] = 'bold'; ha[3 + j] = 'center'; });
       [[4 + N, rec.resultado], [6 + 2 * N, rec.resultadoChecklist]].forEach(([i, res]) => { bg[i] = col[res][0]; fc[i] = col[res][1]; fw[i] = 'bold'; });
       sh.getRange(r, 1, 1, C).setBackgrounds([bg]).setFontColors([fc]).setFontWeights([fw]).setHorizontalAlignments([ha]);
     });
@@ -2275,7 +2579,8 @@ function guardarAuditoria(token, data, fotos) {
     subidas.forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (x) {} });   // sin fotos huérfanas
     throw e;
   }
-  log_(s, 'auditoria_creada', rec.resultado, rec.id, rec.fecha + ' · ' + rec.promedio + ' · fotos ' + rec.fotos.length);
+  if (rec.stock10) { try { PROPS.setProperty('AUD_ULT10', JSON.stringify(rec.stock10.items.map(x => x.codigo))); CACHE.remove('AUD10_' + rec.stock10.id); } catch (e) {} }
+  log_(s, 'auditoria_creada', rec.resultado, rec.id, rec.fecha + ' · ' + rec.promedio + ' · fotos ' + rec.fotos.length + (rec.stock10 ? ' · stock ' + rec.stock10.exactitud + ' %' : ''));
   return rec;
 }
 function leerAud_() {
@@ -2749,11 +3054,17 @@ function getKPIs(token, desde, hasta) {
   // 3.6: clientes y producción, solo si el jefe tiene esas secciones habilitadas (lo que no tiene permiso ni se lee).
   let cliR = null, proR = null, cliL = [];
   if (s.perms.indexOf('clientes') >= 0 || s.perms.indexOf('produccion') >= 0) { try { const D = control_(false); if (s.perms.indexOf('clientes') >= 0) { cliR = resumenClientes_(D); cliL = D.clientes.filter(c => c.seCuenta !== false); } if (s.perms.indexOf('produccion') >= 0) proR = resumenProduccion_(D); } catch (e) {} }
-  const ctxK = s.perms.indexOf('kpi') >= 0 ? contexto37_() : null;   // 3.7: dólar y noticias que pueden impactar a la marca
-  const audio = audio_(s.user, comercial, auditoria, { pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR, clima: comercial && !comercial.sinDatos ? clima37_() : null, contexto: ctxK });
+  const ctxK = s.perms.indexOf('kpi') >= 0 ? contexto37_() : null;
+  // 3.9 · Ventas por canal (Contabilium), grandes cuentas (Control ingreso, solo con la sección Clientes) y experiencia en Google
+  const verGC = s.perms.indexOf('clientes') >= 0;
+  let canales = null, grandes = null, google = null;
+  try { canales = kpiCanales_(hoy, !verGC); } catch (e) { console.warn('kpiCanales_ ' + e); }
+  if (verGC) try { grandes = kpiGrandesCuentas_(control_(false)); if (grandes) delete grandes.lista; } catch (e) {}
+  try { google = googlePanel_(hoy); } catch (e) {}   // 3.7: dólar y noticias que pueden impactar a la marca
+  const audio = audio_(s.user, comercial, auditoria, { canales: canales, grandes: grandes, google: google, pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR, clima: comercial && !comercial.sinDatos ? clima37_() : null, contexto: ctxK });
   return {
     desde: desde, hasta: hasta, auditoriasN: audN, params: params_(),
-    acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio, contexto: ctxK,
+    acciones: accionesK, auditoria: auditoria, feriados: feriados, audio: audio, contexto: ctxK, canales: canales, grandesCuentas: grandes, google: google,
     clientes36: cliR ? { clientes: cliR.clientes, pedido: cliR.pedido, entregado: cliR.despachado, despachado: cliR.despachado, separado: cliR.separado, pendiente: cliR.pendiente, avance: cliR.avance, cumplimiento: cliR.cumplimiento,
       pagado: cliR.pagado, faltaPagar: cliR.faltaPagar, estados: cliR.estados, alertas: cliR.alertas.slice(0, 3) } : null,
     produccion36: proR ? { planificado: proR.planificado, ingresado: proR.ingresado, enProceso: proR.enProceso, faltaFabricar: proR.faltaFabricar, avance: proR.avance, atrasados: proR.atrasados,
@@ -2787,16 +3098,24 @@ function kpiAuditoria_(auds, acc, p, hoy) {
   out.ultima = { fecha: u.fecha, promedio: u.promedio, resultado: u.resultado, auditor: u.auditor };
   if (a) { out.anterior = { fecha: a.fecha, promedio: a.promedio, resultado: a.resultado }; out.tendencia = u.promedio > a.promedio ? 'mejora' : u.promedio < a.promedio ? 'empeora' : 'igual'; }
   const rec90 = L.filter(x => x.fecha >= sumarDias_(hoy, -90)); const base = rec90.length ? rec90 : L.slice(-5);
-  const prom = {}; PUNTOS.forEach(x => { const v = base.map(b => b.puntajes && b.puntajes[x[0]]).filter(Boolean); prom[x[0]] = v.length ? v.reduce((s, y) => s + y, 0) / v.length : null; });
-  const deb = PUNTOS.filter(x => prom[x[0]] != null).sort((x, y) => prom[x[0]] - prom[y[0]])[0];
+  const prom = {}; PUNTOS_KPI.forEach(x => { const v = base.map(b => b.puntajes && b.puntajes[x[0]]).filter(Boolean); prom[x[0]] = v.length ? v.reduce((s, y) => s + y, 0) / v.length : null; });
+  const deb = PUNTOS_KPI.filter(x => prom[x[0]] != null).sort((x, y) => prom[x[0]] - prom[y[0]])[0];
   if (deb) out.puntoDebil = { punto: deb[1], promedio: r2_(prom[deb[0]]) };
-  const inf = PUNTOS.map(x => ({ punto: x[2], total: base.reduce((s, b) => s + ((b.infracciones || {})[x[0]] || 0), 0) })).sort((x, y) => y.total - x.total);
+  const inf = PUNTOS_KPI.map(x => ({ punto: x[2], total: base.reduce((s, b) => s + ((b.infracciones || {})[x[0]] || 0), 0) })).sort((x, y) => y.total - x.total);
   if (inf[0] && inf[0].total) out.infraccionTop = inf[0];
   out.pedidosFuera = base.filter(b => b.diasPedido != null && b.diasPedido > p.diasMax).length;
+  // 3.9 · Perchero y exactitud del stock (último control con datos)
+  const conStk = L.filter(x => x.stock10), us = conStk[conStk.length - 1], usA = conStk[conStk.length - 2];
+  if (us) out.stock10 = { fecha: us.fecha, exactitud: us.stock10.exactitud, coinciden: us.stock10.coinciden, total: us.stock10.total, faltantes: us.stock10.faltantes, sobrantes: us.stock10.sobrantes,
+    anterior: usA ? usA.stock10.exactitud : null, promedio: Math.round(conStk.slice(-5).reduce((a, x) => a + x.stock10.exactitud, 0) / Math.min(5, conStk.length)),
+    diferencias: us.stock10.items.filter(i => i.diferencia).map(i => ({ codigo: i.codigo, descripcion: i.descripcion, sistema: i.sistema, contado: i.contado, diferencia: i.diferencia })) };
+  const conPer = L.filter(x => x.perchero), up = conPer[conPer.length - 1]; if (up) out.perchero = { fecha: up.fecha, estado: up.perchero.estado, texto: up.perchero.texto, comentario: up.perchero.comentario || '' };
   // Recomendaciones: primero qué está pasando (hecho), después la acción. Sin conclusiones sobre el desempeño del personal.
   const R = out.recomendaciones;
   if (vencidas.length) R.push({ prioridad: 1, queEstaPasando: vencidas.length + ' acción(es) correctiva(s) vencida(s) sin resolver' + (vencidas[0] ? ' (la más antigua: ' + vencidas[0].descripcion.slice(0, 60) + ')' : '') + '.', accion: 'Revisar esas acciones con el local esta semana y cerrarlas con evidencia o fijar una nueva fecha.' });
   if (out.pedidosFuera) R.push({ prioridad: 1, queEstaPasando: out.pedidosFuera + ' auditoría(s) reciente(s) con pedidos de más de ' + p.diasMax + ' días sin retirar.', accion: 'Pedir aviso diario de pedidos pendientes y confirmar el retiro en la próxima visita.' });
+  if (out.stock10 && out.stock10.exactitud < 90) R.push({ prioridad: out.stock10.exactitud < 70 ? 1 : 2, queEstaPasando: 'En el último control de stock coincidieron ' + out.stock10.coinciden + ' de ' + out.stock10.total + ' artículos (' + out.stock10.exactitud + ' % de exactitud)' + (out.stock10.faltantes ? ', con ' + out.stock10.faltantes + ' unidades faltantes' : '') + '.', accion: 'Revisar las diferencias con quien carga las ventas y los movimientos en Contabilium, y recontar esos artículos la semana próxima.' });
+  if (out.perchero && out.perchero.estado !== 'ok') R.push({ prioridad: out.perchero.estado === 'mal' ? 1 : 3, queEstaPasando: 'El perchero del showroom quedó «' + out.perchero.texto + '» en la última auditoría' + (out.perchero.comentario ? ' (' + out.perchero.comentario.slice(0, 80) + ')' : '') + '.', accion: 'Reacomodarlo hoy (orden por modelo y talle, sin prendas caídas) y dejar foto como evidencia.' });
   if (out.infraccionTop) R.push({ prioridad: 2, queEstaPasando: 'La infracción más frecuente en las últimas auditorías es «' + out.infraccionTop.punto + '» (' + out.infraccionTop.total + ').', accion: 'Atacar primero ese punto: definir un responsable en el local y revisarlo en la próxima auditoría.' });
   if (out.puntoDebil && out.puntoDebil.promedio < p.promExc) R.push({ prioridad: 2, queEstaPasando: 'El punto más débil es «' + out.puntoDebil.punto + '» con ' + String(out.puntoDebil.promedio).replace('.', ',') + ' sobre 5.', accion: 'Subirlo a ' + String(p.promExc).replace('.', ',') + ': acordar con el local qué se corrige y verificarlo en la próxima visita.' });
   if (out.tendencia === 'empeora') R.push({ prioridad: 3, queEstaPasando: 'La última auditoría bajó respecto de la anterior (' + String(a.promedio).replace('.', ',') + ' → ' + String(u.promedio).replace('.', ',') + ').', accion: 'Hacer una visita de seguimiento antes de 7 días.' });
@@ -3167,6 +3486,35 @@ const cap_ = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 /* ---- Textos del resumen hablado (el navegador los lee con la Web Speech API; aquí solo se arma el texto con datos reales) ----
    3.5 · Regla: lo que no tiene datos no se menciona (ni "no hay datos" ni secciones vacías). Orden: comercial → auditoría → RRHH,
    de lo más importante a lo positivo. Si no hay nada para contar, solo un saludo. */
+/* 3.9 · Audio: un resumen corto por canal, cierre con el total de la marca y cuánto aporta cada canal; Google por local y acción. */
+function audioCanales_(K, G) {
+  if (!K || !K.canales || !K.canales.length) return { partes: [], total: '', acciones: [] };
+  const mesN = MESES[Number(K.mes.slice(5, 7)) - 1], mesAN = MESES[Number(K.mesAnt.slice(5, 7)) - 1];
+  const pc = v => palabras_(Math.round(Math.abs(v))) + ' por ciento ' + (v >= 0 ? 'más' : 'menos');
+  const partes = K.canales.map(c => {
+    if (c.canal === CANAL_GC) return c.mes.v ? 'Grandes cuentas: en ' + mesN + ' se les facturó ' + millones_(c.mes.v) + '.' : '';
+    if (!c.mes.v && !c.anio.v) return '';
+    const vs = [];
+    if (c.vsMesAnt != null) vs.push(pc(c.vsMesAnt) + ' que ' + mesAN + ' a esta altura');
+    if (c.vsAnioAnt != null) vs.push(pc(c.vsAnioAnt) + ' que ' + mesN + ' del año pasado');
+    return c.canal + ': en ' + mesN + ' lleva ' + millones_(c.mes.v) + (vs.length ? ', ' + vs.join(' y ') : '') + '.' +
+      (c.mes.ticket ? ' Ticket promedio ' + millones_(c.mes.ticket) + '.' : '') + (c.ayer.v ? ' Ayer vendió ' + millones_(c.ayer.v) + '.' : '');
+  }).filter(Boolean);
+  const T = K.total, conParte = K.canales.filter(c => c.partMes);
+  const total = T.mes ? 'En total, la marca lleva ' + millones_(T.mes) + ' en ' + mesN + (T.vsMesAnt != null ? ', ' + pc(T.vsMesAnt) + ' que ' + mesAN + ' a esta altura' : '') + '. ' +
+    (conParte.length > 1 ? 'Aportan: ' + conParte.sort((a, b) => b.partMes - a.partMes).map(c => c.canal.toLowerCase() + ' ' + palabras_(Math.round(c.partMes)) + ' por ciento').join(', ') + '.' : '') : '';
+  const acciones = (K.acciones || []).slice(0, 3).map(a => a.canal + ': ' + hablar_(a.porQue) + ' Acción: ' + a.titulo.toLowerCase() + ', ' + a.accion.charAt(0).toLowerCase() + a.accion.slice(1));
+  return { partes: partes, total: total, acciones: acciones };
+}
+function audioGoogle_(G) {
+  if (!G || !G.locales) return [];
+  return G.locales.map(l => {
+    if (!l.fichaPropia) return l.local + ' no tiene ficha propia en Google. Acción: ' + l.accion.charAt(0).toLowerCase() + l.accion.slice(1);
+    const cal = String(l.calificacion).replace('.', ' coma ');
+    const ev = l.vsMes ? (l.vsMes.calif ? (l.vsMes.calif > 0 ? ', subió ' : ', bajó ') + String(Math.abs(l.vsMes.calif)).replace('.', ' coma ') + ' en el mes' : ', igual que hace un mes') + (l.vsMes.resenas > 0 ? ' y sumó ' + palabras_(l.vsMes.resenas) + ' reseñas' : '') : '';
+    return 'En Google, ' + l.local + ' tiene ' + cal + ' estrellas con ' + palabras_(l.resenas) + ' reseñas' + ev + (l.pctRespondidas != null ? '; responde el ' + palabras_(l.pctRespondidas) + ' por ciento' : '') + '. Lo más importante: ' + l.accion.charAt(0).toLowerCase() + l.accion.slice(1);
+  });
+}
 function audio_(u, com, aud, ctx) {
   const nombre = String(u && u.nombre || '').trim().split(' ')[0];
   const hola = nombre ? 'Hola ' + nombre + ', ' : 'Hola, ';
@@ -3234,6 +3582,8 @@ function audio_(u, com, aud, ctx) {
   if (pend.length) A.push(pend.length === 1 ? 'Hay un cierre pendiente de carga, el ' + sinEl_(fechaHablada_(pend[0])) + '.' : 'Hay ' + palabras_(pend.length) + ' cierres pendientes de carga; los primeros son ' + pend.slice(0, 3).map(f => sinEl_(fechaHablada_(f))).join(', ') + '.');
   if (acc.abiertas) A.push(palabras_(acc.abiertas) === 'uno' ? 'Hay una acción correctiva abierta' + (acc.vencidas ? ', vencida.' : '.') : 'Hay ' + palabras_(acc.abiertas) + ' acciones correctivas abiertas' + (acc.vencidas ? ', ' + palabras_(acc.vencidas) + (acc.vencidas === 1 ? ' vencida.' : ' vencidas.') : '.'));
   if (aud && aud.ultima) A.push('La última auditoría fue el ' + sinEl_(fechaHablada_(aud.ultima.fecha)) + ', con resultado ' + String(aud.ultima.resultado).toLowerCase() + ', ' + String(aud.ultima.promedio).replace('.', ' coma ') + ' sobre cinco.');
+  if (aud && aud.stock10) A.push('En el control de stock de diez artículos al azar coincidieron ' + palabras_(aud.stock10.coinciden) + ' de ' + palabras_(aud.stock10.total) + ', ' + palabras_(aud.stock10.exactitud) + ' por ciento de exactitud' + (aud.stock10.faltantes ? ', con ' + unid36_(aud.stock10.faltantes) + ' faltantes' : '') + (aud.stock10.sobrantes ? ' y ' + unid36_(aud.stock10.sobrantes) + ' de más' : '') + '.');
+  if (aud && aud.perchero && aud.perchero.estado !== 'ok') A.push('El perchero del showroom quedó ' + aud.perchero.texto.toLowerCase() + '.');
   const recA = (aud && aud.recomendaciones || []).slice(0, 3).map(r => 'Prioridad ' + palabras_(r.prioridad) + ': ' + hablar_(r.queEstaPasando) + ' Acción: ' + hablar_(r.accion));
   if (ferPend) A.push(ferPend);
   // ---- RRHH (jefes y administración): hasta 3 alertas, de las rojas a las positivas, en tono neutro
@@ -3247,15 +3597,21 @@ function audio_(u, com, aud, ctx) {
   const intro = t => hola + t + ' ';
   const seccion = (titulo, partes) => partes.filter(Boolean).length ? limpiar(intro(titulo) + partes.filter(Boolean).join(' ')) : '';
   const ctxTxt = audioContexto37_(ctx.contexto);
-  const comercial = seccion('te cuento los indicadores comerciales de Palermo.', C.concat(F, E, [ferProx, climaTxt, ctxTxt]));
+  const CN = audioCanales_(ctx.canales), GO = audioGoogle_(ctx.google), gcr = ctx.grandes;
+  const gcTxt = gcr && gcr.pedido$ ? 'Grandes cuentas, según Control ingreso: ' + palabras_(gcr.clientes) + ' clientes, pedido por ' + millones_(gcr.pedido$) + (gcr.entregado$ ? ', entregado ' + millones_(gcr.entregado$) : '') + (gcr.cobrado != null ? ', cobrado ' + millones_(gcr.cobrado) : '') + (gcr.saldo ? ' y saldo pendiente de ' + millones_(gcr.saldo) : '') + '.' + (gcr.top && gcr.top[0] ? ' La que más compra es ' + gcr.top[0].nombre + '.' : '') : '';
+  const comercial = CN.partes.length ? seccion('te cuento las ventas de la marca, canal por canal.', CN.partes.concat([gcTxt, CN.total], C.length ? ['En Palermo, según los cierres de caja: ' + C.slice(0, 2).join(' ')] : [], GO, F.slice(0, 1), E.slice(0, 1), [ferProx, climaTxt, ctxTxt]))
+    : seccion('te cuento los indicadores comerciales de Palermo.', C.concat([gcTxt], GO, F, E, [ferProx, climaTxt, ctxTxt]));
   const auditoria = seccion('te cuento los indicadores de auditoría de Palermo.', A.concat(recA));
-  const acciones = seccion('te cuento las acciones comerciales para Palermo.', X);
+  const acciones = seccion(CN.acciones.length ? 'te cuento las acciones comerciales por canal.' : 'te cuento las acciones comerciales para Palermo.', CN.acciones.concat(X));
   const rrhh = seccion('te cuento el panorama de recursos humanos de los últimos treinta días.', R);
   const cuerpo = [];
-  if (Cg.length || bajoTxt || Fg.length || Eg.length || ferProx || climaTxt) cuerpo.push(Cg.concat([bajoTxt], Fg, Eg, [ferProx, climaTxt]).filter(Boolean).join(' '));
+  if (CN.partes.length) cuerpo.push(['Ventas por canal. '].concat(CN.partes, [CN.total], CN.acciones.slice(0, 1).map(a => 'Para traccionar, ' + a.charAt(0).toLowerCase() + a.slice(1)), Eg, [ferProx, climaTxt]).filter(Boolean).join(' '));
+  else if (Cg.length || bajoTxt || Fg.length || Eg.length || ferProx || climaTxt) cuerpo.push(Cg.concat([bajoTxt], Fg, Eg, [ferProx, climaTxt]).filter(Boolean).join(' '));
+  if (gcTxt) cuerpo.push(gcTxt);
+  if (GO.length) cuerpo.push(GO.join(' '));
   if (A.length) cuerpo.push('Ahora, auditoría. ' + A.slice(0, 3).join(' ') + (recA.length ? ' ' + recA[0] : ''));
   const cr = ctx.clientes, pr = ctx.produccion;
-  if (cr && cr.clientes) { const top = (ctx.clientesLista || []).filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente)[0];
+  if (!gcTxt && cr && cr.clientes) { const top = (ctx.clientesLista || []).filter(c => c.pendiente).sort((a, b) => b.pendiente - a.pendiente)[0];
     const tp = cr.topPendiente && cr.topPendiente[0];
     cuerpo.push('Pedidos de clientes: se llevaron ' + unid36_(cr.despachado) + ', el ' + palabras_(cr.avance || 0) + ' por ciento' + (cr.separado ? ', hay ' + unid36_(cr.separado) + ' separadas' : '') + ' y faltan despachar ' + unid36_(cr.pendiente) + (tp ? '; ' + tp.nombre + ' es el que más espera' : '') + '.' +
       (cr.pagado != null ? ' Pagado: ' + dinero_(cr.pagado) + (cr.faltaPagar ? ', falta pagar ' + dinero_(cr.faltaPagar) : '') + '.' : '')); }
@@ -4261,6 +4617,12 @@ function actualizarPlanillas_(s) {
       if (k.configurado) out.push({ planilla: 'Contabilium · ventas facturadas (COT)', ok: !!k.ok, ts: k.leida || R.leida, modificado: null, error: k.ok ? null : k.error });
       if (k.configurado) { const r2 = ctbActualizarResumenes_() || {}; out.push({ planilla: 'Contabilium · productos y cobranzas', ok: !r2.productosError && !r2.cobranzasError, ts: new Date().toISOString(), modificado: null, error: r2.productosError || r2.cobranzasError || null }); }
     } catch (e) { out.push({ planilla: 'Templete registro actividades (Dropbox)', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
+  }
+  // 3.9 · Ventas por canal (Contabilium, no depende del Templete). Desde el botón solo los últimos días; el historial y el stock del sorteo, en la de las 7 h.
+  if (ctbConfigurado_()) {
+    try { const v = ventasCanalSync_(!s) || {}; out.push({ planilla: 'Contabilium · ventas por canal', ok: !v.historialError, ts: new Date().toISOString(), modificado: null, error: v.historialError || null }); }
+    catch (e) { out.push({ planilla: 'Contabilium · ventas por canal', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
+    if (!s) try { stockPalermoArt_(true); } catch (e) {}
   }
   log_(s, 'actualizar_planillas', out.every(x => x.ok) ? 'ok' : 'error', '', out.map(x => x.planilla + ': ' + (x.ok ? 'ok' : x.error)).join(' · ').slice(0, 300));
   return out;

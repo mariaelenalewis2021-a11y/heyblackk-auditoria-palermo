@@ -9,8 +9,14 @@ const PUNTOS = [
   {k:"aviso",      e:"📢", l:"Palermo avisa pedidos pendientes",     inf:"Pedidos no avisados por Palermo"},
   {k:"limpieza",   e:"🧹", l:"Limpieza",                             inf:"Desorden / limpieza"},
   {k:"deposito",   e:"🏭", l:"Depósito ordenado (todo en su lugar)", inf:"Depósito: cosas fuera de lugar"},
-  {k:"otros",      e:"⚠️", l:"Otros",                                inf:"Otros"}
+  {k:"otros",      e:"⚠️", l:"Otros",                                inf:"Otros", opcional:true}
 ];
+/* 3.9 · Ítems nuevos: se evalúan con su propia tarjeta y cuentan en el promedio, las infracciones y los KPIs. */
+const PUNTOS_EXTRA = [
+  {k:"perchero", e:"🧥", l:"Perchero del showroom de Palermo", inf:"Perchero con problemas"},
+  {k:"stock10",  e:"🔢", l:"Control de 10 artículos al azar",  inf:"Artículos con diferencia de stock"}
+];
+const PUNTOS_ALL = PUNTOS.concat(PUNTOS_EXTRA);
 const ETIQ = {1:"Muy mal",2:"Mal",3:"Regular",4:"Bien",5:"Excelente"};
 const EMO  = {1:"❌",2:"🔴",3:"🟡",4:"🟢",5:"⭐"};
 const REMO = {Excelente:"✅",Advertencia:"⚠️",Reclamo:"❌"};
@@ -34,7 +40,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber"]);
+const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -1425,12 +1431,19 @@ async function asegurarRegistro(force){
 }
 
 /* ----- Auditar ----- */
-function blankForm(){ const f={puntajes:{},coment:{},inf:{}}; PUNTOS.forEach(p=>{f.inf[p.k]=0;}); return f; }
+function blankForm(){ const f={puntajes:{},coment:{},inf:{},perchero:{estado:null,coment:""},stock10:null,stock10Err:null}; PUNTOS.forEach(p=>{f.inf[p.k]=0;}); return f; }
+const PERCH = {ok:["✅","OK",5], obs:["🟡","Con observaciones",3], mal:["❌","Mal",1]};
+/* 3.9 · «Otros» es opcional. El perchero suma al promedio en pantalla; el control de stock se suma al guardar
+   (el conteo es a ciegas: el sistema se compara en el servidor). */
 function calc(f=S.form){
-  const vals = PUNTOS.map(p=>f.puntajes[p.k]).filter(v=>v);
+  f.perchero = f.perchero || {estado:null,coment:""};
+  const req = PUNTOS.filter(p=>!p.opcional);
+  const vals = PUNTOS.map(p=>f.puntajes[p.k]).filter(v=>v); if (f.perchero.estado) vals.push(PERCH[f.perchero.estado][2]);
   const prom = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
-  const tot = PUNTOS.reduce((a,p)=>a+(f.inf[p.k]||0),0);
-  return {n:vals.length, prom, tot, completo: vals.length===PUNTOS.length};
+  const tot = PUNTOS.reduce((a,p)=>a+(f.inf[p.k]||0),0) + (f.perchero.estado==="mal"?1:0);
+  const st = f.stock10, stockOk = !!f.stock10Err || !!(st && st.items.every(it=>st.conteos[it.codigo]!=="" && st.conteos[it.codigo]!=null && Number(st.conteos[it.codigo])>=0));
+  const hechos = req.filter(p=>f.puntajes[p.k]).length + (f.perchero.estado?1:0) + (stockOk?1:0), total = req.length + 2;
+  return {n:hechos, total, prom, tot, stockOk, completo: hechos===total};
 }
 function saveDraft(){ lsSet("hb_draft3",{form:S.form, fecha:$("f-fecha")&&$("f-fecha").value, dias:$("f-dias")&&$("f-dias").value, gen:$("f-general")&&$("f-general").value}); }
 function vAuditar(body){
@@ -1466,17 +1479,53 @@ function buildPuntos(){
     const num = el("input",{type:"number",min:"0",max:"999",inputmode:"numeric",value:S.form.inf[p.k]||0,"aria-label":"Infracciones "+p.inf, oninput:e=>{S.form.inf[p.k]=Math.max(0,parseInt(e.target.value)||0); onChange();}});
     const step = d => { num.value = Math.max(0,(parseInt(num.value)||0)+d); num.dispatchEvent(new Event("input")); };
     card.append(
-      el("div",{class:"punto-head"}, el("b",{}, el("span",{class:"em",text:p.e}), p.l), el("span",{class:"idx",text:(i+1)+"/7"})), sc,
+      el("div",{class:"punto-head"}, el("b",{}, el("span",{class:"em",text:p.e}), p.l, p.opcional?el("span",{class:"pill",style:"margin-left:6px",text:"opcional"}):null), el("span",{class:"idx",text:(i+1)+"/"+(PUNTOS.length+2)})), sc,
       el("div",{class:"punto-extra"}, com, el("div",{class:"inf"}, el("div",{class:"stepper"}, el("button",{type:"button","aria-label":"Restar",onclick:()=>step(-1),text:"−"}), num, el("button",{type:"button","aria-label":"Sumar",onclick:()=>step(1),text:"+"})), el("span",{text:"Infracciones"}))),
       el("div",{class:"fotos","data-punto":p.k}));
     box.append(card);
   });
+  box.append(cardPerchero(), el("div",{class:"punto",id:"p-stock10"}));
+  pintarStock10();
+}
+/* 3.9 · Perchero del showroom: OK / Con observaciones / Mal + comentario + foto */
+function cardPerchero(){
+  const f = S.form.perchero, card = el("div",{class:"punto","data-s":f.estado?PERCH[f.estado][2]:null});
+  const g = el("div",{class:"row seg38",role:"group","aria-label":"Estado del perchero"});
+  Object.keys(PERCH).forEach(k=>g.append(el("button",{class:"btn",type:"button","aria-pressed":String(f.estado===k),text:PERCH[k][0]+" "+PERCH[k][1],
+    onclick:()=>{ f.estado=k; card.setAttribute("data-s",PERCH[k][2]); [...g.children].forEach(b=>b.setAttribute("aria-pressed",String(b.textContent.endsWith(PERCH[k][1])))); onChange(); }})));
+  const com = el("input",{type:"text",maxlength:"300",placeholder:"💬 Comentario (estado y colocación del perchero)",value:f.coment||"","aria-label":"Comentario del perchero",oninput:e=>{f.coment=e.target.value; saveDraft();}});
+  card.append(el("div",{class:"punto-head"}, el("b",{}, el("span",{class:"em",text:"🧥"}), "Perchero del showroom de Palermo"), el("span",{class:"idx",text:(PUNTOS.length+1)+"/"+(PUNTOS.length+2)})),
+    el("p",{class:"hint",style:"margin:4px 0",text:"Estado y colocación: orden por modelo y talle, sin prendas caídas ni amontonadas."}), g, el("div",{class:"punto-extra"}, com), el("div",{class:"fotos","data-punto":"perchero"}));
+  return card;
+}
+/* 3.9 · Control de 10 artículos al azar (stock de HB Palermo en Contabilium). Conteo a ciegas. */
+function pintarStock10(){
+  const card = $("p-stock10"); if (!card) return; card.textContent="";
+  const st = S.form.stock10;
+  card.append(el("div",{class:"punto-head"}, el("b",{}, el("span",{class:"em",text:"🔢"}), "Control de 10 artículos al azar"), el("span",{class:"idx",text:(PUNTOS.length+2)+"/"+(PUNTOS.length+2)})),
+    el("p",{class:"hint",style:"margin:4px 0",text:"La app elige 10 artículos con stock en HB Palermo (Contabilium). Contá lo que hay físicamente: el stock del sistema se compara al guardar."}));
+  const sortear = async b => { spinBtn(b,"Sorteando… (la primera vez del día puede tardar un minuto)");
+    try{ const r = await apiS("auditoriaSorteo10"); S.form.stock10 = {id:r.id, items:r.items, conteos:{}}; S.form.stock10Err=null; saveDraft(); pintarStock10(); onChange(); }
+    catch(e){ S.form.stock10Err = msgErr(e); saveDraft(); pintarStock10(); onChange(); } };
+  if (!st){
+    const b = el("button",{class:"btn primary",type:"button",text:"🎲 Sortear 10 artículos"}); b.onclick=()=>sortear(b);
+    card.append(el("div",{class:"row"}, b));
+    if (S.form.stock10Err) card.append(el("div",{class:"notice warn",text:"No se pudo sortear: "+S.form.stock10Err+" Podés guardar la auditoría igual; el control queda sin datos."}));
+    return;
+  }
+  const tb = el("tbody");
+  st.items.forEach(it=>{ const inp = el("input",{type:"number",min:"0",max:"999",inputmode:"numeric",class:"cnt38",value:st.conteos[it.codigo]??"","aria-label":"Contados de "+it.codigo,
+      oninput:e=>{ st.conteos[it.codigo] = e.target.value===""?"":Math.max(0,parseInt(e.target.value)||0); saveDraft(); onChange(); }});
+    tb.append(el("tr",{}, el("td",{}, el("b",{text:it.descripcion}), el("div",{class:"hint mono",text:`${it.codigo} · talle ${it.talle} · ${it.color}`})), el("td",{class:"n"}, inp))); });
+  const otra = el("button",{class:"btn sm",type:"button",text:"🎲 Sortear de nuevo"}); otra.onclick=()=>{ if (confirm("¿Sortear otros 10 artículos? Se pierden los conteos cargados.")) sortear(otra); };
+  card.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, el("th",{text:"Artículo"}), el("th",{class:"n",text:"Contados"}))), tb)),
+    el("div",{class:"row"}, el("span",{class:"hint",text:"El sorteo vale 6 horas."}), el("span",{class:"spacer"}), otra));
 }
 function renderFotos(){
   document.querySelectorAll(".fotos[data-punto], #fotos-general").forEach(b=>b.textContent="");
   const cont = k => k==="general" ? $("fotos-general") : document.querySelector(`.fotos[data-punto="${k}"]`);
   S.fotos.forEach((f,i)=>{ const c=cont(f.punto); if (c) c.append(el("div",{class:"foto"}, el("img",{src:f.data,alt:"Evidencia"}), el("button",{type:"button","aria-label":"Quitar foto",text:"×",onclick:()=>{S.fotos.splice(i,1);renderFotos();}}))); });
-  ["general",...PUNTOS.map(p=>p.k)].forEach(k=>{ const c=cont(k); if (c && S.fotos.length<MAX_FOTOS) c.append(el("button",{class:"addfoto",type:"button",text:"📷 Foto",onclick:async()=>{ const d=await elegirFoto(false); if(d){ S.fotos.push({punto:k,data:d}); renderFotos(); } }})); });
+  ["general",...PUNTOS.map(p=>p.k),"perchero"].forEach(k=>{ const c=cont(k); if (c && S.fotos.length<MAX_FOTOS) c.append(el("button",{class:"addfoto",type:"button",text:"📷 Foto",onclick:async()=>{ const d=await elegirFoto(false); if(d){ S.fotos.push({punto:k,data:d}); renderFotos(); } }})); });
 }
 function onChange(){
   if (!$("r-prom")) return;
@@ -1486,8 +1535,8 @@ function onChange(){
   $("resultbar").setAttribute("data-r", r||"");
   $("r-label").textContent = r ? REMO[r]+" "+r : "⏳ Falta completar";
   const ip=$("r-inf"); ip.hidden = c.tot===0 && !c.completo; const rc=resChk(c.tot); ip.className="pill "+cls(rc); ip.textContent="Checklist: "+c.tot+" infracc. · "+rc;
-  $("r-meter").style.width = (c.n/PUNTOS.length*100)+"%";
-  $("r-count").textContent = c.n+" de "+PUNTOS.length;
+  $("r-meter").style.width = (c.n/c.total*100)+"%";
+  $("r-count").textContent = c.n+" de "+c.total;
   $("btn-enviar").disabled = !c.completo;
   saveDraft();
 }
@@ -1495,18 +1544,22 @@ function mensaje(rec){
   const p=S.params;
   let m = `Equipo Palermo: auditoría del ${fmtF(rec.fecha)} realizada por ${rec.auditor}. Puntaje promedio: ${fmt1(rec.promedio)} de 5. `;
   m += (rec.resultado==="Excelente"?p.mExc:rec.resultado==="Advertencia"?p.mAdv:p.mRec)||"";
-  const flojos = PUNTOS.filter(x=>rec.puntajes[x.k]<=2).map(x=>`${x.l} (${rec.puntajes[x.k]})`);
+  const flojos = PUNTOS_ALL.filter(x=>rec.puntajes[x.k]&&rec.puntajes[x.k]<=2).map(x=>`${x.l} (${rec.puntajes[x.k]})`);
   if (flojos.length) m += `\nPuntos a corregir: ${flojos.join(", ")}.`;
-  const infs = PUNTOS.filter(x=>rec.infracciones && rec.infracciones[x.k]>0).map(x=>`${x.inf.toLowerCase()}: ${rec.infracciones[x.k]}`);
+  const infs = PUNTOS_ALL.filter(x=>rec.infracciones && rec.infracciones[x.k]>0).map(x=>`${x.inf.toLowerCase()}: ${rec.infracciones[x.k]}`);
   if (infs.length) m += `\nSe detectaron ${rec.totalInfracciones} infracciones (${infs.join(", ")}).`;
   if (rec.diasPedido!=null && rec.diasPedido>p.diasMax) m += `\nHay un pedido con ${rec.diasPedido} días sin retirar (límite ${p.diasMax}): avisar y gestionar hoy.`;
+  if (rec.perchero && rec.perchero.estado!=="ok") m += `\nPerchero del showroom: ${rec.perchero.texto}${rec.perchero.comentario?" ("+rec.perchero.comentario+")":""}.`;
+  if (rec.stock10) m += `\nControl de stock (10 artículos al azar): coinciden ${rec.stock10.coinciden} de ${rec.stock10.total} (${rec.stock10.exactitud} % de exactitud)${rec.stock10.faltantes?`, ${rec.stock10.faltantes} u faltantes`:""}${rec.stock10.sobrantes?`, ${rec.stock10.sobrantes} u de más`:""}.`;
   if (rec.comentarioGeneral) m += `\nComentario: ${rec.comentarioGeneral}`;
   return m;
 }
 async function enviar(){
   const c=calc(); if (!c.completo) return;
   const btn=$("btn-enviar"); spinBtn(btn,"Enviando…");
-  const data = { fecha:$("f-fecha").value||hoy(), puntajes:{...S.form.puntajes}, infracciones:{...S.form.inf}, comentarios:{...S.form.coment}, diasPedido:$("f-dias").value, comentarioGeneral:$("f-general").value };
+  const st = S.form.stock10;
+  const data = { fecha:$("f-fecha").value||hoy(), puntajes:{...S.form.puntajes}, infracciones:{...S.form.inf}, comentarios:{...S.form.coment}, diasPedido:$("f-dias").value, comentarioGeneral:$("f-general").value,
+    perchero:{estado:S.form.perchero.estado, comentario:S.form.perchero.coment||""}, stock10: st ? {id:st.id, items:st.items, conteos:st.conteos} : null, stock10SinDatos: !st && !!S.form.stock10Err };
   const enviadas = S.fotos.length;
   try {
     const rec = await apiS("guardarAuditoria", data, S.fotos.map(f=>({punto:f.punto,data:f.data})));
@@ -1514,6 +1567,7 @@ async function enviar(){
     const sent=$("sent"); sent.textContent="";
     sent.append(el("div",{class:"card"}, el("div",{class:"sent-head"}, el("span",{class:"em",text:REMO[rec.resultado]}), el("div",{}, el("h2",{text:"Auditoría registrada"}), el("p",{class:"lead",style:"margin:0",text:`${fmtF(rec.fecha)} · ${rec.auditor} · ${fmt1(rec.promedio)} / 5 · ${rec.resultado}`}))),
       el("div",{class:"notice "+(guardadas===enviadas?"ok":"warn"),text: guardadas===enviadas ? `📷 ${guardadas} foto(s) guardada(s) y asociadas a su punto.` : `⚠️ Se guardaron ${guardadas} de ${enviadas} fotos. Las que no eran imágenes válidas se descartaron.`}),
+      rec.stock10 ? resumenStock10(rec.stock10) : null,
       el("div",{class:"msgbox",text:mensaje(rec)}), el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"📋 Copiar mensaje para el equipo",onclick:()=>copiar(mensaje(rec),"Mensaje copiado")}))));
     sent.hidden=false;
     try{ localStorage.removeItem("hb_draft3"); }catch(e){}
@@ -1565,11 +1619,18 @@ function pintarReg(){
   if (sel){ det.append(el("div",{class:"row"}, el("h3",{style:"margin:0",text:`Detalle · ${fmtF(sel.fecha)} · ${sel.auditor}`}), el("span",{class:"spacer"}), el("button",{class:"btn sm",type:"button",text:"Cerrar detalle",onclick:()=>{S.openRow=null;pintarReg();}})), detalleAud(sel)); det.hidden=false; }
   else det.hidden=true;
 }
+/* Resumen del control de stock: en pantalla solo coincidencias, exactitud y las diferencias (el detalle completo, en Excel/PDF). */
+function resumenStock10(x){
+  const dif = x.items.filter(i=>i.diferencia);
+  return el("div",{class:"notice "+(x.exactitud>=90?"ok":x.exactitud>=70?"warn":"bad")},
+    el("b",{text:`🔢 Control de stock: coinciden ${x.coinciden} de ${x.total} · ${x.exactitud} % de exactitud`}),
+    dif.length ? el("ul",{class:"lista-avisos"}, dif.map(i=>el("li",{text:`${i.descripcion} (${i.codigo}, talle ${i.talle}): sistema ${i.sistema}, contado ${i.contado} → ${i.diferencia<0?"faltan "+(-i.diferencia):"sobran "+i.diferencia}`}))) : el("div",{text:"Sin diferencias."}));
+}
 function detalleAud(a){
   const fotosDe = k => (a.fotos||[]).map((id,i)=>({id, punto:(a.fotoPuntos||[])[i]||"general"})).filter(f=>f.punto===k);
   const acc = (S.acciones||[]).filter(x=>x.auditId===a.id);
   const g = el("div",{class:"dpuntos"});
-  PUNTOS.forEach(p=>{ const v=a.puntajes?.[p.k], fs=fotosDe(p.k), ac=acc.filter(x=>x.punto===p.k);
+  PUNTOS_ALL.filter(p=>a.puntajes?.[p.k]!=null || !p.opcional && !PUNTOS_EXTRA.includes(p)).forEach(p=>{ const v=a.puntajes?.[p.k], fs=fotosDe(p.k), ac=acc.filter(x=>x.punto===p.k);
     g.append(el("div",{class:"dpunto"}, el("div",{class:"row",style:"gap:8px"}, scChip(v), el("b",{text:p.e+" "+p.l})),
       (a.infracciones?.[p.k]>0)? el("div",{style:"color:var(--bad);font-size:13px",text:a.infracciones[p.k]+" infracciones"}):null,
       a.comentarios?.[p.k]? el("div",{class:"obs",text:"💬 "+a.comentarios[p.k]}):null,
@@ -1578,9 +1639,10 @@ function detalleAud(a){
   });
   const box = el("div",{class:"dl"}, el("div",{class:"row"}, el("span",{text:`📅 ${fmtF(a.fecha)} · 👤 ${a.auditor}`}), el("span",{class:"spacer"}), el("span",{class:"mono hint",text:a.creado?"Cargada "+fechaHora(a.creado):""})), g);
   const gen = fotosDe("general");
+  if (a.stock10) box.append(resumenStock10(a.stock10));
   if (a.comentarioGeneral) box.append(el("div",{},el("b",{text:"💬 Comentario general: "}),a.comentarioGeneral));
   if (gen.length) box.append(el("div",{}, el("b",{text:"📷 Fotos generales"}), el("div",{class:"fotos"}, gen.map((f,i)=>miniFoto("getFoto", f.id, `General · ${fmtF(a.fecha)} · foto ${i+1}`)))));
-  const sueltas = acc.filter(x=>!PUNTOS.some(p=>p.k===x.punto));
+  const sueltas = acc.filter(x=>!PUNTOS_ALL.some(p=>p.k===x.punto));
   if (sueltas.length) box.append(el("div",{}, el("b",{text:"🛠️ Acciones correctivas"}), sueltas.map(x=>el("div",{class:"accmini",text:`${x.estado} · ${x.descripcion}`}))));
   const msg = mensaje(a);
   box.append(el("div",{class:"row"},
@@ -1593,7 +1655,7 @@ function detalleAud(a){
   return box;
 }
 function nuevaAccion(a){
-  const punto = el("select",{}, el("option",{value:"general",text:"General"}), ...PUNTOS.map(p=>el("option",{value:p.k,text:p.e+" "+p.l,selected:a.puntajes&&a.puntajes[p.k]<=2})));
+  const punto = el("select",{}, el("option",{value:"general",text:"General"}), ...PUNTOS_ALL.map(p=>el("option",{value:p.k,text:p.e+" "+p.l,selected:a.puntajes&&a.puntajes[p.k]<=2})));
   const d = el("textarea",{maxlength:"300",placeholder:"Qué hay que corregir"}), r = el("input",{type:"text",maxlength:"60",placeholder:"Responsable"}), v = el("input",{type:"date",min:hoy()});
   const ok = el("button",{class:"btn primary",type:"button",text:"Crear acción"});
   const m = modal(el("div",{class:"grid"}, el("h2",{text:"Acción correctiva · auditoría "+fmtF(a.fecha)}), el("label",{class:"f"},"Punto",punto), el("label",{class:"f"},"Acción",d),
@@ -1666,16 +1728,16 @@ async function buildXLSX(list){
   ws.getRow(1).height=32;
   ws.getCell("A3").value="Registro de auditorías · Sucursal Palermo"; ws.getCell("A3").font={bold:true,size:14};
   ws.getCell("A4").value=`${rangoTxt()} · ${list.length} auditorías · generado ${fechaHora()}`; ws.getCell("A4").font={size:10,color:{argb:"FF5F5F68"}};
-  const head=["Fecha","Auditor",...PUNTOS.map(p=>p.l),"Promedio","Resultado","Infracciones","Checklist","Días pedido","Comentario general"];
-  const NP=PUNTOS.length;
+  const head=["Fecha","Auditor",...PUNTOS_ALL.map(p=>p.l),"Promedio","Resultado","Infracciones","Checklist","Días pedido","Comentario general"];
+  const NP=PUNTOS_ALL.length;
   const hr = ws.getRow(6); hr.values=head; hr.height=44;
   hr.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"},size:10}; c.fill=fill("FF111113"); c.alignment={vertical:"middle",horizontal:"center",wrapText:true}; });
   const asc=[...list].reverse();
   asc.forEach((a,i)=>{
     const r = ws.getRow(7+i);
-    r.values=[toDate(a.fecha), a.auditor, ...PUNTOS.map(p=>a.puntajes?.[p.k]??null), a.promedio, a.resultado, a.totalInfracciones??0, a.resultadoChecklist, a.diasPedido, a.comentarioGeneral||""];
+    r.values=[toDate(a.fecha), a.auditor, ...PUNTOS_ALL.map(p=>a.puntajes?.[p.k]??null), a.promedio, a.resultado, a.totalInfracciones??0, a.resultadoChecklist, a.diasPedido, a.comentarioGeneral||""];
     r.getCell(1).numFmt="dd/mm/yyyy";
-    PUNTOS.forEach((p,j)=>{ const v=a.puntajes?.[p.k], c=r.getCell(3+j); c.alignment={horizontal:"center"}; if (HEXS[v]) { c.fill=fill(HEXS[v][0]); c.font={bold:true,color:{argb:HEXS[v][1]}}; } });
+    PUNTOS_ALL.forEach((p,j)=>{ const v=a.puntajes?.[p.k], c=r.getCell(3+j); c.alignment={horizontal:"center"}; if (HEXS[v]) { c.fill=fill(HEXS[v][0]); c.font={bold:true,color:{argb:HEXS[v][1]}}; } });
     const pc=r.getCell(3+NP); pc.numFmt="0.0"; pc.font={bold:true}; pc.alignment={horizontal:"center"};
     [[4+NP,a.resultado],[6+NP,a.resultadoChecklist]].forEach(([col,res])=>{ const c=r.getCell(col); c.fill=fill(HEXR[res]||"FFECECF0"); c.font={bold:true,color:{argb:HEXRT[res]||"FF5F5F68"}}; c.alignment={horizontal:"center"}; });
     r.getCell(5+NP).alignment={horizontal:"center"};
@@ -1689,7 +1751,7 @@ async function buildXLSX(list){
   const wd = wb.addWorksheet("Detalle por punto", {views:[{state:"frozen", ySplit:1}]});
   wd.columns=[{header:"Fecha",key:"f",width:12},{header:"Auditor",key:"a",width:20},{header:"Punto",key:"p",width:36},{header:"Puntaje",key:"s",width:10},{header:"Infracciones",key:"i",width:13},{header:"Comentario",key:"c",width:50},{header:"Promedio auditoría",key:"pr",width:12},{header:"Resultado",key:"r",width:14}];
   wd.getRow(1).eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill=fill("FF111113"); });
-  asc.forEach(a=>PUNTOS.forEach(p=>{ const v=a.puntajes?.[p.k];
+  asc.forEach(a=>PUNTOS_ALL.filter(p=>a.puntajes?.[p.k]!=null).forEach(p=>{ const v=a.puntajes?.[p.k];
     const row=wd.addRow({f:toDate(a.fecha),a:a.auditor,p:p.l,s:v,i:a.infracciones?.[p.k]||0,c:a.comentarios?.[p.k]||"",pr:a.promedio,r:a.resultado});
     row.getCell("f").numFmt="dd/mm/yyyy"; row.getCell("pr").numFmt="0.0";
     if (HEXS[v]) { const c=row.getCell("s"); c.fill=fill(HEXS[v][0]); c.font={bold:true,color:{argb:HEXS[v][1]}}; c.alignment={horizontal:"center"}; }
@@ -1704,9 +1766,20 @@ async function buildXLSX(list){
   [["Auditorías",n],["Puntaje promedio",Math.round(prom*10)/10],["Total infracciones",tot],["Infracciones por visita",Math.round(tot/n*10)/10]].forEach(r=>{ const row=wr.addRow(r); row.getCell(1).font={bold:true}; });
   ["Excelente","Advertencia","Reclamo"].forEach(k=>{ const row=wr.addRow([k,cnt(k),cnt(k)/n]); row.getCell(3).numFmt="0%"; row.getCell(1).fill=fill(HEXR[k]); row.getCell(1).font={bold:true,color:{argb:HEXRT[k]}}; });
   wr.addRow([]); const h2=wr.addRow(["Promedio por punto","Promedio","Infracciones"]); h2.eachCell(c=>{c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill=fill("FF111113");});
-  PUNTOS.forEach(p=>{ const v=list.map(a=>a.puntajes?.[p.k]).filter(Boolean); const av=v.length?v.reduce((s,x)=>s+x,0)/v.length:null;
+  PUNTOS_ALL.forEach(p=>{ const v=list.map(a=>a.puntajes?.[p.k]).filter(Boolean); const av=v.length?v.reduce((s,x)=>s+x,0)/v.length:null;
     const row=wr.addRow([p.l, av==null?null:Math.round(av*10)/10, list.reduce((s,a)=>s+(a.infracciones?.[p.k]||0),0)]);
     const k=av==null?null:Math.max(1,Math.min(5,Math.round(av))); if (k){ const c=row.getCell(2); c.fill=fill(HEXS[k][0]); c.font={bold:true,color:{argb:HEXS[k][1]}}; } });
+  // 3.9 · Control de 10 artículos al azar: cada auditoría con sus artículos y resultados (historial completo, solo en la descarga)
+  const conStk = asc.filter(a=>a.stock10);
+  if (conStk.length){
+    const ws2 = wb.addWorksheet("Control de stock", {views:[{state:"frozen", ySplit:1}]});
+    ws2.columns=[{header:"Fecha",key:"f",width:12},{header:"Auditor",key:"a",width:20},{header:"Código",key:"c",width:18},{header:"Descripción",key:"d",width:38},{header:"Talle",key:"t",width:8},{header:"Color",key:"co",width:18},
+      {header:"Stock sistema",key:"s",width:13},{header:"Contado",key:"n",width:10},{header:"Diferencia",key:"df",width:11},{header:"Estado",key:"e",width:12},{header:"Exactitud de la auditoría",key:"x",width:14}];
+    ws2.getRow(1).eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill=fill("FF111113"); c.alignment={wrapText:true,vertical:"middle"}; });
+    conStk.forEach(a=>a.stock10.items.forEach(it=>{ const row=ws2.addRow({f:toDate(a.fecha),a:a.auditor,c:it.codigo,d:it.descripcion,t:it.talle,co:it.color,s:it.sistema,n:it.contado,df:it.diferencia,e:it.estado==="ok"?"Coincide":it.estado==="faltante"?"Faltante":"Sobrante",x:a.stock10.exactitud/100});
+      row.getCell("f").numFmt="dd/mm/yyyy"; row.getCell("x").numFmt="0%"; if (it.diferencia){ row.getCell("df").font={bold:true,color:{argb:"FFC81E1E"}}; row.getCell("e").font={bold:true,color:{argb:"FFC81E1E"}}; } }));
+    ws2.autoFilter={from:"A1",to:"K1"};
+  }
   return await wb.xlsx.writeBuffer();
 }
 function buildPDF(list){
@@ -1727,19 +1800,26 @@ function buildPDF(list){
     doc.setTextColor(...col[1]); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text(k.toUpperCase(), x+3, 41);
     doc.setFontSize(13); doc.text(v, x+3, 48.5); });
   const SRGB={1:[[254,228,226],[217,45,32]],2:[[255,232,217],[232,89,12]],3:[[254,243,199],[161,98,7]],4:[[220,252,231],[22,163,74]],5:[[201,242,217],[14,122,62]]};
-  const cortos=["Etiqueta","Estant.","Pedidos","Aviso","Limpieza","Depósito","Otros"];
+  const cortos=["Etiqueta","Estant.","Pedidos","Aviso","Limpieza","Depósito","Otros","Perchero","Stock"];
   doc.autoTable({
     startY:57, theme:"grid", margin:{left:14,right:14,bottom:14},
     head:[["Fecha","Auditor",...cortos,"Prom.","Resultado","Infr.","Checklist","Días ped.","Comentario"]],
-    body:[...list].reverse().map(a=>[fmtF(a.fecha),a.auditor,...PUNTOS.map(p=>a.puntajes?.[p.k]??"–"),fmt1(a.promedio),a.resultado,a.totalInfracciones??0,a.resultadoChecklist,a.diasPedido??"–",a.comentarioGeneral||""]),
+    body:[...list].reverse().map(a=>[fmtF(a.fecha),a.auditor,...PUNTOS_ALL.map(p=>a.puntajes?.[p.k]??"–"),fmt1(a.promedio),a.resultado,a.totalInfracciones??0,a.resultadoChecklist,a.diasPedido??"–",a.comentarioGeneral||""]),
     styles:{font:"helvetica",fontSize:8,cellPadding:1.8,lineColor:[224,224,230],lineWidth:0.2,textColor:[20,20,22],valign:"middle"},
     headStyles:{fillColor:[17,17,19],textColor:255,fontStyle:"bold",halign:"center"},
-    columnStyles:{0:{cellWidth:18},1:{cellWidth:28},9:{halign:"center",fontStyle:"bold"},10:{halign:"center",cellWidth:22},11:{halign:"center"},12:{halign:"center",cellWidth:22},13:{halign:"center"}},
+    columnStyles:{0:{cellWidth:18},1:{cellWidth:26},11:{halign:"center",fontStyle:"bold"},12:{halign:"center",cellWidth:22},13:{halign:"center"},14:{halign:"center",cellWidth:22},15:{halign:"center"}},
     didParseCell:d=>{ if (d.section!=="body") return; const c=d.column.index, v=d.cell.raw;
-      if (c>=2 && c<=8){ d.cell.styles.halign="center"; if (SRGB[v]){ d.cell.styles.fillColor=SRGB[v][0]; d.cell.styles.textColor=SRGB[v][1]; d.cell.styles.fontStyle="bold"; } }
-      if ((c===10||c===12) && RGB[v]){ d.cell.styles.fillColor=RGB[v][0]; d.cell.styles.textColor=RGB[v][1]; d.cell.styles.fontStyle="bold"; } },
+      if (c>=2 && c<=10){ d.cell.styles.halign="center"; if (SRGB[v]){ d.cell.styles.fillColor=SRGB[v][0]; d.cell.styles.textColor=SRGB[v][1]; d.cell.styles.fontStyle="bold"; } }
+      if ((c===12||c===14) && RGB[v]){ d.cell.styles.fillColor=RGB[v][0]; d.cell.styles.textColor=RGB[v][1]; d.cell.styles.fontStyle="bold"; } },
     didDrawPage:()=>{ doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.setTextColor(130); doc.text(`Hey Blackk · Auditoría Palermo · página ${doc.internal.getNumberOfPages()}`, 14, H-7); }
   });
+  // 3.9 · Control de 10 artículos al azar: resumen por auditoría (el detalle artículo por artículo está en el Excel)
+  const conStk = [...list].reverse().filter(a=>a.stock10);
+  if (conStk.length) doc.autoTable({ startY: doc.lastAutoTable.finalY + 8, theme:"grid", margin:{left:14,right:14,bottom:14},
+    head:[["Fecha","Auditor","Coinciden","Exactitud","Faltantes (u)","Sobrantes (u)","Diferencias"]],
+    body:conStk.map(a=>[fmtF(a.fecha),a.auditor,`${a.stock10.coinciden} de ${a.stock10.total}`,a.stock10.exactitud+" %",a.stock10.faltantes||0,a.stock10.sobrantes||0,
+      a.stock10.items.filter(i=>i.diferencia).map(i=>`${i.codigo} (${i.diferencia>0?"+":""}${i.diferencia})`).join(", ")||"Sin diferencias"]),
+    styles:{font:"helvetica",fontSize:8,cellPadding:1.8,lineColor:[224,224,230],lineWidth:0.2,textColor:[20,20,22]}, headStyles:{fillColor:[17,17,19],textColor:255,fontStyle:"bold"} });
   return doc.output("blob");
 }
 
@@ -1791,7 +1871,7 @@ function renderKPI(){
     kpi("🔢 Infracciones", totInf, `${fmt1(totInf/n)} por visita · ${inf30} en 30 días`, totInf?"warn":"ok"),
     kpi("⏳ Pedido más viejo", maxDias==null?"–":maxDias+" días", fuera?`${fuera} visita${fuera===1?"":"s"} fuera de plazo (>${P.diasMax} d)`:`Límite ${P.diasMax} días`, fuera?"bad":(maxDias!=null?"ok":null))));
 
-  const avgP = PUNTOS.map(p=>{ const v=L.map(a=>a.puntajes?.[p.k]).filter(Boolean); return {p, v: v.length? v.reduce((s,x)=>s+x,0)/v.length : null}; });
+  const avgP = PUNTOS_ALL.filter(p=>!PUNTOS_EXTRA.includes(p) || L.some(a=>a.puntajes?.[p.k])).map(p=>{ const v=L.map(a=>a.puntajes?.[p.k]).filter(Boolean); return {p, v: v.length? v.reduce((s,x)=>s+x,0)/v.length : null}; });
   const weakest = avgP.filter(x=>x.v!=null).sort((a,b)=>a.v-b.v)[0];
   const bars = el("div",{class:"bars"});
   avgP.forEach(({p,v})=>{ const k=v==null?3:Math.max(1,Math.min(5,Math.round(v)));
@@ -1799,7 +1879,7 @@ function renderKPI(){
       el("div",{class:"track"+(weakest&&weakest.p.k===p.k?" weak":""),title:fmt1(v)}, el("i",{style:`width:${(v||0)/5*100}%;background:var(--s${k})`})),
       el("span",{class:"v",text:fmt1(v)}))); });
 
-  const cat = PUNTOS.map(p=>{ const tot=L.reduce((s,a)=>s+(a.infracciones?.[p.k]||0),0); const vis=L.filter(a=>(a.infracciones?.[p.k]||0)>0).length; return {p,tot,vis}; }).sort((a,b)=>b.tot-a.tot);
+  const cat = PUNTOS_ALL.filter(p=>!PUNTOS_EXTRA.includes(p) || L.some(a=>a.puntajes?.[p.k])).map(p=>{ const tot=L.reduce((s,a)=>s+(a.infracciones?.[p.k]||0),0); const vis=L.filter(a=>(a.infracciones?.[p.k]||0)>0).length; return {p,tot,vis}; }).sort((a,b)=>b.tot-a.tot);
   let acum=0; const tbl=el("tbody");
   cat.forEach(c=>{ acum+=c.tot; tbl.append(el("tr",{}, el("td",{text:c.p.e+" "+c.p.inf}), el("td",{class:"n",text:c.tot}), el("td",{class:"n",text:totInf?pct(c.tot/totInf):"–"}),
     el("td",{class:"n",text:totInf?pct(acum/totInf):"–"}), el("td",{class:"n",text:fmt1(c.tot/n)}), el("td",{class:"n",text:pct(c.vis/n)}))); });
@@ -1883,6 +1963,11 @@ async function vKPI(main){
   // ----- 3.3: resumen hablado (arriba del tablero) y feriados
   body.append(barraAudio(K.audio));
   { const cx = cardContexto(K.contexto); if (cx) body.append(cx); }   // 3.7: dólar y noticias que pueden impactar
+  // 3.9 · Ventas de todos los canales (Contabilium), grandes cuentas (Control ingreso) y experiencia en Google
+  { const recargar = ()=>{ main.textContent=""; route(); };
+    const cc = cardCanales(K); if (cc) body.append(cc);
+    const cg = cardGrandes(K); if (cg) body.append(cg);
+    body.append(cardGoogle(K, recargar)); }
   const fb = bannerFeriados(K.feriados, {confirmar: tiene("cierre"), alConfirmar: ()=>{ main.textContent=""; route(); }});
   if (!fb.hidden) body.append(fb);
   // 3.5 · Regla: solo se muestra lo que tiene datos (sin avisos de "no hay datos"). Orden: comercial → auditoría → RRHH.
@@ -2030,6 +2115,108 @@ function cardContexto(X){
       el("span",{class:"pill",text:n.titulo}), " ", n.link ? el("a",{href:n.link,target:"_blank",rel:"noopener noreferrer",text:n.titular}) : el("span",{text:n.titular}),
       el("span",{class:"hint",text:` · ${n.fuente||""} · ${fechaHora(n.fecha)}`}), el("div",{class:"hint",text:"Para Hey Blackk: "+n.impacto+"."})))) : null,
     el("p",{class:"hint",text:`Fuentes: ${X.fuentes} · actualizado ${fechaHora(X.ts)}. Se lee también en «Escuchar resumen».`}));
+}
+/* ===================== 3.9 · KPIs comerciales por canal, grandes cuentas y experiencia en Google =====================
+   Regla: lo que no tiene datos no se muestra. Las listas largas van en Excel/PDF; en pantalla, el resumen. */
+const pctTxt39 = v => v==null ? "–" : (v>0?"+":"")+String(v).replace(".",",")+" %";
+const pctCls39 = v => v==null ? "" : v>=0 ? "ok" : "bad";
+const ICO_CANAL = {Palermo:"🏬", Lima:"🏪", Janette:"🛍️", Web:"🌐", "Grandes cuentas":"🤝"};
+function cardCanales(K){
+  const X = K && K.canales; if (!X || !X.canales.length) return null;
+  const mesN = capi(mesLargo(X.mes).split(" ")[0]), maN = mesLargo(X.mesAnt).split(" ")[0], T = X.total;
+  const card = el("div",{class:"card"}, el("h2",{text:"📈 Ventas por canal"}),
+    el("p",{class:"lead",text:`${mesN} hasta hoy, comparado con ${maN} a esta altura y con el mismo período del año pasado.`}));
+  // Total de la marca + participación de cada canal
+  card.append(el("div",{class:"hkpis"},
+    hk("💰 Marca · "+mesN, moneyK(T.mes), T.vsMesAnt!=null?`${pctTxt39(T.vsMesAnt)} vs ${maN}`:""),
+    T.vsAnioAnt!=null ? hk("📅 vs "+X.anioAnt, pctTxt39(T.vsAnioAnt), `${mesN.toLowerCase()} ${X.anioAnt}, mismo período`, pctCls39(T.vsAnioAnt)) : null,
+    hk("🗓️ Acumulado "+X.mes.slice(0,4), moneyK(T.anio), T.vsAnioAntAcum!=null?`${pctTxt39(T.vsAnioAntAcum)} vs ${X.anioAnt}`:""),
+    hk("☀️ Hoy", moneyK(T.hoy), "ayer "+moneyK(T.ayer))));
+  const part = X.canales.filter(c=>c.partMes>0);
+  if (part.length>1){ const bar = el("div",{class:"c100-barra",role:"img","aria-label":"Participación de cada canal: "+part.map(c=>`${c.canal} ${c.partMes} %`).join(", ")});
+    const COL = {Palermo:"#2563eb", Lima:"#7c3aed", Janette:"#0891b2", Web:"#db2777", "Grandes cuentas":"#b45309"};
+    part.forEach(c=>bar.append(el("i",{style:`width:${c.partMes}%;background:${COL[c.canal]||"#888"}`,title:`${c.canal}: ${c.partMes} %`})));
+    card.append(el("h3",{text:"¿Cuánto aporta cada canal en "+mesN.toLowerCase()+"?"}), bar,
+      el("div",{class:"row",style:"gap:12px;flex-wrap:wrap;font-size:13px"}, part.map(c=>el("span",{}, el("i",{class:"dot38",style:`background:${COL[c.canal]||"#888"}`}), ` ${c.canal} ${String(c.partMes).replace(".",",")} %`)))); }
+  // Una ficha por canal (se lee bien en el celular; máximo 5)
+  const g = el("div",{class:"canales39"});
+  X.canales.forEach(c=>{ const fila = (k,v,cl)=>el("div",{class:"f39"}, el("span",{text:k}), el("b",{class:cl||"",text:v}));
+    g.append(el("div",{class:"canal39"}, el("div",{class:"row",style:"gap:6px"}, el("span",{text:ICO_CANAL[c.canal]||""}), el("b",{text:c.canal}), el("span",{class:"spacer"}), c.partMes!=null?el("span",{class:"pill",text:String(c.partMes).replace(".",",")+" %"}):null),
+      el("div",{class:"v39",text:moneyK(c.mes.v)}), el("div",{class:"hint",text:mesN+" hasta hoy"}),
+      fila("Hoy", c.hoy.v?moneyK(c.hoy.v):"–"), c.vsMesAnt!=null?fila("vs "+maN, pctTxt39(c.vsMesAnt), pctCls39(c.vsMesAnt)):null,
+      c.vsAnioAnt!=null?fila("vs "+mesN.toLowerCase()+" "+X.anioAnt, pctTxt39(c.vsAnioAnt), pctCls39(c.vsAnioAnt)):null,
+      fila("Año "+X.mes.slice(0,4), moneyK(c.anio.v)), c.vsAnioAntAcum!=null?fila("Año vs "+X.anioAnt, pctTxt39(c.vsAnioAntAcum), pctCls39(c.vsAnioAntAcum)):null,
+      c.mes.ticket?fila("Ticket promedio", moneyK(c.mes.ticket)):null)); });
+  card.append(g);
+  if (T.comparaParcial) card.append(el("p",{class:"hint",text:"Las variaciones del total comparan solo los canales que tienen datos en los dos períodos."}));
+  // Acciones por canal (días o meses flojos)
+  if ((X.acciones||[]).length) card.append(el("h3",{text:"🎯 Acciones por canal"}),
+    el("ol",{class:"pasos38"}, X.acciones.slice(0,5).map(a=>el("li",{}, el("b",{text:`${ICO_CANAL[a.canal]||""} ${a.canal} · ${a.titulo}: `}), a.accion, el("div",{class:"hint",text:"Por qué: "+a.porQue})))));
+  card.append(el("p",{class:"hint",text:X.fuente+(X.sync&&X.sync.ts?" · actualizado "+fechaHora(X.sync.ts):"")}), botonesCanales());
+  return card;
+}
+function botonesCanales(){
+  const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar PDF"});
+  const ir = async (b, fmt)=>{ spinBtn(b, fmt==="xlsx"?"Armando el Excel…":"Armando el PDF…");
+    try{ const D = await apiS("descargaCanales"); await (fmt==="xlsx" ? exportarXLSX37(D) : exportarPDF37(D)); }
+    catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); } unspin(b); };
+  bx.onclick = ()=>ir(bx,"xlsx"); bp.onclick = ()=>ir(bp,"pdf");
+  return el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Detalle por día (90 días), por mes, grandes cuentas y Google:"}), bx, bp);
+}
+function cardGrandes(K){
+  const G = K && K.grandesCuentas; if (!G || !G.clientes) return null;
+  return el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas (franquicias y mayoristas)"}),
+    el("p",{class:"lead",text:`${G.clientes} clientes de «Control ingreso Nueva temporada 27».`}),
+    el("div",{class:"hkpis"},
+      hk("Total pedido", G.pedido$?moneyK(G.pedido$):`${G.pedidoU} u`, G.pedido$?`${G.pedidoU} u`:""),
+      hk("Total entregado", G.entregado$?moneyK(G.entregado$):`${G.entregadoU} u`, `${G.entregadoU} u${G.avance!=null?` · ${G.avance} %`:""}`),
+      G.cobrado!=null ? hk("Total cobrado", moneyK(G.cobrado), "", "pos") : null,
+      G.saldo!=null ? hk("Saldo pendiente", moneyK(G.saldo), "", G.saldo>0?"neg":"") : null),
+    el("h3",{text:"Quiénes más compran"}),
+    el("ol",{class:"top5"}, G.top.map(c=>el("li",{}, el("b",{text:c.nombre}), c.tipo?el("span",{class:"hint",text:" · "+c.tipo}):null,
+      ` · ${c.pedido$?moneyK(c.pedido$):c.pedidoU+" u"}`, el("span",{class:"hint",text:` · entregado ${c.entregadoU} u${c.saldo?` · saldo ${moneyK(c.saldo)}`:""}`})))),
+    el("p",{class:"hint",text:"El detalle de todos los clientes está en «Descargar Excel / PDF» de Ventas por canal."}));
+}
+/* ---------- Experiencia en Google ---------- */
+function cardGoogle(K, recargar){
+  const G = K && K.google, card = el("div",{class:"card",id:"google39"}, el("h2",{text:"⭐ Experiencia en Google"}));
+  if (G && G.locales.length){
+    card.append(el("p",{class:"lead",text:"Cómo estamos hoy en Google y qué hacer para mejorar, por local."}));
+    const grid = el("div",{class:"split"});
+    G.locales.forEach(l=>{ const b = el("div",{class:"g39"});
+      b.append(el("div",{class:"row"}, el("h3",{style:"margin:0",text:l.local}), el("span",{class:"spacer"}), el("span",{class:"hint",text:"carga "+fmtF(l.fecha)+(l.desactualizado?" ⚠️":"")})));
+      if (!l.fichaPropia) b.append(el("div",{class:"notice bad",text:"Sin ficha propia en Google."}));
+      else b.append(el("div",{class:"hkpis"},
+        hk("⭐ Calificación", String(l.calificacion).replace(".",","), l.vsMes?`${l.vsMes.calif>0?"+":""}${String(l.vsMes.calif).replace(".",",")} en el mes`:l.vsAnterior?`${l.vsAnterior.calif>0?"+":""}${String(l.vsAnterior.calif).replace(".",",")} vs carga anterior`:"", l.vsMes&&l.vsMes.calif<0||l.vsAnterior&&l.vsAnterior.calif<0?"neg":""),
+        hk("💬 Reseñas", String(l.resenas), l.vsMes?`+${l.vsMes.resenas} en el mes`:l.vsAnterior?`+${l.vsAnterior.resenas} vs carga anterior`:""),
+        hk("↩️ Respondidas", l.pctRespondidas!=null?l.pctRespondidas+" %":"–", l.sinResponder?`${l.sinResponder} sin responder`:"todas respondidas", l.sinResponder?"neg":"pos")));
+      l.alertas.forEach(a=>b.append(el("div",{class:"notice "+(a.nivel==="rojo"?"bad":"warn"),style:"margin-top:6px",text:"⚠️ "+a.texto})));
+      b.append(el("ol",{class:"pasos38"}, l.sugerencias.slice(0,3).map(t=>el("li",{text:t}))));
+      grid.append(b); });
+    card.append(grid, el("details",{}, el("summary",{text:"Recomendaciones generales"}), el("ul",{}, G.generales.map(t=>el("li",{text:t})))));
+  } else card.append(el("p",{class:"lead",text:"Cargá los datos de Google de cada local (la app no puede leer Google Maps directamente)."}));
+  if (tiene("kpi")) card.append(formGoogle(recargar));
+  return card;
+}
+function formGoogle(recargar){
+  const det = el("details",{class:"form39"}, el("summary",{class:"btn sm",text:"✏️ Cargar datos de Google"}));
+  let local = "Palermo", ficha = "si";
+  const segL = el("div",{class:"row seg38",role:"group","aria-label":"Local"}), segF = el("div",{class:"row seg38",role:"group","aria-label":"¿Tiene ficha propia?"});
+  const pintar = () => { [...segL.children].forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===local))); [...segF.children].forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===ficha))); nums.hidden = ficha==="no"; };
+  ["Palermo","Lima","Janette"].forEach(v=>segL.append(el("button",{class:"btn",type:"button","data-v":v,text:v,onclick:()=>{local=v;pintar();}})));
+  [["si","Sí, tiene ficha propia"],["no","No tiene ficha propia"]].forEach(([v,t])=>segF.append(el("button",{class:"btn sm",type:"button","data-v":v,text:t,onclick:()=>{ficha=v;pintar();}})));
+  const cal = el("input",{type:"text",inputmode:"decimal",placeholder:"Ej.: 4,6",maxlength:"3"}), res = el("input",{type:"number",inputmode:"numeric",min:"0",placeholder:"Ej.: 230"}),
+    resp = el("input",{type:"number",inputmode:"numeric",min:"0",placeholder:"Ej.: 210"}), fec = el("input",{type:"date",value:hoy(),max:hoy()}),
+    obs = el("input",{type:"text",maxlength:"300",placeholder:"Ej.: hay una ficha vieja con otro teléfono"});
+  const nums = el("div",{class:"grid2"}, el("label",{class:"f"},"⭐ Calificación (1 a 5)",cal), el("label",{class:"f"},"💬 Cantidad de reseñas",res), el("label",{class:"f"},"↩️ Reseñas respondidas",resp));
+  const ok = el("button",{class:"btn primary",type:"button",text:"💾 Guardar"});
+  ok.onclick = async ()=>{ spinBtn(ok,"Guardando…");
+    try{ await apiS("guardarGoogle", {local, fichaPropia:ficha, calificacion:cal.value, resenas:res.value, respondidas:resp.value, fecha:fec.value, observaciones:obs.value});
+      toast("✅ Datos de Google de "+local+" guardados"); if (recargar) recargar(); }
+    catch(e){ toast(msgErr(e)); unspin(ok); } };
+  det.append(el("div",{class:"stack",style:"margin-top:10px"}, el("label",{class:"f"},"🏬 Local",segL), segF, nums, el("div",{class:"grid2"}, el("label",{class:"f"},"📅 Fecha",fec), el("label",{class:"f"},"📝 Observaciones",obs)), el("div",{class:"row"}, ok)));
+  pintar();
+  return det;
 }
 /* ===================== 3.5 · Días flojos, fechas especiales, Panorama RRHH y borrado de fichajes =====================
    Regla del resumen: solo se muestra lo que tiene datos. Si una sección queda vacía, no aparece (ni título ni aviso).
@@ -2822,7 +3009,7 @@ function barraAudio(A){
     if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible para leerlo."; return; }
     VOZ.hablar(A[k]); };
   VOZ.onEstado = on => { box.classList.toggle("hablando", on); estado.textContent = on ? "🔊 Leyendo… tocá Detener para cortar." : ""; };
-  const B = [["general","🔊 Escuchar resumen"],["comercial","🔊 Escuchar KPIs comerciales"],["auditoria","🔊 Escuchar KPIs de auditoría"],["acciones","🔊 Escuchar acciones para Palermo"],["rrhh","🔊 Escuchar RRHH"]]
+  const B = [["general","🔊 Escuchar resumen"],["comercial","🔊 Escuchar KPIs comerciales"],["auditoria","🔊 Escuchar KPIs de auditoría"],["acciones","🔊 Escuchar acciones comerciales"],["rrhh","🔊 Escuchar RRHH"]]
     .filter(([k])=>A[k] && String(A[k]).trim()).map(([k,t])=>el("button",{class:"btn"+(k==="general"?" primary":""),type:"button",text:t,"data-audio":k,onclick:()=>leer(k, t.replace("🔊 Escuchar ",""))}));
   box.append(...[el("h3",{},icono("audio",20)," Resumen hablado"),
     el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()})), selVelocidad(),
