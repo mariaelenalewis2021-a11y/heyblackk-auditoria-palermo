@@ -1201,6 +1201,14 @@ function finanzas_(forzar) {
   // 3.9d · Cuentas corrientes de grandes cuentas: facturas pagadas con anticipos que el Templete también tiene como cobro
   try { CC = ctaCte_(!!forzar); DC = finDobleConteo_(F, CC); F.forEach(x => { if (x.dobleConteo) { x.montoOriginal = x.monto; x.monto = Math.max(0, x.monto - x.dobleConteo); } }); }
   catch (e) { ccError = String(e.message || e).slice(0, 200); }
+  // 3.9d · Pagos de grandes cuentas que están en la cuenta corriente y todavía no en el Templete (mes actual y anterior, desde SS27):
+  // se suma solo la diferencia del mes por cliente. Cuando se carguen en el Templete, la diferencia baja sola: nunca se duplica.
+  let ccFalta = [];
+  if (CC) try { const mesHoy = hoy_().slice(0, 7), meses = [finMesAnt_(mesHoy), mesHoy], P = ccPanel_(CC, Fo);
+    P.cuentas.forEach(c => (c.difPagos || []).forEach(d => { if (meses.indexOf(d.mes) < 0 || d.cuentaCorriente <= d.templete) return;
+      const monto = d.cuentaCorriente - d.templete; ccFalta.push({ granCuenta: c.granCuenta, mes: d.mes, monto: monto });
+      F.push({ fila: 0, fecha: d.mes + '-15', mes: d.mes, tipo: 'ingreso', rubro: 'Ventas', cuenta: 'Anticipos de temporada (cuenta corriente, falta cargar)', contraparte: c.cliente,
+        detalle: 'anticipo SS27 ' + c.granCuenta, pv: '', factura: '', medio: '', monto: monto, sinIva: 0, origen: 'ctacte' }); })); } catch (e) {}
   // Ventas facturadas en Contabilium (mes anterior y mes en curso): lo que todavía no está en el Templete se suma, sin duplicar.
   let ctb = { configurado: ctbConfigurado_(), ok: false };
   if (ctb.configurado) {
@@ -1221,6 +1229,7 @@ function finanzas_(forzar) {
   if (CM && R.sectores) try { R.sectores.facturado = finFacturadoCanal_(CM, R.sectores.meses); } catch (e) {}
   if (CM) R.controlMeses = { meses: controlMeses, leido: CM.leido, comprobantes: CM.comprobantes };
   R.dobleConteo = DC; if (ccError) R.ctaCteError = ccError;
+  if (ccFalta.length) { R.ctaCteFalta = ccFalta; R.recomendaciones.unshift('Cargar en el Templete los pagos de grandes cuentas que ya están en la cuenta corriente: ' + ccFalta.map(x => x.granCuenta + ' ' + $M_(x.monto) + ' (' + MES_NOM(x.mes).split(' ')[0] + ')').join(', ') + '. Mientras tanto el panel ya los suma.'); }
   if (CC) try { R.cuentasCorrientes = ccPanel_(CC, Fo); } catch (e) { R.ctaCteError = String(e.message || e).slice(0, 200); }
   if (DC.length) R.alertas.unshift({ nivel: 'amarillo', texto: 'Para no contar dos veces se descontaron ' + $M_(DC.reduce((a, x) => a + x.monto, 0)) + ' del «entró»: ' + DC.length + ' factura(s) a grandes cuentas que se pagaron con anticipos que ya están cargados en el Templete (fila ' + DC.map(x => x.fila).join(', ') + '). Fuente: cuentas corrientes de grandes cuentas.' });
   if (dup.duplicados.length) R.alertas.push({ nivel: 'amarillo', texto: 'En el Templete hay ' + dup.duplicados.length + ' facturas cargadas dos veces (mismo número y mismo cliente): suman ' + $M_(dup.montoDeMas) + ' de más en ventas. Están en «Control de facturas».' });
@@ -1264,7 +1273,7 @@ function finanzasPanel(token, forzar) {
   if (!dbxConfigurado_()) return { conectado: false };
   if (forzar && ctbConfigurado_()) { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (!P || Date.now() - new Date(P.leida).getTime() > 2 * 3600000) try { ctbActualizarResumenes_(); } catch (e) {} }
   const R = Object.assign({}, finanzas_(!!forzar)), maria = esMaria_(s.user);
-  if (!maria) { delete R.anticipos; delete R.cuentasCorrientes; (R.dobleConteo || []).forEach(x => { delete x.granCuenta; }); }   // cobranzas pendientes y anticipos: solo el usuario MARIA
+  if (!maria) { delete R.anticipos; delete R.cuentasCorrientes; (R.dobleConteo || []).forEach(x => { delete x.granCuenta; }); delete R.ctaCteFalta; R.recomendaciones = R.recomendaciones.filter(t => !/cuenta corriente/.test(t)); }   // cobranzas pendientes y anticipos: solo el usuario MARIA
   try { R.productos = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
   if (maria) try { R.cobranzas = JSON.parse(PROPS.getProperty('CTB_COB') || 'null'); } catch (e) {}
   return { conectado: true, resumen: R, maria: maria, audio: audioFinanzas_(s.user, R), sync: JSON.parse(PROPS.getProperty('FIN_SYNC') || 'null') };
@@ -1833,8 +1842,9 @@ function ctaCte_(forzar) {
     (pagos anteriores). Esa factura NO es plata nueva. Devuelve { clave: { granCuenta, monto, cubierto, fecha } }. */
 function ccFacturasConAnticipo_(CC) {
   const R = {};
-  (CC.cuentas || []).forEach(a => { let antes = 0; a.movimientos.forEach(m => {
-    if (m.tipo === 'factura' && m.clave && antes < 0) { const cub = Math.min(m.factura, -antes); if (cub > 1) R[m.clave] = { granCuenta: a.granCuenta, monto: m.factura, cubierto: Math.round(cub), fecha: m.fecha, total: cub >= m.factura - 1 }; }
+  // Solo desde SS27: antes el Templete registraba a las grandes cuentas por factura (sin los pagos), así que no hay doble conteo posible.
+  (CC.cuentas || []).forEach(a => { let antes = 0, en27 = false; a.movimientos.forEach(m => { if (m.ss27) en27 = true;
+    if (en27 && m.tipo === 'factura' && m.clave && antes < 0) { const cub = Math.min(m.factura, -antes); if (cub > 1) R[m.clave] = { granCuenta: a.granCuenta, monto: m.factura, cubierto: Math.round(cub), fecha: m.fecha, total: cub >= m.factura - 1 }; }
     antes = m.saldo; }); });
   return R;
 }
