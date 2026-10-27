@@ -1316,13 +1316,17 @@ function ctbToken_(forzar) {
 function ctbGet_(path, q) {
   if (!CTB_LECTURAS.some(re => re.test(path))) throw new Error('Ruta de Contabilium no permitida: ' + path);
   const qs = q ? '?' + Object.keys(q).filter(k => q[k] != null && q[k] !== '').map(k => k + '=' + encodeURIComponent(q[k])).join('&') : '';
-  for (let i = 0; i < 2; i++) {
-    const r = UrlFetchApp.fetch(CTB_BASE + path + qs, { method: 'get', muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + ctbToken_(i > 0), Accept: 'application/json' } });
+  // 3.9 · 401: se renueva el token una vez. 429/5xx (Contabilium pide frenar o está ocupado): se espera y se reintenta (hasta 5 veces).
+  let renovar = false, esperas = 0;
+  for (let i = 0; i < 8; i++) {
+    const r = UrlFetchApp.fetch(CTB_BASE + path + qs, { method: 'get', muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + ctbToken_(renovar), Accept: 'application/json' } });
     const code = r.getResponseCode();
-    if (code === 401 && i === 0) continue;
-    if (code !== 200) throw new Error('Contabilium respondió HTTP ' + code + ' en ' + path);
+    if (code === 401 && !renovar) { renovar = true; continue; }
+    if ((code === 429 || code >= 500) && esperas < 5) { esperas++; Utilities.sleep(Math.min(20000, 1500 * Math.pow(2, esperas - 1))); continue; }
+    if (code !== 200) throw new Error('Contabilium respondió HTTP ' + code + ' en ' + path + (code === 429 ? ' (demasiadas consultas seguidas: probá de nuevo en un minuto)' : ''));
     return JSON.parse(r.getContentText());
   }
+  throw new Error('Contabilium no respondió en ' + path);
 }
 /** Diagnóstico (se corre desde el editor, solo lee): verifica el acceso y muestra la ESTRUCTURA de los datos (nombres de campos y
     cantidades, sin importes ni datos personales en el registro) para mapear ventas, cobranzas y stock con los nombres reales. */
@@ -1711,10 +1715,11 @@ function stockPalermoArt_(forzar) {
   const d = ctbGet_('/api/inventarios/getDepositos'), D = Array.isArray(d) ? d : (d.Items || []), pal = D.find(x => /hb palermo/i.test(x.Nombre) && !/falla/i.test(x.Nombre));
   if (!pal) throw new Error('No encuentro el depósito «HB PALERMO» en Contabilium.');
   const st = {};
-  for (let p = 1; p <= 120; p++) { const j = ctbGet_('/api/inventarios/getStockByDeposito', { id: pal.Id, page: p }); const S = Array.isArray(j) ? j : (j.Items || []);
+  for (let p = 1; p <= 120; p++) { if (p > 1) Utilities.sleep(150);   // ritmo amable con Contabilium (evita el límite de consultas)
+    const j = ctbGet_('/api/inventarios/getStockByDeposito', { id: pal.Id, page: p }); const S = Array.isArray(j) ? j : (j.Items || []);
     S.forEach(s => { const q = ctbNum_(s.StockActual); if (q > 0 && s.Codigo) st[String(s.Codigo).trim()] = q; }); if (!S.length || Array.isArray(j) || p * 50 >= (Number(j.TotalItems) || 0)) break; }
   const nom = {};
-  for (let p = 1; p <= 120; p++) { const j = ctbGet_('/api/conceptos/search', { page: p }); const I = j.Items || [];
+  for (let p = 1; p <= 120; p++) { if (p > 1) Utilities.sleep(150); const j = ctbGet_('/api/conceptos/search', { page: p }); const I = j.Items || [];
     I.forEach(x => { const k = String(x.Codigo || '').trim(); if (st[k] != null) nom[k] = String(x.Nombre || '').trim(); }); if (!I.length || p * 50 >= (Number(j.TotalItems) || 0)) break; }
   const L = Object.keys(st).filter(k => nom[k] && !ctbNoProducto_({ codigo: k, nombre: nom[k] })).map(k => [k, nom[k].slice(0, 60), st[k]]);
   const s = JSON.stringify(L); if (s.length < 95000) try { CACHE.put('STK_PAL10', s, 21600); } catch (e) {}
