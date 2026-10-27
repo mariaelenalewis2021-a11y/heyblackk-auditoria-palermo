@@ -2131,7 +2131,7 @@ function cardCanales(K){
     hk("💰 Marca · "+mesN, moneyK(T.mes), T.vsMesAnt!=null?`${pctTxt39(T.vsMesAnt)} vs ${maN}`:""),
     T.vsAnioAnt!=null ? hk("📅 vs "+X.anioAnt, pctTxt39(T.vsAnioAnt), `${mesN.toLowerCase()} ${X.anioAnt}, mismo período`, pctCls39(T.vsAnioAnt)) : null,
     hk("🗓️ Acumulado "+X.mes.slice(0,4), moneyK(T.anio), T.vsAnioAntAcum!=null?`${pctTxt39(T.vsAnioAntAcum)} vs ${X.anioAnt}`:""),
-    hk("☀️ Hoy", moneyK(T.hoy), "ayer "+moneyK(T.ayer))));
+    T.hoy ? hk("☀️ Hoy", moneyK(T.hoy), "facturado hasta ahora") : null));
   const part = X.canales.filter(c=>c.partMes>0);
   if (part.length>1){ const bar = el("div",{class:"c100-barra",role:"img","aria-label":"Participación de cada canal: "+part.map(c=>`${c.canal} ${c.partMes} %`).join(", ")});
     const COL = {Palermo:"#2563eb", Lima:"#7c3aed", Janette:"#0891b2", Web:"#db2777", "Grandes cuentas":"#b45309"};
@@ -2143,11 +2143,12 @@ function cardCanales(K){
   X.canales.forEach(c=>{ const fila = (k,v,cl)=>el("div",{class:"f39"}, el("span",{text:k}), el("b",{class:cl||"",text:v}));
     g.append(el("div",{class:"canal39"}, el("div",{class:"row",style:"gap:6px"}, el("span",{text:ICO_CANAL[c.canal]||""}), el("b",{text:c.canal}), el("span",{class:"spacer"}), c.partMes!=null?el("span",{class:"pill",text:String(c.partMes).replace(".",",")+" %"}):null),
       el("div",{class:"v39",text:moneyK(c.mes.v)}), el("div",{class:"hint",text:mesN+" hasta hoy"}),
-      fila("Hoy", c.hoy.v?moneyK(c.hoy.v):"–"), c.vsMesAnt!=null?fila("vs "+maN, pctTxt39(c.vsMesAnt), pctCls39(c.vsMesAnt)):null,
+      c.ultimo ? fila("Último día facturado · "+fmtF(c.ultimo.fecha).slice(0,5), moneyK(c.ultimo.v)) : null, c.vsMesAnt!=null?fila("vs "+maN, pctTxt39(c.vsMesAnt), pctCls39(c.vsMesAnt)):null,
       c.vsAnioAnt!=null?fila("vs "+mesN.toLowerCase()+" "+X.anioAnt, pctTxt39(c.vsAnioAnt), pctCls39(c.vsAnioAnt)):null,
       fila("Año "+X.mes.slice(0,4), moneyK(c.anio.v)), c.vsAnioAntAcum!=null?fila("Año vs "+X.anioAnt, pctTxt39(c.vsAnioAntAcum), pctCls39(c.vsAnioAntAcum)):null,
       c.mes.ticket?fila("Ticket promedio", moneyK(c.mes.ticket)):null)); });
   card.append(g);
+  card.append(el("p",{class:"hint",text:"Los locales facturan en Contabilium por tandas: el «último día facturado» puede no ser ayer. Para la venta diaria de Palermo, mirá los cierres de caja más abajo."}));
   if (T.comparaParcial) card.append(el("p",{class:"hint",text:"Las variaciones del total comparan solo los canales que tienen datos en los dos períodos."}));
   // Acciones por canal (días o meses flojos)
   if ((X.acciones||[]).length) card.append(el("h3",{text:"🎯 Acciones por canal"}),

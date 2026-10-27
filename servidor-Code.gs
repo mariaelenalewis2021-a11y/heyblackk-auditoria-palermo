@@ -1577,6 +1577,11 @@ function kpiCanales_(hoy, sinGC) {
     o.vsAnioAntAcum = o.anioAntMismo ? pctVs_(o.anio.v, o.anioAntMismo.v) : null;
     o.ticketVsMesAnt = o.mes.ticket && o.mesAntMismo && o.mesAntMismo.ticket ? pctVs_(o.mes.ticket, o.mesAntMismo.ticket) : null;
     const diasMes = Number(dd); o.promDiaMes = diasMes > 1 ? Math.round((o.mes.v - o.hoy.v) / (diasMes - 1)) : null;
+    // Los locales facturan en Contabilium por tandas (no todos los días): se informa el último día facturado y la alerta de
+    // «día flojo» solo se usa en canales que facturan a diario (p. ej. la web). Mes y año sí son completos.
+    const filasC = R.filter(r => r.canal === c && r.ventas > 0 && r.fecha <= hoy), u = filasC[filasC.length - 1];
+    o.ultimo = u ? { fecha: u.fecha, v: Math.round(u.ventas), n: u.comprobantes } : null;
+    const d14 = sumarDias_(hoy, -14); o.diasConVenta14 = new Set(filasC.filter(r => r.fecha >= d14 && r.fecha < hoy).map(r => r.fecha)).size; o.facturaDiaria = o.diasConVenta14 >= 11;
     o.conDatos = !!(o.mes.v || o.anio.v || (o.mesAntMismo && o.mesAntMismo.v)); return o; }).filter(o => o.conDatos);
   if (!canales.length) return null;
   const totMes = canales.reduce((a, c) => a + Math.max(0, c.mes.v), 0), totAnio = canales.reduce((a, c) => a + Math.max(0, c.anio.v), 0);
@@ -1603,7 +1608,7 @@ function accionesCanal_(canales, hoy) {
   const out = [], ayerNom = NOMBRE_DIA[new Date(sumarDias_(hoy, -1) + 'T12:00:00Z').getUTCDay()];
   canales.forEach(c => { const A = ACC_CANAL[c.canal]; if (!A) return;
     if (c.vsMesAnt != null && c.vsMesAnt <= -10) out.push({ canal: c.canal, prioridad: c.vsMesAnt <= -25 ? 1 : 2, titulo: A[0], accion: A[1], porQue: c.canal + ' lleva ' + $_(c.mes.v) + ' en el mes, ' + Math.abs(c.vsMesAnt) + ' % menos que el mes anterior a esta altura.' });
-    else if (c.promDiaMes && c.canal !== CANAL_GC && c.ayer.v < c.promDiaMes * 0.5 && (c.canal === 'Web' || c.ayer.v > 0 || ayerNom !== 'domingo'))
+    else if (c.facturaDiaria && c.promDiaMes && c.canal !== CANAL_GC && c.ayer.v < c.promDiaMes * 0.5)
       out.push({ canal: c.canal, prioridad: 3, titulo: A[0], accion: A[1], porQue: 'Ayer (' + ayerNom + ') ' + c.canal + ' vendió ' + $_(c.ayer.v) + ', menos de la mitad de su promedio diario del mes (' + $_(c.promDiaMes) + ').' }); });
   return out.sort((a, b) => a.prioridad - b.prioridad);
 }
@@ -3503,7 +3508,8 @@ function audioCanales_(K, G) {
     if (c.vsMesAnt != null) vs.push(pc(c.vsMesAnt) + ' que ' + mesAN + ' a esta altura');
     if (c.vsAnioAnt != null) vs.push(pc(c.vsAnioAnt) + ' que ' + mesN + ' del año pasado');
     return c.canal + ': en ' + mesN + ' lleva ' + millones_(c.mes.v) + (vs.length ? ', ' + vs.join(' y ') : '') + '.' +
-      (c.mes.ticket ? ' Ticket promedio ' + millones_(c.mes.ticket) + '.' : '') + (c.ayer.v ? ' Ayer vendió ' + millones_(c.ayer.v) + '.' : '');
+      (c.mes.ticket ? ' Ticket promedio ' + millones_(c.mes.ticket) + '.' : '') +
+      (c.ultimo && c.ultimo.fecha >= sumarDias_(K.hoy, -3) ? (c.ultimo.fecha === K.hoy ? ' Hoy lleva ' : c.ultimo.fecha === sumarDias_(K.hoy, -1) ? ' Ayer vendió ' : ' Lo último facturado, ' + sinEl_(fechaHablada_(c.ultimo.fecha)) + ', suma ') + millones_(c.ultimo.v) + '.' : '');
   }).filter(Boolean);
   const T = K.total, conParte = K.canales.filter(c => c.partMes);
   const total = T.mes ? 'En total, la marca lleva ' + millones_(T.mes) + ' en ' + mesN + (T.vsMesAnt != null ? ', ' + pc(T.vsMesAnt) + ' que ' + mesAN + ' a esta altura' : '') + '. ' +
