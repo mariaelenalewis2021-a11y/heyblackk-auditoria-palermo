@@ -1,7 +1,7 @@
 /* Service worker: permite instalar la app y abrirla rápido.
    Estrategia "red primero con tope": si la red no responde en 2,5 s se sirve la copia guardada y la nueva versión
    se guarda en segundo plano para la próxima apertura. Nunca guarda datos del servidor (solo la cáscara de la app). */
-const CACHE = "hb-palermo-v28";
+const CACHE = "hb-palermo-v29";
 const SHELL = ["./", "index.html", "app.js", "config.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 const TOPE_MS = 2500;
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

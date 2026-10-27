@@ -1879,9 +1879,11 @@ function ccPanel_(CC, F) {
     // facturas de la cuenta corriente contra Contabilium
     if (V) a.movimientos.filter(m => m.tipo === 'factura' && m.clave && m.fecha && m.fecha >= CMP_DESDE + '-01').forEach(m => { const f = porClave[m.clave];
       if (!f) av.push('La factura ' + m.clave + ' (' + $M_(m.factura) + ', ' + fdm_(m.fecha) + ') no está en Contabilium: revisar el número.');
-      else if (Math.abs(f.total - m.factura) > Math.max(1000, m.factura * 0.01)) av.push('La factura ' + m.clave + ' figura por ' + $M_(m.factura) + ' en la cuenta corriente y por ' + $M_(f.total) + ' en Contabilium.'); });
+      else if (Math.abs(f.total - m.factura) > Math.max(1000, m.factura * 0.01)) av.push('La factura ' + m.clave + ' figura por ' + $M_(m.factura) + ' en la cuenta corriente y por ' + $M_(f.total) + ' en Contabilium (cliente: ' + f.cliente + '): revisar el número.'); });
     // facturas de Contabilium a esta gran cuenta que no están en su cuenta corriente
-    const faltan = V ? V.facturas.filter(f => f.neto > 0 && !enCc[f.clave] && (finFranq_(f.cliente) === a.granCuenta) && f.mes >= CMP_DESDE) : [];
+    // (solo desde el primer movimiento con fecha de la cuenta corriente: lo anterior está resumido en el saldo inicial)
+    const inicio = a.movimientos.reduce((m, x) => x.fecha && x.tipo !== 'saldoInicial' && (!m || x.fecha < m) ? x.fecha : m, null) || '9999';
+    const faltan = V ? V.facturas.filter(f => f.neto > 0 && !enCc[f.clave] && (finFranq_(f.cliente) === a.granCuenta) && f.fecha >= inicio) : [];
     if (faltan.length) av.push(faltan.length + ' factura(s) de Contabilium a ' + a.granCuenta + ' no están en su cuenta corriente: ' + faltan.slice(0, 4).map(f => f.clave + ' ' + $M_(f.neto) + ' (' + fdm_(f.fecha) + ')').join(', ') + '.');
     // pagos de la cuenta corriente contra lo cargado en el Templete, mes por mes
     const pm = {}, tm = {}; a.movimientos.filter(m => m.tipo === 'pago' && m.fecha).forEach(m => { const k = m.fecha.slice(0, 7); pm[k] = (pm[k] || 0) + m.pago; });
@@ -1891,8 +1893,11 @@ function ccPanel_(CC, F) {
     const difPagos = Object.keys(pm).concat(Object.keys(tm)).filter((k, i, A) => A.indexOf(k) === i && k >= desde27).sort().map(k => ({ mes: k, cuentaCorriente: Math.round(pm[k] || 0), templete: Math.round(tm[k] || 0) })).filter(d => Math.abs(d.cuentaCorriente - d.templete) > Math.max(10000, d.cuentaCorriente * 0.01));
     difPagos.forEach(d => av.push(MES_NOM(d.mes) + ': la cuenta corriente tiene pagos por ' + $M_(d.cuentaCorriente) + ' y el Templete ' + $M_(d.templete) + (d.cuentaCorriente > d.templete ? ' (faltan cargar ' + $M_(d.cuentaCorriente - d.templete) + ' en el Templete).' : ' (en el Templete hay ' + $M_(d.templete - d.cuentaCorriente) + ' de más o de otro mes).')));
     const T = a.ss27; if (T && P && P.pedido) { T.pedido = Math.round(P.pedido); T.despachadoControl = Math.round(P.despachado);
-      T.faltaFacturar = Math.max(0, T.pedido - T.facturado); T.faltaCobrar = Math.max(0, T.pedido - T.pagado - Math.max(0, -T.saldoAntes)); T.pctCobrado = Math.round(T.pagado / T.pedido * 100); }
-    return { granCuenta: a.granCuenta, cliente: a.cliente, saldo: a.saldo, estado: a.saldo < -1 ? 'a favor' : a.saldo > 1 ? 'debe' : 'saldado', ultimo: a.ultimo, ss27: T, avisos: av,
+      // lo pagado desde SS27 primero cancela la deuda anterior (o se suma al saldo a favor que ya tenía)
+      const aplicado = T.pagado - T.saldoAntes; T.aplicadoSS27 = Math.round(aplicado);
+      T.faltaFacturar = Math.max(0, T.pedido - T.facturado); T.faltaCobrar = Math.max(0, Math.round(T.pedido - aplicado)); T.pctCobrado = Math.round(aplicado / T.pedido * 100); }
+    const extra = faltan.reduce((s, f) => s + f.neto, 0);
+    return { saldoConFaltantes: extra ? Math.round(a.saldo + extra) : null, granCuenta: a.granCuenta, cliente: a.cliente, saldo: a.saldo, estado: a.saldo < -1 ? 'a favor' : a.saldo > 1 ? 'debe' : 'saldado', ultimo: a.ultimo, ss27: T, avisos: av,
       faltanEnCc: faltan.map(f => ({ factura: f.clave, fecha: f.fecha, monto: Math.round(f.neto) })), difPagos: difPagos, movimientos: a.movimientos.length };
   });
   const tot = k => cuentas.reduce((s, c) => s + (k(c) || 0), 0);
