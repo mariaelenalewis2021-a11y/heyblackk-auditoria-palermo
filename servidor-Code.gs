@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.9c';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.9d';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -1197,7 +1197,10 @@ function finSectores_(F) {
 function finanzas_(forzar) {
   if (!forzar) { const c = CACHE.get('FIN38_R'); if (c) { try { return JSON.parse(c); } catch (e) {} } }
   const d = dbxDescargar_(), F = finLeerData_(d.blob), filas = F.length, Fo = F.slice();
-  let CM = null, controlMeses = null;
+  let CM = null, controlMeses = null, CC = null, DC = [], ccError = null;
+  // 3.9d · Cuentas corrientes de grandes cuentas: facturas pagadas con anticipos que el Templete también tiene como cobro
+  try { CC = ctaCte_(!!forzar); DC = finDobleConteo_(F, CC); F.forEach(x => { if (x.dobleConteo) { x.montoOriginal = x.monto; x.monto = Math.max(0, x.monto - x.dobleConteo); } }); }
+  catch (e) { ccError = String(e.message || e).slice(0, 200); }
   // Ventas facturadas en Contabilium (mes anterior y mes en curso): lo que todavía no está en el Templete se suma, sin duplicar.
   let ctb = { configurado: ctbConfigurado_(), ok: false };
   if (ctb.configurado) {
@@ -1217,6 +1220,9 @@ function finanzas_(forzar) {
   // 3.9c · Lo facturado por canal (Contabilium, con IVA) y el control mes a mes contra el informe de Contabilium y el Templete
   if (CM && R.sectores) try { R.sectores.facturado = finFacturadoCanal_(CM, R.sectores.meses); } catch (e) {}
   if (CM) R.controlMeses = { meses: controlMeses, leido: CM.leido, comprobantes: CM.comprobantes };
+  R.dobleConteo = DC; if (ccError) R.ctaCteError = ccError;
+  if (CC) try { R.cuentasCorrientes = ccPanel_(CC, Fo); } catch (e) { R.ctaCteError = String(e.message || e).slice(0, 200); }
+  if (DC.length) R.alertas.unshift({ nivel: 'amarillo', texto: 'Para no contar dos veces se descontaron ' + $M_(DC.reduce((a, x) => a + x.monto, 0)) + ' del «entró»: ' + DC.length + ' factura(s) a grandes cuentas que se pagaron con anticipos que ya están cargados en el Templete (fila ' + DC.map(x => x.fila).join(', ') + '). Fuente: cuentas corrientes de grandes cuentas.' });
   if (dup.duplicados.length) R.alertas.push({ nivel: 'amarillo', texto: 'En el Templete hay ' + dup.duplicados.length + ' facturas cargadas dos veces (mismo número y mismo cliente): suman ' + $M_(dup.montoDeMas) + ' de más en ventas. Están en «Control de facturas».' });
   if (dup.mismoNumero.length) R.alertas.push({ nivel: 'amarillo', texto: dup.mismoNumero.length + ' números de factura aparecen con clientes distintos en el Templete: seguramente es un error de tipeo en el número.' });
   if (ctb.ok) ctb.conciliacion.forEach(c => { if (c.montoFalta > 0) R.recomendaciones.push('Cargar en el Templete las ' + c.faltaCargar.length + ' facturas de ' + MES_NOM(c.mes).split(' ')[0] + ' que están en Contabilium (' + $M_(c.montoFalta) + '). Mientras tanto el panel ya las suma.'); });
@@ -1258,7 +1264,7 @@ function finanzasPanel(token, forzar) {
   if (!dbxConfigurado_()) return { conectado: false };
   if (forzar && ctbConfigurado_()) { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (!P || Date.now() - new Date(P.leida).getTime() > 2 * 3600000) try { ctbActualizarResumenes_(); } catch (e) {} }
   const R = Object.assign({}, finanzas_(!!forzar)), maria = esMaria_(s.user);
-  if (!maria) delete R.anticipos;   // cobranzas pendientes y anticipos: solo el usuario MARIA
+  if (!maria) { delete R.anticipos; delete R.cuentasCorrientes; (R.dobleConteo || []).forEach(x => { delete x.granCuenta; }); }   // cobranzas pendientes y anticipos: solo el usuario MARIA
   try { R.productos = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
   if (maria) try { R.cobranzas = JSON.parse(PROPS.getProperty('CTB_COB') || 'null'); } catch (e) {}
   return { conectado: true, resumen: R, maria: maria, audio: audioFinanzas_(s.user, R), sync: JSON.parse(PROPS.getProperty('FIN_SYNC') || 'null') };
@@ -1277,6 +1283,15 @@ function finHojasExtra_(X, maria) {
       .concat(c.diferencias.map(f => ['Importe distinto', f.factura, f.cliente, Math.round(f.contabilium), Math.round(f.templete)]))
       .concat(c.noEnCtb.map(f => ['Está en el Templete y no en Contabilium', f.factura, f.cliente, 0, Math.round(f.monto)]))
       .concat(c.anuladas.map(f => ['Anulada con nota de crédito total', f.factura, f.cliente, 0, Math.round(f.monto)])) }));
+  if (X.dobleConteo && X.dobleConteo.length) H.push({ nombre: 'No contado dos veces', columnas: ['Mes', 'Fila del Templete', 'Factura', 'Gran cuenta', 'Descontado del «entró»', 'Cubierto por anticipos'], dinero: [4, 5],
+    filas: X.dobleConteo.map(x => [x.mes, x.fila, x.factura, maria ? x.granCuenta : '', x.monto, x.cubierto]) });
+  if (maria) try { const CC = ctaCte_(false), M = [];
+    CC.cuentas.forEach(a => a.movimientos.forEach(m => M.push([a.granCuenta, m.fecha ? fdm_(m.fecha) : '', m.comprobante, m.detalle, m.tipo, Math.round(m.factura), Math.round(m.pago), Math.round(m.descuento), Math.round(m.saldo), m.ss27 ? 'SS27' : '', m.fila])));
+    H.push({ nombre: 'Cuentas corrientes', columnas: ['Gran cuenta', 'Fecha', 'Comprobante', 'Detalle', 'Tipo', 'Factura', 'Pago', 'Descuento', 'Saldo', 'Temporada', 'Fila'], dinero: [5, 6, 7, 8], filas: M });
+    const P = X.cuentasCorrientes || ccPanel_(CC, null);
+    H.push({ nombre: 'Grandes cuentas SS27', columnas: ['Gran cuenta', 'Saldo hoy (− = a favor)', 'Pagado SS27', 'Facturado SS27 (despachado)', 'Pedido SS27', '% cobrado', 'Falta cobrar', 'Avisos'], dinero: [1, 2, 3, 4, 6],
+      filas: P.cuentas.map(c => [c.granCuenta, c.saldo, c.ss27 ? c.ss27.pagado : 0, c.ss27 ? c.ss27.facturado : 0, c.ss27 && c.ss27.pedido || '', c.ss27 && c.ss27.pctCobrado != null ? c.ss27.pctCobrado + ' %' : '', c.ss27 && c.ss27.faltaCobrar != null ? c.ss27.faltaCobrar : '', c.avisos.join(' ')]) });
+  } catch (e) {}
   if (maria && X.anticipos) {
     H.push({ nombre: 'Anticipos por cliente', columnas: ['Cliente', 'Pedido', 'Anticipado (Templete)', '% cobrado', 'Saldo a cobrar', 'Abonado según Control ingreso', 'Avisos'], dinero: [1, 2, 4, 5],
       filas: X.anticipos.clientes.map(c => [c.cliente, Math.round(c.pedido || 0), Math.round(c.anticipado), c.pct != null ? c.pct + ' %' : '', Math.round(c.saldo || 0), c.pagadoPlanilla != null ? Math.round(c.pagadoPlanilla) : '', c.avisos.join(' ')]) });
@@ -1287,6 +1302,7 @@ function finHojasExtra_(X, maria) {
 }
 /** 3.9c · Hojas de control: lo facturado igual al informe de Contabilium y la conciliación mes a mes con el Templete. */
 const MOTIVOS_TXT = { faltaCargar: 'Facturas de Contabilium que todavía no están en el Templete', grandesCuentas: 'Facturas a grandes cuentas (se cobran con anticipos; no se cargan como venta)',
+  pagadaConAnticipo: 'Facturas a grandes cuentas pagadas con anticipos ya cargados (no se cuentan dos veces)',
   cobradaAntes: 'Facturas de clientes que ya habían pagado sin número de factura (no se suman: la plata ya está contada)',
   cargadaOtroMes: 'Facturas de este mes cargadas en el Templete en otro mes', deOtroMes: 'Cobros cargados en este mes de facturas de otro mes',
   noEstaEnContabilium: 'Números de factura del Templete que no existen en Contabilium (revisar tipeo)', importeDistinto: 'Importe distinto entre Templete y Contabilium',
@@ -1313,7 +1329,9 @@ function finHojasControl_(F) {
 /** Descarga (Excel/PDF) del detalle financiero: meses, rubros por mes, semanas, cuentas y franquicias. */
 function descargaFinanzas(token) {
   const s = sesion_(token, 'finanzas'); if (!dbxConfigurado_()) throw new Error('La planilla de Dropbox no está conectada.');
-  const d = dbxDescargar_(), F = finLeerData_(d.blob), R = finResumen_(F), X = finanzas_(false), maria = esMaria_(s.user);
+  const d = dbxDescargar_(), F = finLeerData_(d.blob);
+  try { finDobleConteo_(F, ctaCte_(false)); F.forEach(x => { if (x.dobleConteo) { x.montoOriginal = x.monto; x.monto = Math.max(0, x.monto - x.dobleConteo); } }); } catch (e) {}   // 3.9d · igual que el panel
+  const R = finResumen_(F), X = finanzas_(false), maria = esMaria_(s.user);
   const meses = R.meses.map(M => M.mes), rub = {}, mesHoy = R.mesHoy;
   F.filter(x => x.tipo === 'egreso' && x.mes && x.mes <= mesHoy).forEach(x => { const k = x.rubro + ' · ' + x.cuenta; (rub[k] = rub[k] || {})[x.mes] = (rub[k][x.mes] || 0) + x.monto; });
   const filasRub = Object.keys(rub).sort().map(k => [k.split(' · ')[0], k.split(' · ')[1]].concat(meses.map(m => Math.round(rub[k][m] || 0)), [Math.round(meses.reduce((a, m) => a + (rub[k][m] || 0), 0))]));
@@ -1598,6 +1616,7 @@ function actualizarSinTemplete() {
   paso('Ventas Palermo (cierres)', () => { const c = sync_(null); return { ok: c.ok, modificado: c.modificado }; });
   paso('Contabilium ventas por canal', () => ventasCanalSync_(true));
   paso('Contabilium comprobantes (control vs informe)', () => comprobantesSync_(150000));
+  paso('Cuentas corrientes grandes cuentas', () => { const k = ctaCte_(true); return { cuentas: k.cuentas.length, modificado: k.modificado }; });
   paso('Contabilium productos y cobranzas', () => ctbActualizarResumenes_());
   paso('Stock HB Palermo (sorteo)', () => stockPalermoArt_(true).length + ' artículos con stock');
   paso('Noticias y dólar', () => { CACHE.remove('CTX37'); const x = contexto37_(); return { dolar: !!x.dolar, noticias: x.noticias.map(n => n.titulo) }; });
@@ -1716,7 +1735,9 @@ function finControlMeses_(F, CM, V, maxEj) {
       if (!t) { if (Math.abs(neto) < 1) return; if (finFranq_(f.cliente) || f.canal === CANAL_GC) add('grandesCuentas', neto, [f.clave, f.cliente, neto]); else if (cobradoAntes_(PSF, f.cliente, m.mes)) add('cobradaAntes', neto, [f.clave, f.cliente, neto, cobradoAntes_(PSF, f.cliente, m.mes).map(x => x.mes + ' fila ' + x.fila).join(' · ')]); else add('faltaCargar', neto, [f.clave, f.cliente, neto]); return; }
       const enMes = t.filter(x => x.mes === m.mes), mt = enMes.reduce((a, x) => a + x.monto, 0);
       if (!enMes.length) { add('cargadaOtroMes', neto, [f.clave, f.cliente, neto, t.map(x => x.mes).filter((v, i, a) => a.indexOf(v) === i).join(' / ')]); return; }
-      if (Math.abs(mt - neto) >= 1) add(t.length > 1 && enMes.length > 1 ? 'repetidaEnTemplete' : 'importeDistinto', neto - mt, [f.clave, f.cliente, neto, mt]); });
+      const dc = enMes.reduce((a, x) => a + (x.dobleConteo || 0), 0); if (dc >= 1) add('pagadaConAnticipo', Math.min(dc, neto - mt), [f.clave, f.cliente, neto, dc]);
+      const resto = neto - mt - (dc >= 1 ? Math.min(dc, neto - mt) : 0);
+      if (Math.abs(resto) >= 1) add(t.length > 1 && enMes.length > 1 ? 'repetidaEnTemplete' : 'importeDistinto', resto, [f.clave, f.cliente, neto, mt]); });
     Object.keys(tplFact).forEach(k => { const enMes = tplFact[k].filter(x => x.mes === m.mes); if (!enMes.length) return;
       const mt = enMes.reduce((a, x) => a + x.monto, 0), f = porClave[k];
       if (!f) add('noEstaEnContabilium', -mt, [k, finCli_(enMes[0].contraparte), mt, 'fila ' + enMes.map(x => x.fila).join(', ')]);
@@ -1739,6 +1760,135 @@ function finFacturadoCanal_(CM, meses) {
     .filter(f => f.anio || f.valores.some(Boolean));
   const tot = k => meses.map(m => por[m] ? Math.round(por[m].total[k]) : 0);
   return { meses: meses, filas: filas, totalConIva: tot('conIva'), totalSinIva: tot('sinIva'), comprobantes: meses.map(m => por[m] ? por[m].total.comprobantes : 0) };
+}
+
+/* =================== 3.9d · Cuentas corrientes de grandes cuentas (planilla de Drive, SOLO LECTURA) ===================
+   «HeyBlackk - Cuentas Corrientes Mayoristas.xlsx» (la carga administración): una hoja por gran cuenta con
+   Fecha · Comprobante · Detalle · Factura ($) · Pago ($) · % Desc. · Descuento ($) · Saldo ($). Saldo negativo = a favor del cliente
+   (pagó por adelantado: mercadería pagada que todavía no se despachó). Todo lo que dice SS27 es de la temporada nueva
+   (pedidos que se están armando y los ya despachados). La app lee el .xlsx sin convertirlo ni copiarlo.
+   Con esta planilla la app:
+   · muestra el saldo real de cada gran cuenta y la temporada SS27 (pagado, facturado/despachado, pedido y lo que falta);
+   · cruza cada factura con Contabilium y cada pago con el Templete;
+   · NO cuenta dos veces: una factura que se pagó con anticipos ya cobrados no es plata nueva. Si el Templete la tiene como
+     cobro, el panel la descuenta del «entró» y lo avisa. */
+const CC_NOMBRE = 'HeyBlackk - Cuentas Corrientes Mayoristas';
+function ccArchivo_() {
+  const id = PROPS.getProperty('CC_ID');
+  if (id) try { const f = DriveApp.getFileById(id); if (!f.isTrashed()) return f; } catch (e) {}
+  const it = DriveApp.searchFiles("title contains '" + CC_NOMBRE + "' and trashed = false"); let mejor = null;
+  while (it.hasNext()) { const f = it.next(); if (!mejor || f.getLastUpdated() > mejor.getLastUpdated()) mejor = f; }
+  if (!mejor) throw new Error('No encuentro la planilla «' + CC_NOMBRE + '» en el Drive (o no está compartida con la cuenta de la app).');
+  PROPS.setProperty('CC_ID', mejor.getId()); return mejor;
+}
+/** Fecha de la celda: número de Excel, «dd/mm/aaaa» o el error de tipeo «09/0472026» (el 7 está en lugar de la barra). */
+function ccFecha_(v) {
+  if (typeof v === 'number' && v > 30000 && v < 80000) return { f: Utilities.formatDate(new Date(Date.UTC(1899, 11, 30) + v * 864e5), 'UTC', 'yyyy-MM-dd') };
+  const s = String(v == null ? '' : v).trim(); if (!s) return { f: null };
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (m) return { f: m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) };
+  m = s.match(/^(\d{1,2})\/(\d{2})7(\d{4})$/); if (m) return { f: m[3] + '-' + m[2] + '-' + ('0' + m[1]).slice(-2), mal: s };
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return { f: m[0] };
+  return { f: null, mal: s };
+}
+const ccNum_ = v => typeof v === 'number' ? v : (String(v || '').trim() ? ctbNum_(v) : 0);
+function ccLeer_() {
+  const f = ccArchivo_(), H = leerXlsx_(f.getBlob()), out = [];
+  H.forEach(h => {
+    if (/^(resumen|plantilla)$/i.test(h.nombre.trim())) return;
+    const c = h.celdas, nombre = String(c.B2 || '').replace(/\s+/g, ' ').trim(), gc = finFranq_(nombre) || (n => { const x = FIN_FRANQ_DET.find(y => y[1].test(n)); return x ? x[0] : null; })(finNorm_(h.nombre));
+    const filas = {}; Object.keys(c).forEach(ref => { const m = ref.match(/^([A-Z]+)(\d+)$/); if (!m || Number(m[2]) < 7) return; (filas[m[2]] = filas[m[2]] || {})[m[1]] = c[ref]; });
+    const movs = [], avisos = []; let ultFecha = null, saldo = 0, sinFecha = [], malas = [];
+    Object.keys(filas).map(Number).sort((a, b) => a - b).forEach(i => { const r = filas[i];
+      if (/c[oó]mo cargar/i.test(String(r.A || ''))) return;
+      const fac = ccNum_(r.D), pag = ccNum_(r.E), des = ccNum_(r.G); if (!fac && !pag && !des) return;
+      const fe = ccFecha_(r.A); if (fe.mal) malas.push(i); let fecha = fe.f;
+      if (!fecha) { if (!movs.length && fac && !r.B) fecha = null; else { sinFecha.push(i); fecha = ultFecha; } } else ultFecha = fecha;
+      const det = String(r.C || '').trim(), comp = String(r.B || '').trim();
+      const tipo = fac ? (!movs.length && !comp && !fecha ? 'saldoInicial' : 'factura') : /nota\s*de\s*cr|nota\s*cr|n\s*\/\s*c/i.test(det) ? 'nc' : /ajuste/i.test(det) ? 'ajuste' : 'pago';
+      saldo += fac - pag - des;
+      movs.push({ fila: i, fecha: fecha, comprobante: comp, clave: finClave_(comp), detalle: det.slice(0, 60), factura: fac, pago: pag, descuento: des, tipo: tipo,
+        saldoPlanilla: r.H != null ? ccNum_(r.H) : null, saldo: Math.round(saldo * 100) / 100, ss27: /ss\s*27/i.test(det) }); });
+    if (!movs.length && !nombre) return;
+    if (sinFecha.length) avisos.push('Movimientos sin fecha (filas ' + sinFecha.join(', ') + '): se tomó la fecha del movimiento anterior.');
+    if (malas.length) avisos.push('Fecha mal escrita (filas ' + malas.join(', ') + ', p. ej. «09/0472026»): se interpretó como día/mes/año.');
+    const ult = movs[movs.length - 1], sp = ult && ult.saldoPlanilla != null ? ult.saldoPlanilla : null;
+    if (sp != null && Math.abs(sp - ult.saldo) > 1) avisos.push('El saldo de la planilla (' + $M_(sp) + ') no coincide con la suma de los movimientos (' + $M_(ult.saldo) + ').');
+    // Temporada SS27: desde el primer movimiento que dice SS27 (los pagos siguientes sin detalle son de la misma temporada)
+    const i27 = movs.findIndex(m => m.ss27), T = i27 < 0 ? null : (() => { const prev = i27 > 0 ? movs[i27 - 1].saldo : 0, L = movs.slice(i27);
+      const fac = L.filter(m => m.tipo === 'factura'), pag = L.filter(m => m.tipo === 'pago');
+      return { desde: L[0].fecha, saldoAntes: Math.round(prev), facturado: Math.round(fac.reduce((a, m) => a + m.factura, 0)), facturas: fac.map(m => ({ fecha: m.fecha, comprobante: m.comprobante, monto: m.factura })),
+        pagado: Math.round(pag.reduce((a, m) => a + m.pago, 0)), pagos: pag.length, nc: Math.round(L.filter(m => m.tipo === 'nc').reduce((a, m) => a + m.pago, 0)) }; })();
+    out.push({ hoja: h.nombre, cliente: nombre || h.nombre, granCuenta: gc || h.nombre, movimientos: movs, saldo: Math.round(ult ? ult.saldo : 0), ss27: T, avisos: avisos,
+      ultimo: movs.reduce((a, m) => m.fecha && (!a || m.fecha > a) ? m.fecha : a, null) });
+  });
+  return { archivo: f.getName(), modificado: f.getLastUpdated().toISOString(), leida: new Date().toISOString(), cuentas: out };
+}
+/** Caché 6 h (la planilla cambia poco); el botón «Actualizar datos» y la actualización de las 7 h la releen. */
+function ctaCte_(forzar) {
+  if (!forzar) { const c = CACHE.get('CC39'); if (c) try { return JSON.parse(c); } catch (e) {} }
+  const d = ccLeer_(); const s = JSON.stringify(d); if (s.length < 95000) try { CACHE.put('CC39', s, 21600); } catch (e) {}
+  PROPS.setProperty('CC_SYNC', JSON.stringify({ ts: d.leida, ok: true, modificado: d.modificado })); return d;
+}
+/** Una factura de gran cuenta «cubierta por anticipos»: cuando se emitió, el cliente ya tenía saldo a favor suficiente
+    (pagos anteriores). Esa factura NO es plata nueva. Devuelve { clave: { granCuenta, monto, cubierto, fecha } }. */
+function ccFacturasConAnticipo_(CC) {
+  const R = {};
+  (CC.cuentas || []).forEach(a => { let antes = 0; a.movimientos.forEach(m => {
+    if (m.tipo === 'factura' && m.clave && antes < 0) { const cub = Math.min(m.factura, -antes); if (cub > 1) R[m.clave] = { granCuenta: a.granCuenta, monto: m.factura, cubierto: Math.round(cub), fecha: m.fecha, total: cub >= m.factura - 1 }; }
+    antes = m.saldo; }); });
+  return R;
+}
+/** Doble conteo en el Templete: una fila de ingreso por venta con el número de una factura que se pagó con anticipos, cuando esos
+    anticipos (cobros sin factura) ya están cargados en el Templete. Antes de SS27 el Templete registraba a las grandes cuentas por
+    factura (sin los pagos): eso NO es doble conteo y no se toca. Con SS27 se cargan los anticipos (la plata que entra): entonces la
+    factura que se aplica contra ese anticipo no es plata nueva. Esas filas se descuentan del «entró» (no se borra nada). */
+function finDobleConteo_(F, CC) {
+  const cub = ccFacturasConAnticipo_(CC), facCc = {}, out = [];
+  (CC.cuentas || []).forEach(a => a.movimientos.forEach(m => { if (m.tipo === 'factura' && m.clave) facCc[m.clave] = 1; }));
+  const esPago = y => !y.origen && y.tipo === 'ingreso' && !(finClave_(y.factura) && facCc[finClave_(y.factura)]);
+  const usado = {};
+  F.filter(x => !x.origen && x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro) && x.mes && cub[finClave_(x.factura)])
+    .sort((a, b) => (a.mes + (a.fecha || '')).localeCompare(b.mes + (b.fecha || ''))).forEach(x => {
+      const k = finClave_(x.factura), c = cub[k], gc = c.granCuenta;
+      const pagos = F.filter(y => esPago(y) && finFranqX_(y) === gc && y.mes && y.mes <= x.mes).reduce((a, y) => a + y.monto, 0), disp = pagos - (usado[gc] || 0);
+      if (disp < c.cubierto * 0.9) return;   // los pagos no están en el Templete: esta fila es la única forma en que entró esa plata
+      const monto = Math.min(x.monto, c.cubierto, disp); if (monto < 1) return;
+      usado[gc] = (usado[gc] || 0) + monto;
+      out.push({ fila: x.fila, mes: x.mes, factura: k, granCuenta: gc, monto: Math.round(monto), cubierto: c.cubierto, fecha: c.fecha, anticiposEnTemplete: Math.round(pagos) }); x.dobleConteo = monto; });
+  return out;
+}
+/** Panel de cuentas corrientes (solo MARIA): saldo, SS27 contra el pedido de «Control ingreso», y cruces con Contabilium y el Templete. */
+function ccPanel_(CC, F) {
+  let ped = {}; try { (control_(false).clientes || []).filter(c => c.seCuenta !== false).forEach(c => { const k = finFranq_(c.nombre) || (n => { const x = FIN_FRANQ_DET.find(y => y[1].test(n)); return x ? x[0] : null; })(finNorm_(c.nombre));
+    if (k) { const p = ped[k] = ped[k] || { pedido: 0, despachado: 0 }; p.pedido += c.montoTotal || c.monto || 0; p.despachado += c.montoDespachado || 0; } }); } catch (e) {}
+  let V = null; try { V = ctbMensual_() ? cmpVentas_() : null; } catch (e) {}
+  const porClave = {}; if (V) V.facturas.forEach(f => { porClave[f.clave] = f; });
+  const enCc = {}; (CC.cuentas || []).forEach(a => a.movimientos.forEach(m => { if (m.clave) enCc[m.clave] = a.granCuenta; }));
+  const cuentas = (CC.cuentas || []).filter(a => a.movimientos.length).map(a => {
+    const av = a.avisos.slice(), P = ped[a.granCuenta];
+    // facturas de la cuenta corriente contra Contabilium
+    if (V) a.movimientos.filter(m => m.tipo === 'factura' && m.clave && m.fecha && m.fecha >= CMP_DESDE + '-01').forEach(m => { const f = porClave[m.clave];
+      if (!f) av.push('La factura ' + m.clave + ' (' + $M_(m.factura) + ', ' + fdm_(m.fecha) + ') no está en Contabilium: revisar el número.');
+      else if (Math.abs(f.total - m.factura) > Math.max(1000, m.factura * 0.01)) av.push('La factura ' + m.clave + ' figura por ' + $M_(m.factura) + ' en la cuenta corriente y por ' + $M_(f.total) + ' en Contabilium.'); });
+    // facturas de Contabilium a esta gran cuenta que no están en su cuenta corriente
+    const faltan = V ? V.facturas.filter(f => f.neto > 0 && !enCc[f.clave] && (finFranq_(f.cliente) === a.granCuenta) && f.mes >= CMP_DESDE) : [];
+    if (faltan.length) av.push(faltan.length + ' factura(s) de Contabilium a ' + a.granCuenta + ' no están en su cuenta corriente: ' + faltan.slice(0, 4).map(f => f.clave + ' ' + $M_(f.neto) + ' (' + fdm_(f.fecha) + ')').join(', ') + '.');
+    // pagos de la cuenta corriente contra lo cargado en el Templete, mes por mes
+    const pm = {}, tm = {}; a.movimientos.filter(m => m.tipo === 'pago' && m.fecha).forEach(m => { const k = m.fecha.slice(0, 7); pm[k] = (pm[k] || 0) + m.pago; });
+    // (desde SS27: antes el Templete registraba a las grandes cuentas por factura, no por pago, y la comparación no aplica)
+    (F || []).filter(x => !x.origen && x.tipo === 'ingreso' && finFranqX_(x) === a.granCuenta && x.mes && !(finClave_(x.factura) && enCc[finClave_(x.factura)])).forEach(x => { tm[x.mes] = (tm[x.mes] || 0) + x.monto; });
+    const desde27 = a.ss27 && a.ss27.desde ? a.ss27.desde.slice(0, 7) : '9999';
+    const difPagos = Object.keys(pm).concat(Object.keys(tm)).filter((k, i, A) => A.indexOf(k) === i && k >= desde27).sort().map(k => ({ mes: k, cuentaCorriente: Math.round(pm[k] || 0), templete: Math.round(tm[k] || 0) })).filter(d => Math.abs(d.cuentaCorriente - d.templete) > Math.max(10000, d.cuentaCorriente * 0.01));
+    difPagos.forEach(d => av.push(MES_NOM(d.mes) + ': la cuenta corriente tiene pagos por ' + $M_(d.cuentaCorriente) + ' y el Templete ' + $M_(d.templete) + (d.cuentaCorriente > d.templete ? ' (faltan cargar ' + $M_(d.cuentaCorriente - d.templete) + ' en el Templete).' : ' (en el Templete hay ' + $M_(d.templete - d.cuentaCorriente) + ' de más o de otro mes).')));
+    const T = a.ss27; if (T && P && P.pedido) { T.pedido = Math.round(P.pedido); T.despachadoControl = Math.round(P.despachado);
+      T.faltaFacturar = Math.max(0, T.pedido - T.facturado); T.faltaCobrar = Math.max(0, T.pedido - T.pagado - Math.max(0, -T.saldoAntes)); T.pctCobrado = Math.round(T.pagado / T.pedido * 100); }
+    return { granCuenta: a.granCuenta, cliente: a.cliente, saldo: a.saldo, estado: a.saldo < -1 ? 'a favor' : a.saldo > 1 ? 'debe' : 'saldado', ultimo: a.ultimo, ss27: T, avisos: av,
+      faltanEnCc: faltan.map(f => ({ factura: f.clave, fecha: f.fecha, monto: Math.round(f.neto) })), difPagos: difPagos, movimientos: a.movimientos.length };
+  });
+  const tot = k => cuentas.reduce((s, c) => s + (k(c) || 0), 0);
+  return { archivo: CC.archivo, modificado: CC.modificado, leida: CC.leida, cuentas: cuentas,
+    aFavor: Math.round(-tot(c => Math.min(0, c.saldo))), deben: Math.round(tot(c => Math.max(0, c.saldo))),
+    ss27: { pagado: tot(c => c.ss27 && c.ss27.pagado), facturado: tot(c => c.ss27 && c.ss27.facturado), pedido: tot(c => c.ss27 && c.ss27.pedido) } };
 }
 
 const pctVs_ = (a, b) => b > 0 ? Math.round((a - b) / b * 1000) / 10 : null;
@@ -4812,6 +4962,9 @@ function actualizarPlanillas_(s) {
       error: (r.pendientes || []).length ? 'Faltan leer: ' + r.pendientes.join(', ') + ' (se completa en la próxima actualización)' : null }); }
     catch (e) { out.push({ planilla: 'Contabilium · comprobantes de venta', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
   }
+  // 3.9d · Cuentas corrientes de grandes cuentas (Drive, solo lectura)
+  try { const k = ctaCte_(true); out.push({ planilla: k.archivo || CC_NOMBRE, ok: true, ts: k.leida, modificado: k.modificado }); }
+  catch (e) { out.push({ planilla: CC_NOMBRE, ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
   // 3.8 · Templete (Dropbox, solo lectura) + ventas facturadas de Contabilium
   if (dbxConfigurado_()) {
     try { const R = finanzas_(true), k = R.contabilium || {};
