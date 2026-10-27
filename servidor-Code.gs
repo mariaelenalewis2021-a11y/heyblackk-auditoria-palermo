@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.8';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.9c';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -114,7 +114,9 @@ const TABLAS = {
   Vacaciones: ['id', 'usuario', 'desde', 'hasta', 'dias', 'comentario', 'estado', 'solicitado', 'decididoPor', 'decidido', 'motivo'],
   // 3.9 · Resumen diario de ventas por canal (de Contabilium, solo lectura) y carga manual de Google por local
   VentasCanal: ['clave', 'fecha', 'canal', 'ventas', 'comprobantes', 'nc', 'actualizado'],
-  Google: ['id', 'local', 'fecha', 'calificacion', 'resenas', 'respondidas', 'fichaPropia', 'observaciones', 'cargadoPor', 'creado']
+  Google: ['id', 'local', 'fecha', 'calificacion', 'resenas', 'respondidas', 'fichaPropia', 'observaciones', 'cargadoPor', 'creado'],
+  // 3.9c · Copia de lectura de los comprobantes de venta de Contabilium (0001/0005/0007) desde enero 2026
+  Comprobantes: ['clave', 'fecha', 'mes', 'pv', 'tipo', 'numero', 'canal', 'cliente', 'conIva', 'sinIva', 'asociado', 'origen', 'actualizado']
 };
 
 /* =================== Instalación =================== */
@@ -1138,16 +1140,29 @@ function ctbVentas_(desde, hasta) {
   try { const s = JSON.stringify(R); if (s.length < 95000) CACHE.put(ck, s, 3600); } catch (e) {}
   return R;
 }
+/** 3.9c · Para NO contar dos veces: cobros del Templete sin número de factura (o con un número que no está en Contabilium), por
+    cliente. Si un cliente pagó (p. ej. en septiembre) y la factura se hizo después (octubre), esa factura no se suma como «falta
+    cargar»: la plata ya está contada el mes en que entró. Se muestra aparte para revisar. */
+const cliClave_ = t => finNorm_(t).replace(/\(.*?\)/g, ' ').split(' ').filter(w => w.length >= 3 && !/^(srl|sas|del|las|los|por)$/.test(w)).slice(0, 2).join(' ');
+function finPagosSinFactura_(F, enCtb) {
+  const P = {}; F.filter(x => !x.origen && x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro) && x.mes).forEach(x => { const k = finClave_(x.factura); if (k && enCtb[k]) return;
+    const c = cliClave_(x.contraparte); if (c) (P[c] = P[c] || []).push({ mes: x.mes, monto: x.monto, fila: x.fila }); });
+  return P;
+}
+function cobradoAntes_(P, cliente, mes) { const c = cliClave_(cliente), L = c && P[c]; if (!L) return null; const desde = finMesAnt_(finMesAnt_(mes));
+  const ok = L.filter(p => p.mes >= desde && p.mes <= mes); return ok.length ? ok : null; }
 /** Conciliación por mes entre Contabilium (V) y las ventas del Templete (F). */
 function finConciliar_(F, V, meses) {
   const tpl = {}; F.filter(x => !x.origen && x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro)).forEach(x => { const k = finClave_(x.factura); if (k) (tpl[k] = tpl[k] || []).push(x); });
-  const enCtb = {}; V.facturas.forEach(f => { enCtb[f.clave] = f; });
+  const enCtb = {}; V.facturas.forEach(f => { enCtb[f.clave] = f; }); const PSF = finPagosSinFactura_(F, enCtb);
   return meses.map(mes => {
-    const r = { mes: mes, porLocal: {}, facturas: 0, ctbBruto: 0, ctbNc: 0, ctbNeto: 0, conciliadas: 0, montoConciliado: 0, faltaCargar: [], franquicias: [], montoFalta: 0, noEnCtb: [], diferencias: [], anuladas: [], ncSueltas: [] };
+    const r = { mes: mes, porLocal: {}, facturas: 0, ctbBruto: 0, ctbNc: 0, ctbNeto: 0, conciliadas: 0, montoConciliado: 0, faltaCargar: [], franquicias: [], cobradaAntes: [], montoFalta: 0, noEnCtb: [], diferencias: [], anuladas: [], ncSueltas: [] };
     V.facturas.filter(f => f.mes === mes).forEach(f => {
       const loc = FIN_PV[f.pv]; r.facturas++; r.ctbBruto += f.total; r.ctbNc += f.nc; r.ctbNeto += f.neto; r.porLocal[loc] = (r.porLocal[loc] || 0) + f.neto;
       const t = tpl[f.clave];
-      if (!t) { if (f.neto > 0) { if (finFranq_(f.cliente)) r.franquicias.push({ factura: f.clave, cliente: f.cliente, franquicia: finFranq_(f.cliente), monto: f.neto }); else r.faltaCargar.push({ factura: f.clave, local: loc, fecha: f.fecha, cliente: f.cliente, monto: f.neto, nc: f.nc }); } return; }
+      if (!t) { if (f.neto > 0) { if (finFranq_(f.cliente) || f.canal === CANAL_GC) r.franquicias.push({ factura: f.clave, cliente: f.cliente, franquicia: finFranq_(f.cliente) || f.cliente, monto: f.neto });
+        else if (cobradoAntes_(PSF, f.cliente, mes)) { const p = cobradoAntes_(PSF, f.cliente, mes); r.cobradaAntes.push({ factura: f.clave, local: loc, cliente: f.cliente, monto: f.neto, cobros: p.map(x => x.mes + ': ' + Math.round(x.monto) + ' (fila ' + x.fila + ')').join(' · ') }); }
+        else r.faltaCargar.push({ factura: f.clave, local: loc, fecha: f.fecha, cliente: f.cliente, monto: f.neto, nc: f.nc }); } return; }
       const mt = t.reduce((a, x) => a + x.monto, 0); r.conciliadas++; r.montoConciliado += mt;
       if (f.neto === 0) r.anuladas.push({ factura: f.clave, cliente: f.cliente, monto: mt });
       else if (Math.abs(mt - f.neto) > Math.max(1000, f.neto * 0.01)) r.diferencias.push({ factura: f.clave, cliente: f.cliente, templete: mt, contabilium: f.neto, nc: f.nc });
@@ -1181,11 +1196,17 @@ function finSectores_(F) {
 /** Lee la planilla de Dropbox (o la caché de 30 min / misma versión del archivo). */
 function finanzas_(forzar) {
   if (!forzar) { const c = CACHE.get('FIN38_R'); if (c) { try { return JSON.parse(c); } catch (e) {} } }
-  const d = dbxDescargar_(), F = finLeerData_(d.blob), filas = F.length;
+  const d = dbxDescargar_(), F = finLeerData_(d.blob), filas = F.length, Fo = F.slice();
+  let CM = null, controlMeses = null;
   // Ventas facturadas en Contabilium (mes anterior y mes en curso): lo que todavía no está en el Templete se suma, sin duplicar.
   let ctb = { configurado: ctbConfigurado_(), ok: false };
   if (ctb.configurado) {
-    try { const hoy = hoy_(), mesHoy = hoy.slice(0, 7), mesAnt = finMesAnt_(mesHoy), V = ctbVentas_(mesAnt + '-01', hoy), conc = finConciliar_(F, V, [mesAnt, mesHoy]);
+    try { const hoy = hoy_(), mesHoy = hoy.slice(0, 7), mesAnt = finMesAnt_(mesHoy);
+      // 3.9c · Si ya está la copia de los comprobantes (hoja «Comprobantes»), se usa esa: tiene todos los meses y las notas de crédito
+      // de facturas de meses anteriores. Si no, se lee Contabilium en el momento (como en 3.8).
+      CM = ctbMensual_(); const V = CM ? cmpVentas_() : ctbVentas_(mesAnt + '-01', hoy), conc = finConciliar_(F, V, [mesAnt, mesHoy]);
+      if (CM) { try { controlMeses = finControlMeses_(Fo, CM, V, 3); } catch (e) { controlMeses = null; }
+        conc.forEach(c => { const m = CM.meses.find(x => x.mes === c.mes); if (m) c.informe = m.total; }); }
       conc.forEach(c => c.faltaCargar.forEach(f => F.push({ fila: 0, fecha: f.fecha, mes: c.mes, tipo: 'ingreso', rubro: 'Ventas', cuenta: 'Facturado en Contabilium (falta cargar)',
         contraparte: f.cliente, detalle: '', pv: f.local, factura: f.factura, medio: '', monto: f.monto, sinIva: 0, origen: 'contabilium' })));
       ctb = { configurado: true, ok: true, leida: V.leida, conciliacion: conc };
@@ -1193,6 +1214,9 @@ function finanzas_(forzar) {
   }
   const R = finResumen_(F), dup = finDuplicados_(F);
   R.filas = filas; R.contabilium = ctb; R.duplicados = dup; try { R.anticipos = finAnticipos_(F); } catch (e) { R.anticipos = null; } try { R.sectores = finSectores_(F); } catch (e) { R.sectores = null; }
+  // 3.9c · Lo facturado por canal (Contabilium, con IVA) y el control mes a mes contra el informe de Contabilium y el Templete
+  if (CM && R.sectores) try { R.sectores.facturado = finFacturadoCanal_(CM, R.sectores.meses); } catch (e) {}
+  if (CM) R.controlMeses = { meses: controlMeses, leido: CM.leido, comprobantes: CM.comprobantes };
   if (dup.duplicados.length) R.alertas.push({ nivel: 'amarillo', texto: 'En el Templete hay ' + dup.duplicados.length + ' facturas cargadas dos veces (mismo número y mismo cliente): suman ' + $M_(dup.montoDeMas) + ' de más en ventas. Están en «Control de facturas».' });
   if (dup.mismoNumero.length) R.alertas.push({ nivel: 'amarillo', texto: dup.mismoNumero.length + ' números de factura aparecen con clientes distintos en el Templete: seguramente es un error de tipeo en el número.' });
   if (ctb.ok) ctb.conciliacion.forEach(c => { if (c.montoFalta > 0) R.recomendaciones.push('Cargar en el Templete las ' + c.faltaCargar.length + ' facturas de ' + MES_NOM(c.mes).split(' ')[0] + ' que están en Contabilium (' + $M_(c.montoFalta) + '). Mientras tanto el panel ya las suma.'); });
@@ -1249,6 +1273,7 @@ function finHojasExtra_(X, maria) {
   if (K.ok) K.conciliacion.forEach(c => H.push({ nombre: 'Conciliación ' + c.mes, columnas: ['Situación', 'Factura', 'Cliente', 'Contabilium', 'Templete'], dinero: [3, 4],
     filas: c.faltaCargar.map(f => ['Falta cargar en el Templete (ya sumada al panel)', f.factura, f.cliente, Math.round(f.monto), 0])
       .concat(c.franquicias.map(f => ['Factura a gran cuenta: aplicar contra anticipos', f.factura, f.cliente, Math.round(f.monto), 0]))
+      .concat((c.cobradaAntes || []).map(f => ['Ya cobrada antes sin número de factura: NO se suma (' + f.cobros + ')', f.factura, f.cliente, Math.round(f.monto), 0]))
       .concat(c.diferencias.map(f => ['Importe distinto', f.factura, f.cliente, Math.round(f.contabilium), Math.round(f.templete)]))
       .concat(c.noEnCtb.map(f => ['Está en el Templete y no en Contabilium', f.factura, f.cliente, 0, Math.round(f.monto)]))
       .concat(c.anuladas.map(f => ['Anulada con nota de crédito total', f.factura, f.cliente, 0, Math.round(f.monto)])) }));
@@ -1258,6 +1283,31 @@ function finHojasExtra_(X, maria) {
     const P = []; X.anticipos.clientes.forEach(c => c.pagos.forEach(p => P.push([c.cliente, p.fecha ? fdm_(p.fecha) : '', Math.round(p.monto), p.pagador, p.medio, p.detalle, p.fila])));
     H.push({ nombre: 'Anticipos detalle', columnas: ['Cliente', 'Fecha', 'Monto', 'Pagó', 'Medio', 'Detalle', 'Fila'], dinero: [2], filas: P });
   }
+  return H;
+}
+/** 3.9c · Hojas de control: lo facturado igual al informe de Contabilium y la conciliación mes a mes con el Templete. */
+const MOTIVOS_TXT = { faltaCargar: 'Facturas de Contabilium que todavía no están en el Templete', grandesCuentas: 'Facturas a grandes cuentas (se cobran con anticipos; no se cargan como venta)',
+  cobradaAntes: 'Facturas de clientes que ya habían pagado sin número de factura (no se suman: la plata ya está contada)',
+  cargadaOtroMes: 'Facturas de este mes cargadas en el Templete en otro mes', deOtroMes: 'Cobros cargados en este mes de facturas de otro mes',
+  noEstaEnContabilium: 'Números de factura del Templete que no existen en Contabilium (revisar tipeo)', importeDistinto: 'Importe distinto entre Templete y Contabilium',
+  repetidaEnTemplete: 'Factura cargada más de una vez en el Templete', notasCreditoOtroMes: 'Notas de crédito: Contabilium las resta el mes en que se emiten',
+  sinNumeroFactura: 'Ventas del Templete sin número de factura', otroPuntoVenta: 'Ventas del Templete de otro punto de venta' };
+function finHojasControl_(F) {
+  const CM = ctbMensual_(); if (!CM) return [];
+  const V = cmpVentas_(), C = finControlMeses_(F, CM, V, 400), PVN = { '0001': '0001 Palermo', '0005': '0005 Lima (incluye Web y grandes cuentas)', '0007': '0007 Janette' };
+  const H = [];
+  const f1 = []; CM.meses.forEach(m => { Object.keys(m.pv).sort().forEach(p => { const o = m.pv[p]; f1.push([m.mes, PVN[p] || p, o.comprobantes, Math.round(o.sinIva), Math.round(o.conIva), Math.round(o.ncConIva)]); });
+    f1.push([m.mes, 'TOTAL', m.total.comprobantes, Math.round(m.total.sinIva), Math.round(m.total.conIva), Math.round(m.total.ncConIva)]); });
+  H.push({ nombre: 'Facturado (= Contabilium)', columnas: ['Mes', 'Punto de venta', 'Comprobantes', 'Total sin IVA', 'Total con IVA', 'Notas de crédito (ya restadas)'], dinero: [3, 4, 5], filas: f1 });
+  const f2 = []; CM.meses.forEach(m => CANALES_TODOS.forEach(cn => { const o = m.canal[cn]; if (o) f2.push([m.mes, cn, o.comprobantes, Math.round(o.sinIva), Math.round(o.conIva)]); }));
+  H.push({ nombre: 'Facturado por canal', columnas: ['Mes', 'Canal', 'Comprobantes', 'Sin IVA', 'Con IVA'], dinero: [3, 4], filas: f2 });
+  H.push({ nombre: 'Facturado vs Templete', columnas: ['Mes', 'Facturado con IVA (Contabilium)', 'Ventas en el Templete (sin anticipos)', 'Anticipos de temporada (Templete)', 'Diferencia', 'Motivo', 'Cantidad', 'Importe del motivo'], dinero: [1, 2, 3, 4, 7],
+    filas: [].concat.apply([], C.map(r => { const ks = Object.keys(r.motivos); const base = [r.mes, Math.round(r.informe.conIva), Math.round(r.templete.ventas), Math.round(r.templete.anticipos), r.diferencia];
+      const L = ks.map(k => base.concat([MOTIVOS_TXT[k] || k, r.motivos[k].n, r.motivos[k].monto]));
+      if (r.sinExplicar) L.push(base.concat(['Sin explicar', '', r.sinExplicar]));
+      return L.length ? L : [base.concat(['Coincide', '', 0])]; })) });
+  const f4 = []; C.forEach(r => Object.keys(r.ejemplos).forEach(k => r.ejemplos[k].forEach(e => f4.push([r.mes, MOTIVOS_TXT[k] || k, e[0], e[1] || '', Math.round(e[2] || 0), e.length > 3 ? (typeof e[3] === 'number' ? Math.round(e[3]) : e[3]) : '']))));
+  H.push({ nombre: 'Detalle de diferencias', columnas: ['Mes', 'Motivo', 'Factura', 'Cliente', 'Importe', 'Dato extra'], dinero: [4], filas: f4 });
   return H;
 }
 /** Descarga (Excel/PDF) del detalle financiero: meses, rubros por mes, semanas, cuentas y franquicias. */
@@ -1275,7 +1325,7 @@ function descargaFinanzas(token) {
       { nombre: 'Semanas', columnas: ['Semana del', 'Ingresos', 'Egresos', 'Resultado'], dinero: [1, 2, 3], filas: R.semanas.map(w => [fdm_(w.semana), Math.round(w.ingresos), Math.round(w.egresos), Math.round(w.ingresos - w.egresos)]) },
       { nombre: 'Ventas por canal (año)', columnas: ['Canal', 'Ventas'], dinero: [1], filas: R.canales.map(c => [c.nombre, Math.round(c.monto)]) },
       { nombre: 'Grandes cuentas cobrado', columnas: ['Gran cuenta', 'Cobrado total', 'Cobrado en el año', 'Último mes cerrado', 'Último pago'], dinero: [1, 2, 3], filas: R.franquicias.map(f => [f.franquicia, Math.round(f.cobrado), Math.round(f.cobradoAnio), Math.round(f.ultimoMes), f.ultimo ? fdm_(f.ultimo) : '']) },
-      { nombre: 'Retiros de socios (año)', columnas: ['Cuenta', 'Monto'], dinero: [1], filas: R.retiros.map(r => [r.nombre, Math.round(r.monto)]) }].concat(finHojasExtra_(X, maria)) };
+      { nombre: 'Retiros de socios (año)', columnas: ['Cuenta', 'Monto'], dinero: [1], filas: R.retiros.map(r => [r.nombre, Math.round(r.monto)]) }].concat(finHojasControl_(F), finHojasExtra_(X, maria)) };
 }
 /* =================== 3.8 · Contabilium (SOLO LECTURA) =================== */
 /* Conexión con la API de Contabilium (https://rest.contabilium.com). Las credenciales viven SOLO en Propiedades del script:
@@ -1547,6 +1597,7 @@ function actualizarSinTemplete() {
   paso('Control ingreso', () => { const d = control_(true, true); return { clientes: (d.clientes || []).length, modificado: d.modificado }; });
   paso('Ventas Palermo (cierres)', () => { const c = sync_(null); return { ok: c.ok, modificado: c.modificado }; });
   paso('Contabilium ventas por canal', () => ventasCanalSync_(true));
+  paso('Contabilium comprobantes (control vs informe)', () => comprobantesSync_(150000));
   paso('Contabilium productos y cobranzas', () => ctbActualizarResumenes_());
   paso('Stock HB Palermo (sorteo)', () => stockPalermoArt_(true).length + ' artículos con stock');
   paso('Noticias y dólar', () => { CACHE.remove('CTX37'); const x = contexto37_(); return { dolar: !!x.dolar, noticias: x.noticias.map(n => n.titulo) }; });
@@ -1555,6 +1606,140 @@ function actualizarSinTemplete() {
 }
 /** Para correr desde el editor (o la actualización diaria): completa el historial de ventas por canal desde enero 2025. */
 function ventasCanalHistorial() { const r = ventasCanalHistorial_(330000); console.log('VC ' + JSON.stringify(r)); return r; }
+
+/* =================== 3.9c · Comprobantes de Contabilium: el mismo número que su informe (SOLO LECTURA) ===================
+   Copia de lectura de cada comprobante de venta (COT, FC, ND y notas de crédito) de Palermo 0001, Lima 0005 y Janette 0007
+   desde enero 2026, en la hoja «Comprobantes» de la app. Con eso:
+   · «Facturado» da exactamente lo mismo que el informe «Ventas por punto de venta» de Contabilium (cantidad, sin IVA y con IVA).
+     Las notas de crédito restan en el mes en que se emiten, igual que en Contabilium.
+   · Se separa en canales: Web (Tiendanube) y Grandes cuentas se facturan por el 0005 y se muestran aparte.
+   · Se concilia contra el Templete factura por factura, todos los meses, y se explica cada diferencia.
+   Ojo con los nombres de la API: «ImporteTotalNeto» es el total CON IVA y «ImporteTotalBruto» el total SIN IVA (verificado contra
+   el informe de septiembre 2026: Palermo $ 10.863.674,75 con IVA / $ 8.978.243,57 sin IVA).
+   Los meses cerrados se leen una vez; el mes anterior y el actual se releen en cada actualización. */
+const CMP_DESDE = '2026-01';
+const cmpTipo_ = t => /^NC/.test(t) ? 'nc' : /^(COT|FC|ND)/.test(t) ? 'venta' : null;
+const cmpR2_ = n => Math.round(n * 100) / 100;
+const mesSig_ = m => { const y = Number(m.slice(0, 4)), mm = Number(m.slice(5, 7)); return mm === 12 ? (y + 1) + '-01' : y + '-' + ('0' + (mm + 1)).slice(-2); };
+/** Lee todos los comprobantes de venta de un mes. Devuelve null si se terminó el tiempo (se retoma en la próxima actualización). */
+function cmpLeerMes_(mes, nombres, limiteMs) {
+  const y = Number(mes.slice(0, 4)), mo = Number(mes.slice(5, 7)), h = Utilities.formatDate(new Date(y, mo, 0), TZ, 'yyyy-MM-dd'), hasta = h > hoy_() ? hoy_() : h;
+  const t0 = Date.now(), raw = [];
+  for (let p = 1; p <= 200; p++) {
+    if (limiteMs && Date.now() - t0 > limiteMs) return null;
+    const j = ctbGet_('/api/comprobantes/search', { fechaDesde: mes + '-01', fechaHasta: hasta, page: p }), I = j.Items || [];
+    if (!I.length) break; raw.push.apply(raw, I); if (raw.length >= (Number(j.TotalItems) || 0)) break;
+  }
+  const canalId = {}; raw.forEach(c => { if (cmpTipo_(String(c.TipoFc || '').toUpperCase()) === 'venta') canalId[c.Id] = canalDe_(c, nombres); });
+  const ahora = new Date().toISOString(), out = [], vistos = {};
+  raw.forEach(c => { const t = String(c.TipoFc || '').toUpperCase(), cl = cmpTipo_(t), num = String(c.Numero || '').trim(), pv = num.slice(0, 4);
+    if (!cl || !CANAL_PV[pv] || vistos[c.Id]) return;
+    const f = String(c.FechaEmision || '').slice(0, 10); if (f.slice(0, 7) !== mes) return;
+    vistos[c.Id] = 1; const sg = cl === 'nc' ? -1 : 1;
+    out.push({ clave: String(c.Id), fecha: f, mes: mes, pv: pv, tipo: t, numero: num,
+      canal: (cl === 'nc' && c.IdComprobanteAsociado && canalId[c.IdComprobanteAsociado]) || canalDe_(c, nombres) || CANAL_PV[pv],
+      cliente: String(c.RazonSocial || '').trim().slice(0, 60), conIva: sg * cmpR2_(Math.abs(ctbNum_(c.ImporteTotalNeto))), sinIva: sg * cmpR2_(Math.abs(ctbNum_(c.ImporteTotalBruto))),
+      asociado: c.IdComprobanteAsociado ? String(c.IdComprobanteAsociado) : '', origen: String(c.Origen || '').slice(0, 20), actualizado: ahora });
+  });
+  return out;
+}
+/** Reemplaza en la hoja los meses leídos por sus comprobantes nuevos. */
+function cmpGuardar_(meses, nuevas) {
+  lock_(() => {
+    const L = tAll_('Comprobantes').filter(r => meses.indexOf(r.mes) < 0).concat(nuevas).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.numero.localeCompare(b.numero));
+    const sh = tabla_('Comprobantes'), nc = TABLAS.Comprobantes.length + 1, n = sh.getLastRow() - 1;
+    if (n > 0) sh.getRange(2, 1, n, nc).clearContent();
+    if (L.length) sh.getRange(2, 1, L.length, nc).setValues(L.map(o => filaDe_('Comprobantes', o)));
+    delete MEMO_.Comprobantes;
+  });
+}
+/** Actualiza la hoja: siempre el mes actual y el anterior; los meses que falten (desde enero 2026), con límite de tiempo. */
+function comprobantesSync_(limiteMs, todos) {
+  if (!ctbConfigurado_()) return null;
+  const t0 = Date.now(), mesHoy = hoy_().slice(0, 7), mesAnt = finMesAnt_(mesHoy), nombres = gcNombres_();
+  let est = {}; try { est = JSON.parse(PROPS.getProperty('CMP_MESES') || '{}'); } catch (e) {}
+  const lista = []; for (let m = CMP_DESDE; m <= mesHoy; m = mesSig_(m)) lista.push(m);
+  const orden = [mesHoy, mesAnt].filter(m => m >= CMP_DESDE).concat(lista.filter(m => m < mesAnt && (todos || !est[m])));
+  const leidos = [], filas = [];
+  for (let i = 0; i < orden.length; i++) {
+    const quedan = limiteMs - (Date.now() - t0); if (quedan < 15000) break;
+    const r = cmpLeerMes_(orden[i], nombres, quedan); if (!r) break;
+    leidos.push(orden[i]); filas.push.apply(filas, r);
+  }
+  if (leidos.length) { cmpGuardar_(leidos, filas); const ts = new Date().toISOString(); leidos.forEach(m => est[m] = ts); PROPS.setProperty('CMP_MESES', JSON.stringify(est)); }
+  return { leidos: leidos, comprobantes: filas.length, pendientes: lista.filter(m => !est[m]) };
+}
+/** Editor: lee (o relee) todos los meses desde enero 2026. Solo lectura en Contabilium. */
+function comprobantesHistorial() { const r = comprobantesSync_(330000, true); console.log('CMP ' + JSON.stringify(r)); return r; }
+/** Resumen por mes: por punto de venta (igual al informe de Contabilium) y por canal. */
+function ctbMensual_() {
+  const L = tAll_('Comprobantes'); if (!L.length) return null;
+  let est = {}; try { est = JSON.parse(PROPS.getProperty('CMP_MESES') || '{}'); } catch (e) {}
+  const M = {}, z = () => ({ comprobantes: 0, conIva: 0, sinIva: 0, nc: 0, ncConIva: 0 });
+  const suma = (o, r) => { o.comprobantes++; o.conIva += r.conIva; o.sinIva += r.sinIva; if (r.conIva < 0) { o.nc++; o.ncConIva -= r.conIva; } };
+  L.forEach(r => { const m = M[r.mes] = M[r.mes] || { mes: r.mes, pv: {}, canal: {}, total: z() };
+    suma(m.pv[r.pv] = m.pv[r.pv] || z(), r); suma(m.canal[r.canal] = m.canal[r.canal] || z(), r); suma(m.total, r); });
+  const red = o => { o.conIva = cmpR2_(o.conIva); o.sinIva = cmpR2_(o.sinIva); o.ncConIva = cmpR2_(o.ncConIva); return o; };
+  const meses = Object.keys(M).sort().map(k => { const m = M[k]; Object.keys(m.pv).forEach(p => red(m.pv[p])); Object.keys(m.canal).forEach(c => red(m.canal[c])); red(m.total); m.leido = est[k] || null; return m; });
+  return { meses: meses, comprobantes: L.length, leido: Object.keys(est).map(k => est[k]).sort().pop() || null };
+}
+/** Las facturas (con sus notas de crédito aplicadas) armadas desde la hoja, con la misma forma que ctbVentas_. */
+function cmpVentas_() {
+  const L = tAll_('Comprobantes'), porId = {}, fc = {}, sueltas = [];
+  L.filter(r => r.conIva >= 0).forEach(r => { const k = finClave_(r.numero); if (!k) return;
+    const f = fc[k] = fc[k] || { clave: k, pv: r.pv, fecha: r.fecha, mes: r.mes, cliente: r.cliente, canal: r.canal, total: 0, sinIva: 0, nc: 0, neto: 0, veces: 0 };
+    f.total += r.conIva; f.sinIva += r.sinIva; f.veces++; porId[r.clave] = f; });
+  L.filter(r => r.conIva < 0).forEach(n => { const f = n.asociado && porId[n.asociado];
+    if (f) { f.nc += -n.conIva; (f.ncMeses = f.ncMeses || {})[n.mes] = (f.ncMeses[n.mes] || 0) - n.conIva; }
+    else sueltas.push({ clave: finClave_(n.numero), mes: n.mes, fecha: n.fecha, cliente: n.cliente, total: -n.conIva, pv: n.pv, canal: n.canal }); });
+  const F = Object.keys(fc).map(k => { const f = fc[k]; f.neto = Math.max(0, f.total - f.nc); return f; });
+  return { facturas: F, ncSueltas: sueltas, leida: (ctbMensual_() || {}).leido || new Date().toISOString() };
+}
+/** Control mes a mes: lo facturado (igual al informe de Contabilium) contra lo registrado como venta en el Templete, con cada
+    diferencia explicada. La suma de los motivos da exactamente la diferencia (si no, queda en «sin explicar»). */
+function finControlMeses_(F, CM, V, maxEj) {
+  maxEj = maxEj || 40;
+  const mesHoy = hoy_().slice(0, 7), anio = mesHoy.slice(0, 4), tplMes = {}, tplFact = {};
+  F.filter(x => !x.origen && x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro) && x.mes && x.mes.slice(0, 4) === anio && x.mes <= mesHoy).forEach(x => {
+    const t = tplMes[x.mes] = tplMes[x.mes] || { ventas: 0, anticipos: 0, sinFactura: 0, otroPv: 0, filas: 0 }; t.filas++;
+    if (/anticipo/i.test(x.cuenta + ' ' + x.detalle)) { t.anticipos += x.monto; return; }
+    t.ventas += x.monto; const k = finClave_(x.factura);
+    if (!k) t.sinFactura += x.monto; else if (!FIN_PV[k.slice(0, 4)]) t.otroPv += x.monto; else (tplFact[k] = tplFact[k] || []).push(x); });
+  const porClave = {}; V.facturas.forEach(f => { porClave[f.clave] = f; }); const PSF = finPagosSinFactura_(F, porClave);
+  return CM.meses.filter(m => m.mes.slice(0, 4) === anio && m.mes <= mesHoy).map(m => {
+    const T = tplMes[m.mes] || { ventas: 0, anticipos: 0, sinFactura: 0, otroPv: 0, filas: 0 };
+    const r = { mes: m.mes, informe: m.total, pv: m.pv, canal: m.canal, templete: T, motivos: {}, ejemplos: {} };
+    const add = (k, monto, ej) => { const o = r.motivos[k] = r.motivos[k] || { monto: 0, n: 0 }; o.monto += monto; o.n++; if (ej) { const e = r.ejemplos[k] = r.ejemplos[k] || []; if (e.length < maxEj) e.push(ej); } };
+    let ncSobreMes = 0;
+    V.facturas.filter(f => f.mes === m.mes).forEach(f => {   // notas de crédito emitidas hasta este mes (las posteriores se explican en su mes)
+      const ncH = Object.keys(f.ncMeses || {}).filter(k => k <= m.mes).reduce((a, k) => a + f.ncMeses[k], 0), neto = f.total - ncH, t = tplFact[f.clave]; ncSobreMes += ncH;
+      if (!t) { if (Math.abs(neto) < 1) return; if (finFranq_(f.cliente) || f.canal === CANAL_GC) add('grandesCuentas', neto, [f.clave, f.cliente, neto]); else if (cobradoAntes_(PSF, f.cliente, m.mes)) add('cobradaAntes', neto, [f.clave, f.cliente, neto, cobradoAntes_(PSF, f.cliente, m.mes).map(x => x.mes + ' fila ' + x.fila).join(' · ')]); else add('faltaCargar', neto, [f.clave, f.cliente, neto]); return; }
+      const enMes = t.filter(x => x.mes === m.mes), mt = enMes.reduce((a, x) => a + x.monto, 0);
+      if (!enMes.length) { add('cargadaOtroMes', neto, [f.clave, f.cliente, neto, t.map(x => x.mes).filter((v, i, a) => a.indexOf(v) === i).join(' / ')]); return; }
+      if (Math.abs(mt - neto) >= 1) add(t.length > 1 && enMes.length > 1 ? 'repetidaEnTemplete' : 'importeDistinto', neto - mt, [f.clave, f.cliente, neto, mt]); });
+    Object.keys(tplFact).forEach(k => { const enMes = tplFact[k].filter(x => x.mes === m.mes); if (!enMes.length) return;
+      const mt = enMes.reduce((a, x) => a + x.monto, 0), f = porClave[k];
+      if (!f) add('noEstaEnContabilium', -mt, [k, finCli_(enMes[0].contraparte), mt, 'fila ' + enMes.map(x => x.fila).join(', ')]);
+      else if (f.mes !== m.mes) add('deOtroMes', -mt, [k, f.cliente, mt, 'facturada en ' + f.mes]); });
+    const ncMes = m.total.ncConIva; if (Math.abs(ncSobreMes - ncMes) >= 1) add('notasCreditoOtroMes', ncSobreMes - ncMes, null);
+    if (T.sinFactura) add('sinNumeroFactura', -T.sinFactura, null);
+    if (T.otroPv) add('otroPuntoVenta', -T.otroPv, null);
+    Object.keys(r.motivos).forEach(k => { r.motivos[k].monto = Math.round(r.motivos[k].monto); });
+    r.diferencia = Math.round(m.total.conIva - T.ventas);
+    r.sinExplicar = Math.round(r.diferencia - Object.keys(r.motivos).reduce((a, k) => a + r.motivos[k].monto, 0));
+    return r;
+  });
+}
+const CANALES_TODOS = ['Palermo', 'Lima', 'Janette', 'Web', 'Grandes cuentas'];
+/** Ventas por canal FACTURADAS (Contabilium, con IVA) para los mismos meses del cuadro por sector. */
+function finFacturadoCanal_(CM, meses) {
+  const anio = meses[meses.length - 1].slice(0, 4), por = {}; CM.meses.forEach(m => { por[m.mes] = m; });
+  const filas = CANALES_TODOS.map(c => ({ canal: c, valores: meses.map(m => por[m] && por[m].canal[c] ? Math.round(por[m].canal[c].conIva) : 0),
+    anio: Math.round(CM.meses.filter(m => m.mes.slice(0, 4) === anio && m.mes <= meses[meses.length - 1]).reduce((a, m) => a + (m.canal[c] ? m.canal[c].conIva : 0), 0)) }))
+    .filter(f => f.anio || f.valores.some(Boolean));
+  const tot = k => meses.map(m => por[m] ? Math.round(por[m].total[k]) : 0);
+  return { meses: meses, filas: filas, totalConIva: tot('conIva'), totalSinIva: tot('sinIva'), comprobantes: meses.map(m => por[m] ? por[m].total.comprobantes : 0) };
+}
 
 const pctVs_ = (a, b) => b > 0 ? Math.round((a - b) / b * 1000) / 10 : null;
 /** KPIs por canal: hoy, ayer, mes, año; vs. mismo período del mes anterior y del año pasado; ticket promedio; participación. */
@@ -4621,6 +4806,12 @@ function actualizarPlanillas_(s) {
   catch (e) { out.push({ planilla: 'Control ingreso Nueva temporada 27', ok: false, ts: new Date().toISOString(), error: String(e.message || e) }); }
   const c = sync_(s);
   out.push({ planilla: c.archivo || 'HeyBlackk_VentasPalermo_2026 (1)', ok: !!c.ok, ts: c.ts, modificado: c.modificado || null, error: c.ok ? null : c.error });
+  // 3.9c · Copia de los comprobantes de Contabilium (antes del Templete: la conciliación la usa). Botón: mes actual y anterior.
+  if (ctbConfigurado_()) {
+    try { const r = comprobantesSync_(s ? 90000 : 200000) || {}; out.push({ planilla: 'Contabilium · comprobantes de venta', ok: !(r.pendientes || []).length, ts: new Date().toISOString(), modificado: null,
+      error: (r.pendientes || []).length ? 'Faltan leer: ' + r.pendientes.join(', ') + ' (se completa en la próxima actualización)' : null }); }
+    catch (e) { out.push({ planilla: 'Contabilium · comprobantes de venta', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
+  }
   // 3.8 · Templete (Dropbox, solo lectura) + ventas facturadas de Contabilium
   if (dbxConfigurado_()) {
     try { const R = finanzas_(true), k = R.contabilium || {};

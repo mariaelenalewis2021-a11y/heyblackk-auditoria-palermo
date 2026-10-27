@@ -2148,7 +2148,7 @@ function cardCanales(K){
       fila("Año "+X.mes.slice(0,4), moneyK(c.anio.v)), c.vsAnioAntAcum!=null?fila("Año vs "+X.anioAnt, pctTxt39(c.vsAnioAntAcum), pctCls39(c.vsAnioAntAcum)):null,
       c.mes.ticket?fila("Ticket promedio", moneyK(c.mes.ticket)):null)); });
   card.append(g);
-  card.append(el("p",{class:"hint",text:"Los locales facturan en Contabilium por tandas: el «último día facturado» puede no ser ayer. Para la venta diaria de Palermo, mirá los cierres de caja más abajo."}));
+  card.append(el("p",{class:"hint",text:"Fuente: lo FACTURADO en Contabilium, con IVA y restando notas de crédito (igual al informe de Contabilium; Web y Grandes cuentas separados de Lima). Los locales facturan por tandas: el «último día facturado» puede no ser ayer. Para la venta diaria de Palermo, mirá los cierres de caja."}));
   if (T.comparaParcial) card.append(el("p",{class:"hint",text:"Las variaciones del total comparan solo los canales que tienen datos en los dos períodos."}));
   // Acciones por canal (días o meses flojos)
   if ((X.acciones||[]).length) card.append(el("h3",{text:"🎯 Acciones por canal"}),
@@ -2735,6 +2735,14 @@ function pintarFinanzas(body, D, recargar){
     S.ultimaCarga ? el("span",{class:"pill",text:"Último movimiento cargado: "+fmtF(S.ultimaCarga)}) : null,
     el("span",{class:"pill",text:"Leída: "+fechaHora(R.leida)}), el("span",{class:"spacer"}), bAct));
   const ba = barraSeccion(D.audio, "Administración y Finanzas"); if (ba) body.append(ba);
+  // 3.9c · De dónde sale cada número (para que nadie mezcle facturado con cobrado)
+  body.append(el("details",{class:"card fuentes39"}, el("summary",{text:"📌 ¿De dónde sale cada número? (tocá para leer)"}),
+    el("ul",{class:"fuentes39-l"},
+      el("li",{}, el("b",{text:"Facturado"}), " = lo que se hizo factura en ", el("b",{text:"Contabilium"}), ", con IVA y restando las notas de crédito del mes. Es el mismo número que el informe «Ventas por punto de venta» de Contabilium (columna «Total bruto»)."),
+      el("li",{}, el("b",{text:"Entró / Cobrado"}), " = la plata que ingresó, según lo cargado a mano en el ", el("b",{text:"Templete"}), " (Dropbox). Incluye los anticipos de temporada, que se cobran antes de facturar."),
+      el("li",{}, el("b",{text:"Facturado y cobrado no se suman nunca"}), ": son dos formas de mirar la misma venta. Si un cliente pagó un mes y la factura se hizo al mes siguiente, la plata se cuenta una sola vez, el mes en que entró."),
+      el("li",{}, el("b",{text:"Lima en Contabilium es más grande"}), " porque el punto de venta 0005 factura también la Web (Tiendanube) y las grandes cuentas. La app los muestra separados."),
+      el("li",{}, el("b",{text:"Caja Palermo"}), " = los cierres de caja que se cargan en la app todos los días."))));
   // 1 · En pocas palabras
   if (U){
     const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""}, E = S.equilibrio;
@@ -2786,19 +2794,47 @@ function pintarFinanzas(body, D, recargar){
   const sem = R.semanas.slice(-8);
   if (sem.length) body.append(el("div",{class:"card"}, el("h3",{text:"🗓️ Semana a semana"}), barrasIE(sem, x=>fmtF(x.semana).slice(0,5)),
     el("p",{class:"hint",text:"Si una semana aparece sin «entró», casi siempre es porque los cobros todavía no se cargaron."})));
-  // 5b · Ventas por sector (local) + cierres de caja de Palermo
-  if (R.sectores && R.sectores.filas.length){ const SX = R.sectores, M = SX.meses;
-    const cab = el("tr",{}, el("th",{text:"Sector"}), ...M.map((m,i)=>el("th",{class:"n",text:i===2?mesTxt(m)+" (en curso)":mesTxt(m)})), el("th",{class:"n",text:"Año "+R.anio}));
-    const filas = SX.filas.map(f=>el("tr",{}, el("th",{scope:"row",text:f.sector}), ...f.valores.map(v=>el("td",{class:"n",text:v?moneyK(v):"–"})), el("td",{class:"n",text:moneyK(f.anio)})));
-    if (SX.cajaPalermo.some(Boolean)) filas.splice(1,0, el("tr",{class:"caja38"}, el("th",{scope:"row",text:"↳ Palermo según cierres de caja"}), ...SX.cajaPalermo.map((v,i)=>el("td",{class:"n",text:v?moneyK(v)+` (${SX.diasCaja[i]} d)`:"–"})), el("td",{})));
-    const tot = M.map((m,i)=>SX.filas.reduce((a,f)=>a+f.valores[i],0));
-    filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), ...tot.map(v=>el("td",{class:"n",text:moneyK(v)})), el("td",{class:"n",text:moneyK(SX.filas.reduce((a,f)=>a+f.anio,0))})));
+  // 5b · Ventas por canal: FACTURADO (Contabilium) y COBRADO (Templete), en tablas separadas + cierres de caja de Palermo
+  if (R.sectores && (R.sectores.filas.length || R.sectores.facturado)){ const SX = R.sectores, M = SX.meses, FX = SX.facturado;
+    const cabe = t => el("tr",{}, el("th",{text:t}), ...M.map((m,i)=>el("th",{class:"n",text:i===2?mesTxt(m)+" (en curso)":mesTxt(m)})), el("th",{class:"n",text:"Año "+R.anio}));
+    const fila = (t, vals, anio, cls) => el("tr",cls?{class:cls}:{}, el("th",{scope:"row",text:t}), ...vals.map(v=>el("td",{class:"n",text:v?moneyK(v):"–"})), el("td",{class:"n",text:anio!=null?moneyK(anio):""}));
+    const card = el("div",{class:"card"}, el("h2",{text:"🏬 Ventas por canal: lo facturado y lo cobrado"}));
+    if (FX){
+      const tf = FX.filas.map(f=>fila(f.canal, f.valores, f.anio));
+      tf.push(fila("Total con IVA", FX.totalConIva, FX.filas.reduce((a,f)=>a+f.anio,0), "tot38"), fila("Total sin IVA", FX.totalSinIva, null, "caja38"));
+      card.append(el("h3",{text:"🧾 Facturado (Contabilium, con IVA)"}),
+        el("p",{class:"hint",text:"Igual al informe de Contabilium. Web y Grandes cuentas se facturan por el punto de venta de Lima (0005) y acá van separados."}),
+        el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cabe("Canal")), el("tbody",{},tf))));
+    }
+    if (SX.filas.length){
+      const tc = SX.filas.map(f=>fila(f.sector, f.valores, f.anio));
+      if (SX.cajaPalermo.some(Boolean)) tc.splice(1,0, el("tr",{class:"caja38"}, el("th",{scope:"row",text:"↳ Palermo según cierres de caja"}), ...SX.cajaPalermo.map((v,i)=>el("td",{class:"n",text:v?moneyK(v)+` (${SX.diasCaja[i]} d)`:"–"})), el("td",{})));
+      tc.push(fila("Total cobrado", M.map((m,i)=>SX.filas.reduce((a,f)=>a+f.valores[i],0)), SX.filas.reduce((a,f)=>a+f.anio,0), "tot38"));
+      card.append(el("h3",{text:"💵 Cobrado (Templete)"}),
+        el("p",{class:"hint",text:"La plata que entró, según el Templete. El mes en curso suma las facturas de Contabilium que todavía no se cargaron, salvo las de clientes que ya habían pagado (para no contar dos veces) y las de grandes cuentas (se cobran con anticipos)."}),
+        el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cabe("Sector")), el("tbody",{},tc))));
+    }
     const pal = SX.filas.find(f=>f.sector==="Palermo"), dif = pal ? SX.cajaPalermo[1]-pal.valores[1] : 0;
-    body.append(el("div",{class:"card"}, el("h2",{text:"🏬 Ventas por sector"}),
-      el("p",{class:"lead",text:"Palermo (0001), Lima (0005) y Janette (0007) según el número de factura. Las grandes cuentas (Miami, Uruguay, La Plata, Córdoba y Rosario) van aparte: anticipos y facturas. El mes en curso suma lo facturado en Contabilium que todavía no está en el Templete."}),
-      el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
-      SX.cajaPalermo[2] ? el("p",{class:"hint",text:`Palermo en ${mesLargo(M[2])}: ${moneyK(SX.cajaPalermo[2])} según los cierres de caja (${SX.diasCaja[2]} días, último ${fmtF(SX.ultimoCierre)}). Es el dato más al día: el Templete se completa a fin de mes.`}) : null,
-      pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03) ? el("p",{class:"notice warn",text:`En ${mesLargo(M[1])} Palermo vendió ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} según las facturas del Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}). Conviene revisar qué no se facturó o qué falta cargar.`}) : null));
+    if (SX.cajaPalermo[2]) card.append(el("p",{class:"hint",text:`Palermo en ${mesLargo(M[2])}: ${moneyK(SX.cajaPalermo[2])} según los cierres de caja (${SX.diasCaja[2]} días, último ${fmtF(SX.ultimoCierre)}).`}));
+    if (pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03)) card.append(el("p",{class:"notice warn",text:`En ${mesLargo(M[1])} Palermo vendió ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} según el Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}). Conviene revisar qué no se facturó o qué falta cargar.`}));
+    body.append(card);
+  }
+  // 5b2 · Control mes a mes: ¿coincide con Contabilium? ¿y con el Templete?
+  if (R.controlMeses && R.controlMeses.meses && R.controlMeses.meses.length){ const CMx = R.controlMeses;
+    const MOT = {faltaCargar:"facturas que todavía no están en el Templete", grandesCuentas:"facturas a grandes cuentas (se cobran con anticipos)", cobradaAntes:"facturas de clientes que ya habían pagado sin número de factura (la plata ya está contada)",
+      cargadaOtroMes:"facturas de este mes cargadas en el Templete en otro mes", deOtroMes:"cobros de facturas de otro mes", noEstaEnContabilium:"números de factura del Templete que no existen en Contabilium (¿error de tipeo?)",
+      importeDistinto:"importes distintos entre Templete y Contabilium", repetidaEnTemplete:"facturas cargadas más de una vez en el Templete", notasCreditoOtroMes:"notas de crédito (Contabilium las resta el mes en que se emiten)",
+      sinNumeroFactura:"ventas del Templete sin número de factura", otroPuntoVenta:"ventas del Templete de otro punto de venta"};
+    const filas = CMx.meses.slice().reverse().map(r=>{ const ok = Math.abs(r.diferencia) < Math.max(10000, r.informe.conIva*0.005);
+      const ks = Object.keys(r.motivos).filter(k=>Math.abs(r.motivos[k].monto)>=1000).sort((a,b)=>Math.abs(r.motivos[b].monto)-Math.abs(r.motivos[a].monto));
+      return el("details",{class:"ctl39"}, el("summary",{}, el("b",{text:capi(mesLargo(r.mes))}), el("span",{text:` · Facturado ${moneyK(r.informe.conIva)} · Templete ${moneyK(r.templete.ventas)} · `}),
+          el("span",{class:"pill "+(ok?"ok":""),text: ok?"✅ coincide":`diferencia ${moneyK(Math.abs(r.diferencia))}`})),
+        el("p",{class:"hint",text:`Contabilium: ${r.informe.comprobantes} comprobantes · ${moneyK(r.informe.sinIva)} sin IVA · ${moneyK(r.informe.conIva)} con IVA`+["0001","0005","0007"].filter(p=>r.pv[p]).map(p=>` · ${p==="0001"?"Palermo":p==="0005"?"Lima":"Janette"} ${p} ${moneyK(r.pv[p].conIva)}`).join("")+`.`+(r.templete.anticipos?` En el Templete además entraron ${moneyK(r.templete.anticipos)} de anticipos de temporada.`:"")}),
+        ks.length ? el("ul",{class:"ant38-av"}, ks.map(k=>el("li",{text:`${r.motivos[k].monto>0?"➕":"➖"} ${moneyK(Math.abs(r.motivos[k].monto))} · ${r.motivos[k].n} ${MOT[k]||k}`}))) : null,
+        Math.abs(r.sinExplicar)>=1000 ? el("p",{class:"notice warn",text:`Quedan ${moneyK(Math.abs(r.sinExplicar))} sin explicar: revisarlo en la descarga.`}) : null); });
+    body.append(el("div",{class:"card"}, el("h2",{text:"🔎 Control mes a mes: Contabilium vs. Templete"}),
+      el("p",{class:"lead",text:"«Facturado» es igual al informe de Contabilium. «Templete» es lo que se registró como venta cobrada (sin anticipos). La diferencia se explica factura por factura: ➕ suma a lo facturado frente al Templete, ➖ resta."}),
+      ...filas, el("p",{class:"hint",text:`${CMx.comprobantes} comprobantes de Contabilium leídos (última lectura ${fechaHora(CMx.leido)}). La lista factura por factura está en «Descargar Excel» → hojas «Facturado (= Contabilium)», «Facturado vs Templete» y «Detalle de diferencias».`})));
   }
   // 5c · Productos (Contabilium): más vendidos en Palermo, top 10 de movimiento y Excel para el Cyber Monday
   if ((R.contabilium||{}).configurado){ const PR = R.productos;
@@ -2862,12 +2898,13 @@ function pintarFinanzas(body, D, recargar){
     else if (!K.ok) card.append(el("p",{class:"notice warn",text:"No se pudo leer Contabilium: "+(K.error||"error")+". El panel sigue con los datos del Templete."}));
     else K.conciliacion.forEach(c=>{
       card.append(el("h3",{text:capi(mesLargo(c.mes))}),
-        el("div",{class:"hkpis"}, hk("Facturado", moneyK(c.ctbNeto), c.ctbNc?`ya descontadas notas de crédito por ${moneyK(c.ctbNc)}`:`${c.facturas} facturas`),
+        el("div",{class:"hkpis"}, hk("Facturado", moneyK(c.informe?c.informe.conIva:c.ctbNeto), c.informe?`igual al informe de Contabilium · ${c.informe.comprobantes} comprobantes`:c.ctbNc?`ya descontadas notas de crédito por ${moneyK(c.ctbNc)}`:`${c.facturas} facturas`),
           hk("Ya está en el Templete", moneyK(c.montoConciliado), `${c.conciliadas} facturas conciliadas`, "pos"),
           hk("Falta cargar", moneyK(c.montoFalta), c.faltaCargar.length?`${c.faltaCargar.length} facturas · ya sumadas al panel`:"nada pendiente", c.montoFalta?"neg":"")),
         Object.keys(c.porLocal).length ? barrasH(Object.keys(c.porLocal).map(k=>({nombre:k,monto:c.porLocal[k]})).sort((a,b)=>b.monto-a.monto), "#0F766E") : null,
         el("ul",{class:"ant38-av"},
           c.franquicias.length?el("li",{text:`🟡 ${c.franquicias.length} facturas a grandes cuentas (${moneyK(c.franquicias.reduce((a,x)=>a+x.monto,0))}) no se suman: se aplican contra sus anticipos.`}):null,
+          (c.cobradaAntes||[]).length?el("li",{text:`🟢 ${c.cobradaAntes.length} facturas (${moneyK(c.cobradaAntes.reduce((a,x)=>a+x.monto,0))}) son de clientes que ya habían pagado sin número de factura: no se suman, para no contar dos veces.`}):null,
           c.diferencias.length?el("li",{text:`🟡 ${c.diferencias.length} facturas con importe distinto entre Contabilium y el Templete.`}):null,
           c.noEnCtb.length?el("li",{text:`🟡 ${c.noEnCtb.length} facturas están en el Templete pero no en Contabilium.`}):null,
           c.anuladas.length?el("li",{text:`🟡 ${c.anuladas.length} facturas anuladas con nota de crédito total siguen cargadas como venta en el Templete.`}):null,
@@ -2892,6 +2929,9 @@ function pintarFinanzas(body, D, recargar){
     el("dl",{}, ...[["Entró","Toda la plata que cobró Hey Blackk en el mes (ventas, grandes cuentas, mayoristas)."],
       ["Salió","Toda la plata que se pagó: talleres, telas, sueldos, alquileres, publicidad, impuestos y retiros de socios."],
       ["Quedó / Faltó","La diferencia entre lo que entró y lo que salió. Si «faltó», se pagó con plata de antes o quedó deuda."],
+      ["Facturado","Lo que se hizo factura en Contabilium, con IVA, menos notas de crédito. Igual al informe de Contabilium."],
+      ["Cobrado","La plata que entró según el Templete. Puede ser de facturas de otro mes o de anticipos."],
+      ["Con IVA / sin IVA","Con IVA es lo que paga el cliente. Sin IVA es lo que queda para la marca: el IVA (21 %) se le paga a ARCA."],
       ["Retiros de socios","Plata que se llevan los dueños. No es un gasto del negocio, pero sale de la caja."],
       ["Lo normal","El promedio de los 3 meses anteriores."],
       ["Vender para no perder","La venta mínima por mes para cubrir todos los gastos sin poner plata."],
