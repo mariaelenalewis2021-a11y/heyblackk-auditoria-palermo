@@ -1203,10 +1203,13 @@ function vFichadas(main){
       body.append(el("div",{class:"card"}, el("h2",{text:"De vacaciones (aprobadas)"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Estado"].map(x=>el("th",{text:x})))), tv)))); }
   };
   [emp,est].forEach(x=>x.onchange=pintar); q.oninput=pintar; [de,ha].forEach(x=>x.onchange=cargar);
-  const bx = el("button",{class:"btn xl",type:"button",text:"⬇️ Excel"});
+  const bx = el("button",{class:"btn xl",type:"button",text:"⬇️ Excel"}), bpd = el("button",{class:"btn pdf",type:"button",text:"⬇️ PDF"});
   bx.onclick = async ()=>{ spinBtn(bx,"Preparando…"); try{ const r = await apiS("exportarIngresos", de.value, ha.value); await loadLibs("xlsx"); guardar(`HeyBlackk_Ingresos_${de.value}_a_${ha.value}.xlsx`, new Blob([await xlsxIngresos(r)],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})); }catch(e){ toast(msgErr(e)); } finally{ unspin(bx); } };
+  bpd.onclick = async ()=>{ spinBtn(bpd,"Armando el PDF…"); try{ const r = await apiS("exportarIngresos", de.value, ha.value);
+      await exportarPDF37({ titulo:`Ingresos del ${fmtF(de.value)} al ${fmtF(ha.value)}`, archivo:`HeyBlackk_Ingresos_${de.value}_a_${ha.value}`, actualizado:new Date().toISOString(), generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"", hojas: hojasIngresos(r) }); }
+    catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); } finally{ unspin(bpd); } };
   main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Empleado",emp), el("label",{class:"f"},"Estado",est)),
-    el("div",{class:"row"}, q, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}), bx)), body);
+    el("div",{class:"row"}, q, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}), bx, bpd)), body);
   cargar();
 }
 function detalleIngreso(x, recargar){
@@ -1236,6 +1239,16 @@ function derivar(ref, nombre){
   const m = modal(el("div",{class:"grid"}, el("h2",{text:"Derivar a RR. HH. · "+nombre}), el("p",{class:"lead",text:"La novedad la gestiona RR. HH. por su circuito. No se genera ninguna falta automática."}), el("label",{class:"f"},"Tipo",tipo), el("label",{class:"f"},"Detalle",det),
     el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
   ok.onclick = async ()=>{ spinBtn(ok); try{ await apiS("derivarRRHH", ref, tipo.value, det.value); m.cerrar(); toast("✅ Derivado a RR. HH."); }catch(e){ unspin(ok); toast(msgErr(e)); } };
+}
+/* Mismo contenido que el Excel, como hojas para el PDF (exportarPDF37). */
+function hojasIngresos(r){
+  const H = (nombre, columnas, filas) => ({ nombre, columnas, filas });
+  return [
+    H("Jornadas", ["Fecha","Empleado","Usuario","Sucursal","Entradas y salidas","Horas","Revisión"], r.jornadas.map(j=>[fmtF(j.fecha),j.nombre,j.legajo,j.sucursal||"",paresTxt(j.pares),j.minutos==null?"":horas(j.minutos),j.incompleto?"Incompleto":""])),
+    H("Fichadas", ["Fecha","Empleado","Usuario","Sucursal","Tipo","Modo","Hora","Hora corregida","Estado","Ubicación","Distancia (m)","Precisión (m)","Latitud","Longitud","Foto","Observación","Revisado por"], r.lista.map(x=>[fmtF(x.fecha),x.nombre,x.legajo,x.sucursal||"",x.tipo,x.modo||"",x.hora,x.horaCorregida,x.estado,GEO_TXT[x.geoResultado]||x.geoResultado,x.distancia??"",x.precision??"",x.latitud??"",x.longitud??"",x.tieneFoto?"Sí":"No",x.observacion,x.revisadoPor])),
+    H("Correcciones", ["Fecha","Empleado","Tipo","Hora original","Hora propuesta","Motivo","Estado","Resuelto por"], r.correcciones.map(c=>[fmtF(c.fecha),c.nombre,c.tipo||"entrada",c.horaOriginal,c.horaPropuesta,c.motivo,c.estado,c.resueltoPor||""])),
+    H("Sin entrada (revisar)", ["Fecha","Empleado","Usuario"], r.pendientes.map(p=>[fmtF(p.fecha),p.nombre,p.legajo]))
+  ];
 }
 async function xlsxIngresos(r){
   const wb = new ExcelJS.Workbook(); wb.creator="Hey Blackk";
@@ -2113,7 +2126,7 @@ function pintarPanorama(res, P, recargar){
     const t = P.alertas.filter(a=>a.nivel!=="verde").slice(0,3).map(a=>`${a.nombre}: ${a.titulo.charAt(0).toLowerCase()+a.titulo.slice(1)}.`);
     const pos = P.alertas.find(a=>a.nivel==="verde"); if (pos && t.length<3) t.push(`Para destacar: ${pos.nombre}, ${pos.titulo.charAt(0).toLowerCase()+pos.titulo.slice(1)}.`);
     if (!VOZ.hablar("Panorama de recursos humanos. "+t.join(" "))) toast("Este navegador no tiene voz."); }});
-  if (P.alertas.length && VOZ.soporta()) top.append(voz);
+  if (P.alertas.length && VOZ.soporta()) top.append(voz, selVelocidad());
   top.append(el("p",{class:"hint",text:"Informativo: la app no sanciona ni descuenta nada. Las faltas descuentan vacaciones aprobadas y feriados, y no cuentan los registros borrados por administración. Antes de sacar conclusiones, conversalo con la persona."}));
   res.append(top);
   const at = P.alertas.filter(a=>a.nivel!=="verde"), po = P.alertas.filter(a=>a.nivel==="verde");
@@ -2224,7 +2237,7 @@ function barraSeccion(texto, titulo){
     el("div",{class:"row"},
       el("button",{class:"btn primary",type:"button",text:"🔊 Escuchar resumen","data-audio":"seccion",onclick:()=>{ txt.hidden=false; if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible."; return; } VOZ.hablar(texto); }}),
       bPausa, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()})),
-    estado, txt);
+    selVelocidad(), estado, txt);
   return box;
 }
 /* Fila con la última actualización de cada planilla y el botón «Actualizar datos» (relee las dos). */
@@ -2445,6 +2458,7 @@ function cardsControlResumen(K){
     (P.alertas||[]).length ? el("ul",{class:"lista-avisos"}, P.alertas.slice(0,3).map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
   return out;
 }
+const CYB38 = { D:null, t:0 };
 /* ===================== 3.8 · Finanzas Hey Blackk (planilla «Templete registro actividades» en Dropbox, solo lectura) =====================
    En pantalla: tarjetas, gráficos simples y Top 5. El detalle completo va en «Descargar Excel / PDF». */
 const mesTxt = m => { const [y,mm] = String(m).split("-"); return ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][Number(mm)-1]+" "+y.slice(2); };
@@ -2467,7 +2481,7 @@ function botonesDescargaFin(){
     catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); }
     unspin(b); };
   bx.onclick = ()=>ir(bx,"xlsx"); bp.onclick = ()=>ir(bp,"pdf");
-  return el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Todo el detalle para guardar o imprimir (meses, gastos por cuenta, semanas, canales, franquicias y retiros):"}), bx, bp);
+  return el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Todo el detalle para guardar o imprimir (meses, gastos por cuenta, semanas, canales, grandes cuentas y retiros):"}), bx, bp);
 }
 /** Barras dobles por período (ingresos vs egresos). */
 function barrasIE(L, etiqueta){
@@ -2593,7 +2607,7 @@ function pintarFinanzas(body, D, recargar){
     filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), ...tot.map(v=>el("td",{class:"n",text:moneyK(v)})), el("td",{class:"n",text:moneyK(SX.filas.reduce((a,f)=>a+f.anio,0))})));
     const pal = SX.filas.find(f=>f.sector==="Palermo"), dif = pal ? SX.cajaPalermo[1]-pal.valores[1] : 0;
     body.append(el("div",{class:"card"}, el("h2",{text:"🏬 Ventas por sector"}),
-      el("p",{class:"lead",text:"Palermo (0001), Lima (0005) y Janette (0007) según el número de factura. Las franquicias van aparte (anticipos y facturas). El mes en curso suma lo facturado en Contabilium que todavía no está en el Templete."}),
+      el("p",{class:"lead",text:"Palermo (0001), Lima (0005) y Janette (0007) según el número de factura. Las grandes cuentas (Miami, Uruguay, La Plata, Córdoba y Rosario) van aparte: anticipos y facturas. El mes en curso suma lo facturado en Contabilium que todavía no está en el Templete."}),
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
       SX.cajaPalermo[2] ? el("p",{class:"hint",text:`Palermo en ${mesLargo(M[2])}: ${moneyK(SX.cajaPalermo[2])} según los cierres de caja (${SX.diasCaja[2]} días, último ${fmtF(SX.ultimoCierre)}). Es el dato más al día: el Templete se completa a fin de mes.`}) : null,
       pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03) ? el("p",{class:"notice warn",text:`En ${mesLargo(M[1])} Palermo vendió ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} según las facturas del Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}). Conviene revisar qué no se facturó o qué falta cargar.`}) : null));
@@ -2601,15 +2615,20 @@ function pintarFinanzas(body, D, recargar){
   // 5c · Productos (Contabilium): más vendidos en Palermo, top 10 de movimiento y Excel para el Cyber Monday
   if ((R.contabilium||{}).configurado){ const PR = R.productos;
     const lista = (L, cap) => el("ol",{class:"top5 prod38"}, L.map(x=>el("li",{}, el("b",{text:x.nombre||x.codigo}), ` · ${x.unidades} u`, el("span",{class:"hint",text:` · ${x.codigo}${x.temporada==="fuera"?" · fuera de temporada":""}`}))));
-    const bx = el("button",{class:"btn primary",type:"button",text:"⬇️ Excel fuera de temporada (Cyber Monday)"});
-    bx.onclick = async ()=>{ spinBtn(bx,"Leyendo el stock de Contabilium… (puede tardar un minuto)"); try{ const D = await apiS("descargaCyber"); await exportarXLSX37(D); } catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(bx); };
+    const bx = el("button",{class:"btn primary",type:"button",text:"⬇️ Excel fuera de temporada (Cyber Monday)"}), bpc = el("button",{class:"btn",type:"button",text:"⬇️ PDF fuera de temporada"});
+    // El stock se lee de Contabilium una sola vez: si después se pide el otro formato (dentro de 10 min), se reusa.
+    const cyber = async (b, fmt)=>{ spinBtn(b,"Leyendo el stock de Contabilium… (puede tardar un minuto)");
+      try{ if (!CYB38.D || Date.now()-CYB38.t > 600000){ CYB38.D = await apiS("descargaCyber"); CYB38.t = Date.now(); }
+        await (fmt==="pdf" ? exportarPDF37(CYB38.D) : exportarXLSX37(CYB38.D)); }
+      catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); };
+    bx.onclick = ()=>cyber(bx,"xlsx"); bpc.onclick = ()=>cyber(bpc,"pdf");
     const card = el("div",{class:"card"}, el("h2",{text:"🛍️ Productos: lo que más se vende"}));
     if (!PR) card.append(el("p",{class:"hint",text:"Todavía no se calculó. Tocá «🔄 Actualizar» arriba de este panel (o esperá a la actualización de las 7 h) para leer los productos de Contabilium."}));
     else card.append(el("p",{class:"hint",text:`Unidades vendidas del ${fmtF(PR.desde)} al ${fmtF(PR.hasta)} según Contabilium (COT menos notas de crédito, ${PR.comprobantes} comprobantes).`}),
       el("div",{class:"split"},
         el("div",{}, el("h3",{text:"🏬 Más vendidos en Palermo · última semana"}), PR.palermo.length ? lista(PR.palermo.slice(0,10)) : el("p",{class:"hint",text:"Sin ventas de Palermo en la semana."})),
         el("div",{}, el("h3",{text:"🔥 Top 10 de mayor movimiento (todos los locales)"}), PR.todos.length ? lista(PR.todos) : el("p",{class:"hint",text:"Sin datos."}))));
-    card.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Productos que NO son SS27 y tienen stock, con stock en HB Palermo y HB Lima, precio y valor del stock:"}), bx));
+    card.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Productos que NO son SS27 y tienen stock, con stock en HB Palermo y HB Lima, precio y valor del stock:"}), bx, bpc));
     body.append(card);
     if (D.maria && R.cobranzas){ const K = R.cobranzas;
       body.append(el("div",{class:"card"}, el("h2",{text:"💰 Cobranzas pendientes"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
@@ -2621,7 +2640,7 @@ function pintarFinanzas(body, D, recargar){
   // 6 · Quién compra y quién paga
   const fila = el("div",{class:"split"});
   if (!R.sectores && R.canales.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🛍️ ¿Por dónde se vende? ("+R.anio+")"}), barrasH(R.canales.slice(0,6), "#4F46E5")));
-  if (R.franquicias.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que pagó cada franquicia ("+R.anio+")"}),
+  if (R.franquicias.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que pagó cada gran cuenta ("+R.anio+")"}),
     el("ol",{class:"top5"}, R.franquicias.slice(0,5).map(f=>el("li",{}, el("b",{text:f.franquicia}), ` · ${moneyK(f.cobradoAnio)}`, el("span",{class:"hint",text:f.ultimo?` · último pago ${fmtF(f.ultimo)}`:""}))))));
   if (R.topClientes.length) fila.append(el("div",{class:"card"}, el("h3",{text:"⭐ Los 5 que más compraron ("+R.anio+")"}), el("ol",{class:"top5"}, R.topClientes.map(c=>el("li",{}, el("b",{text:c.nombre}), " · "+moneyK(c.monto))))));
   if (fila.children.length) body.append(fila);
@@ -2660,7 +2679,7 @@ function pintarFinanzas(body, D, recargar){
           hk("Falta cargar", moneyK(c.montoFalta), c.faltaCargar.length?`${c.faltaCargar.length} facturas · ya sumadas al panel`:"nada pendiente", c.montoFalta?"neg":"")),
         Object.keys(c.porLocal).length ? barrasH(Object.keys(c.porLocal).map(k=>({nombre:k,monto:c.porLocal[k]})).sort((a,b)=>b.monto-a.monto), "#0F766E") : null,
         el("ul",{class:"ant38-av"},
-          c.franquicias.length?el("li",{text:`🟡 ${c.franquicias.length} facturas a franquicias (${moneyK(c.franquicias.reduce((a,x)=>a+x.monto,0))}) no se suman: se aplican contra sus anticipos.`}):null,
+          c.franquicias.length?el("li",{text:`🟡 ${c.franquicias.length} facturas a grandes cuentas (${moneyK(c.franquicias.reduce((a,x)=>a+x.monto,0))}) no se suman: se aplican contra sus anticipos.`}):null,
           c.diferencias.length?el("li",{text:`🟡 ${c.diferencias.length} facturas con importe distinto entre Contabilium y el Templete.`}):null,
           c.noEnCtb.length?el("li",{text:`🟡 ${c.noEnCtb.length} facturas están en el Templete pero no en Contabilium.`}):null,
           c.anuladas.length?el("li",{text:`🟡 ${c.anuladas.length} facturas anuladas con nota de crédito total siguen cargadas como venta en el Templete.`}):null,
@@ -2672,7 +2691,7 @@ function pintarFinanzas(body, D, recargar){
       el("ul",{class:"ant38-av"},
         Dd.duplicados.length?el("li",{text:`🟡 ${Dd.duplicados.length} facturas cargadas dos veces (mismo número y cliente): ${moneyK(Dd.montoDeMas)} de más en ventas. Ej.: ${Dd.duplicados.slice(0,3).map(x=>x.factura+" ("+x.clientes[0]+")").join(", ")}.`}):null,
         Dd.mismoNumero.length?el("li",{text:`🟡 ${Dd.mismoNumero.length} números de factura repetidos con clientes distintos (error de tipeo): ${Dd.mismoNumero.slice(0,4).map(x=>x.factura).join(", ")}…`}):null),
-      el("p",{class:"hint",text:"La lista completa, con las filas del Templete, está en «Descargar Excel» → hoja «Control de facturas»."}));
+      el("p",{class:"hint",text:"La lista completa, con las filas del Templete, está en «Descargar Excel» o «Descargar PDF» → hoja «Control de facturas»."}));
     body.append(card);
   }
   // 8 · Qué hacer
@@ -2682,7 +2701,7 @@ function pintarFinanzas(body, D, recargar){
       R.alertas.filter(a=>a.nivel!=="rojo").slice(0,3).map(a=>el("li",{class:"al-amarillo"}, el("span",{class:"sem",text:"🟡"}), el("div",{text:a.texto}))))));
   // 9 · Palabras
   body.append(el("details",{class:"card glos38"}, el("summary",{text:"📖 ¿Qué quiere decir cada cosa?"}),
-    el("dl",{}, ...[["Entró","Toda la plata que cobró Hey Blackk en el mes (ventas, franquicias, mayoristas)."],
+    el("dl",{}, ...[["Entró","Toda la plata que cobró Hey Blackk en el mes (ventas, grandes cuentas, mayoristas)."],
       ["Salió","Toda la plata que se pagó: talleres, telas, sueldos, alquileres, publicidad, impuestos y retiros de socios."],
       ["Quedó / Faltó","La diferencia entre lo que entró y lo que salió. Si «faltó», se pagó con plata de antes o quedó deuda."],
       ["Retiros de socios","Plata que se llevan los dueños. No es un gasto del negocio, pero sale de la caja."],
@@ -2698,7 +2717,11 @@ const VOZ = {
   soporta(){ return typeof speechSynthesis !== "undefined" && typeof SpeechSynthesisUtterance !== "undefined"; },
   velocidad(){ const v = lsGet(VOZ_KEY); return ["lenta","normal","rapida"].includes(v) ? v : "normal"; },
   setVelocidad(v){ lsSet(VOZ_KEY, v); },
-  rate(){ return {lenta:0.85, normal:1, rapida:1.2}[this.velocidad()]; },
+  rate(){ return {lenta:0.8, normal:1, rapida:1.25}[this.velocidad()]; },
+  /* 3.8 · Cambiar la velocidad mientras suena: el audio neural cambia al instante; la voz del teléfono retoma el bloque actual. */
+  cambiarVelocidad(v){ this.setVelocidad(v);
+    if (this._audio){ try{ this._audio.playbackRate = this.rate(); }catch(e){} return; }
+    const ses = this.activa; if (ses && ses.retomar && !this._pausa) ses.retomar(); },
   voces(){ try{ return speechSynthesis.getVoices()||[]; }catch(e){ return []; } },
   /* 3.5 · Voz femenina o masculina (se recuerda por usuario en este teléfono). Por defecto, femenina. */
   claveGenero(){ return "hb35_voz_genero_"+((S.user&&(S.user.usuario||S.user.legajo||S.user.id))||"anon"); },
@@ -2738,7 +2761,7 @@ const VOZ = {
      voz de hombre o de mujer reales. Si no está configurada o falla, se usa la voz del teléfono sin cortar la lectura. */
   async neural(texto, ses){
     if (this.neuralOk === false || typeof apiS !== "function" || !S.token) return false;
-    let r; try{ r = await apiS("vozNeural", texto, this.genero(), this.velocidad()); }catch(e){ return false; }
+    let r; try{ r = await apiS("vozNeural", texto, this.genero(), "normal"); }catch(e){ return false; }   // la velocidad se aplica al reproducir (se puede cambiar en vivo)
     if (!r || !r.disponible){ this.neuralOk = false; return false; }
     this.neuralOk = true;
     if (this.activa !== ses) return true;
@@ -2746,7 +2769,7 @@ const VOZ = {
     const a = ses.audio; a.src = url; this._audio = a;
     const fin = () => { URL.revokeObjectURL(url); if (this.activa !== ses) return; this.activa = null; this._audio = null; if (this.onEstado) this.onEstado(false); if (ses.onFin) ses.onFin(); };
     a.onended = fin; a.onerror = fin;
-    try{ await a.play(); }catch(e){ URL.revokeObjectURL(url); this._audio = null; return false; }
+    try{ a.playbackRate = this.rate(); a.preservesPitch = true; await a.play(); a.playbackRate = this.rate(); }catch(e){ URL.revokeObjectURL(url); this._audio = null; return false; }
     return true;
   },
   hablar(texto, onFin){
@@ -2757,15 +2780,16 @@ const VOZ = {
     const local = () => {
       if (this.activa !== ses) return;
       if (!this.soporta()){ this.activa=null; if (this.onEstado) this.onEstado(false); return; }
-      const voz = this.mejorVoz(), rate = this.rate()*this.ajusteRate(voz), pitch = this.pitch(voz), partes = this.bloques(texto);
+      const voz = this.mejorVoz(), pitch = this.pitch(voz), partes = this.bloques(texto);
       const siguiente = () => {
         if (this.activa !== ses) return;
         if (ses.i >= partes.length){ this.activa=null; if (this.onEstado) this.onEstado(false); if (onFin) onFin(); return; }
         const u = new SpeechSynthesisUtterance(partes[ses.i++]);
-        u.lang = voz ? voz.lang : "es-AR"; if (voz) u.voice = voz; u.rate = rate; u.pitch = pitch;
+        u.lang = voz ? voz.lang : "es-AR"; if (voz) u.voice = voz; u.rate = this.rate()*this.ajusteRate(voz); u.pitch = pitch;
         u.onend = siguiente; u.onerror = e => { if (e && (e.error==="interrupted"||e.error==="canceled")) return; siguiente(); };
         try{ speechSynthesis.speak(u); }catch(e){ siguiente(); }
       };
+      ses.retomar = () => { ses.i = Math.max(0, ses.i-1); try{ speechSynthesis.cancel(); }catch(e){} setTimeout(siguiente, 60); };
       siguiente();
     };
     if (ses.audio && this.neuralOk !== false && S.token) this.neural(texto, ses).then(ok=>{ if (!ok) local(); }); else local();
@@ -2779,14 +2803,21 @@ const VOZ = {
 try{ if (VOZ.soporta()){ speechSynthesis.getVoices(); speechSynthesis.addEventListener("voiceschanged", ()=>{}); } }catch(e){}
 addEventListener("pagehide", ()=>VOZ.detener());
 
+/* 3.8 · Velocidad de lectura en todas las barras de audio: Lento · Medio · Rápido (se recuerda en el teléfono y cambia en vivo). */
+const VEL_TXT = [["lenta","🐢 Lento"],["normal","Medio"],["rapida","🐇 Rápido"]];
+function selVelocidad(){
+  const g = el("div",{class:"row vel38",role:"group","aria-label":"Velocidad de lectura"}, el("span",{class:"hint",text:"Velocidad:"}));
+  const pintar = () => [...g.querySelectorAll("button")].forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.v===VOZ.velocidad())));
+  VEL_TXT.forEach(([v,t])=>g.append(el("button",{class:"btn sm",type:"button",text:t,"data-v":v,onclick:()=>{ VOZ.cambiarVelocidad(v); document.querySelectorAll(".vel38").forEach(x=>x.dispatchEvent(new Event("vel"))); }})));
+  g.addEventListener("vel", pintar); pintar();
+  return g;
+}
 /* Barra de audio arriba del tablero: botones (solo los que tienen algo para leer), Detener, voz femenina/masculina y velocidad (se recuerdan).
    Muestra en pantalla el mismo texto que se lee. */
 function barraAudio(A){
   const box = el("section",{class:"card audio","aria-label":"Resumen hablado"});
   if (!A) return box;
   const titulo = el("b",{text:""}), txt = el("p",{class:"audio-txt",hidden:true}), estado = el("span",{class:"hint estado",text:""});
-  const sel = el("select",{"aria-label":"Velocidad de lectura"}, ...[["lenta","Lenta"],["normal","Normal"],["rapida","Rápida"]].map(([v,t])=>el("option",{value:v,text:t,selected:VOZ.velocidad()===v})));
-  sel.onchange = ()=>{ VOZ.setVelocidad(sel.value); toast("Velocidad de lectura: "+sel.selectedOptions[0].text); };
   const leer = (k, t) => { titulo.textContent = t.charAt(0).toUpperCase()+t.slice(1); txt.textContent = A[k]; txt.hidden=false;
     if (!VOZ.soporta()){ estado.textContent="Este navegador no tiene voz: el texto queda visible para leerlo."; return; }
     VOZ.hablar(A[k]); };
@@ -2794,7 +2825,7 @@ function barraAudio(A){
   const B = [["general","🔊 Escuchar resumen"],["comercial","🔊 Escuchar KPIs comerciales"],["auditoria","🔊 Escuchar KPIs de auditoría"],["acciones","🔊 Escuchar acciones para Palermo"],["rrhh","🔊 Escuchar RRHH"]]
     .filter(([k])=>A[k] && String(A[k]).trim()).map(([k,t])=>el("button",{class:"btn"+(k==="general"?" primary":""),type:"button",text:t,"data-audio":k,onclick:()=>leer(k, t.replace("🔊 Escuchar ",""))}));
   box.append(...[el("h3",{},icono("audio",20)," Resumen hablado"),
-    el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()}), el("label",{class:"f inline"},"Velocidad",sel)),
+    el("div",{class:"row"}, ...B, el("button",{class:"btn danger",type:"button",text:"⏹️ Detener",onclick:()=>VOZ.detener()})), selVelocidad(),
     !VOZ.soporta() ? el("div",{class:"notice warn",text:"Tu navegador no tiene síntesis de voz. Al tocar un botón, el texto se muestra igual."}) : null,
     estado, el("div",{class:"audio-panel"}, titulo, txt)].filter(Boolean));
   return box;

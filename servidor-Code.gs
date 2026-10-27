@@ -957,8 +957,8 @@ const $M_ = n => Math.abs(n) >= 1e6 ? '$ ' + (n / 1e6).toFixed(1).replace('.', '
 /* Franquicias. Por cliente/pagador (reglas estrictas: hay clientas que se llaman «Rosario» o se apellidan «Córdoba»):
    La Plata = Carolina No Look · Rosario = María Sabetta · Uruguay = Joaquín · Córdoba = Martina Eizikovits.
    En el DETALLE de un anticipo («Anticipo temporada SS27- Rosario») alcanza con el nombre de la plaza. */
-const FIN_FRANQ = [['La Plata', /la plata|no look|no loock/], ['Rosario', /sabetta|\(\s*rosario\s*\)|franquicia rosario/], ['Uruguay', /uruguay/], ['Córdoba', /eizikovit|\(\s*cordoba\s*\)|franquicia cordoba/]];
-const FIN_FRANQ_DET = [['La Plata', /la plata|no look/], ['Rosario', /rosario|sabetta/], ['Uruguay', /uruguay/], ['Córdoba', /cordoba|eizikovit/]];
+const FIN_FRANQ = [['Miami', /laghezza|\(\s*miami\s*\)|miami/], ['La Plata', /la plata|no look|no loock/], ['Rosario', /sabetta|\(\s*rosario\s*\)|franquicia rosario/], ['Uruguay', /uruguay/], ['Córdoba', /eizikovit|\(\s*cordoba\s*\)|franquicia cordoba/]];
+const FIN_FRANQ_DET = [['Miami', /miami|laghezza/], ['La Plata', /la plata|no look/], ['Rosario', /rosario|sabetta/], ['Uruguay', /uruguay/], ['Córdoba', /cordoba|eizikovit/]];
 const finFranq_ = c => { const n = finNorm_(c); const f = FIN_FRANQ.find(x => x[1].test(n)); return f ? f[0] : null; };
 const finFranqX_ = x => finFranq_(x.contraparte) || (/anticip|temporada|ss2\d/i.test(x.detalle) ? (n => { const f = FIN_FRANQ_DET.find(y => y[1].test(n)); return f ? f[0] : null; })(finNorm_(x.detalle)) : null);
 const finCli_ = c => { const n = finNorm_(c).replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim(); return n ? n.replace(/(^| )\S/g, x => x.toUpperCase()) : 'Sin nombre'; };
@@ -989,7 +989,7 @@ function finResumen_(F, hoy) {
   // Ventas por canal (punto de venta) y clientes
   const ventasA = delAnio.filter(x => x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro));
   const canales = agrupa(ventasA, x => finPvNom_(finClave_(x.factura), x.pv) || (/anticipo/i.test(x.cuenta + ' ' + x.detalle) ? 'Anticipos de temporada' : 'Sin número de factura'));
-  const clientes = agrupa(ventasA, x => finFranqX_(x) ? finFranqX_(x) + ' (franquicia)' : finCli_(x.contraparte)).slice(0, 5);
+  const clientes = agrupa(ventasA, x => finFranqX_(x) ? finFranqX_(x) + ' (gran cuenta)' : finCli_(x.contraparte)).slice(0, 5);
   // Franquicias: lo cobrado a cada una (ingresos cuyo cliente coincide)
   const franq = {}; validas.filter(x => x.tipo === 'ingreso' && finFranqX_(x)).forEach(x => { const k = finFranqX_(x), f = franq[k] = franq[k] || { franquicia: k, cobrado: 0, cobradoAnio: 0, ultimo: null, porMes: {} };
     f.cobrado += x.monto; if (x.mes.slice(0, 4) === anio) f.cobradoAnio += x.monto; f.porMes[x.mes] = (f.porMes[x.mes] || 0) + x.monto; if (x.fecha && (!f.ultimo || x.fecha > f.ultimo)) f.ultimo = x.fecha; });
@@ -1005,7 +1005,7 @@ function finResumen_(F, hoy) {
   const recomendaciones = [];
   if (cuentasUlt[0]) recomendaciones.push('Mirar en detalle lo que se pagó en ' + cuentasUlt[0].nombre.toLowerCase() + ': fue el gasto más grande de ' + MES_NOM(ult.mes).split(' ')[0] + ' (' + $M_(cuentasUlt[0].monto) + ').');
   const fr = Object.keys(franq).map(k => franq[k]).sort((a, b) => (a.ultimo || '').localeCompare(b.ultimo || ''));
-  if (fr[0] && fr[0].ultimo && fr[0].ultimo < sumarDias_(hoy, -30)) recomendaciones.push('Llamar a la franquicia de ' + fr[0].franquicia + ' para cobrar: su último pago cargado es del ' + fdm_(fr[0].ultimo) + '.');
+  if (fr[0] && fr[0].ultimo && fr[0].ultimo < sumarDias_(hoy, -30)) recomendaciones.push('Llamar a la gran cuenta de ' + fr[0].franquicia + ' para cobrar: su último pago cargado es del ' + fdm_(fr[0].ultimo) + '.');
   // ---- Panel del jefe (palabras simples): a dónde va la plata, cuánto hay que vender para no perder, semáforo y mercadería ----
   const GRUPO = r => /^ventas$/i.test(r) ? 'devol' : /^costos?_directos$/i.test(r) ? 'ropa' : /^gtos_admin$/i.test(r) ? 'empresa' : /^gtos_comerciales$/i.test(r) ? 'vender' : /^impuestos$/i.test(r) ? 'impuestos' : /^caja$/i.test(r) ? 'socios' : 'otros';
   const GRUPO_TXT = { ropa: 'Hacer la ropa (talleres, telas, insumos, envíos)', empresa: 'Mantener la empresa (sueldos, alquileres, bancos)', vender: 'Vender y hacer publicidad', impuestos: 'Impuestos', socios: 'Retiros de los socios', devol: 'Devoluciones y ajustes de ventas', otros: 'Otros gastos' };
@@ -1162,7 +1162,7 @@ function finConciliar_(F, V, meses) {
 function finSectores_(F) {
   const mesHoy = hoy_().slice(0, 7), meses = [finMesAnt_(finMesAnt_(mesHoy)), finMesAnt_(mesHoy), mesHoy], anio = mesHoy.slice(0, 4);
   // Anticipos de franquicias aparte; las facturas a franquicias (p. ej. lo que se llevó La Plata) no se suman al local que facturó.
-  const sec = x => /anticipo/i.test(x.cuenta + ' ' + x.detalle) ? 'Anticipos de temporada' : finFranq_(x.contraparte) ? 'Facturas a franquicias' : (finPvNom_(finClave_(x.factura), x.pv) || 'Otras ventas');
+  const sec = x => /anticipo/i.test(x.cuenta + ' ' + x.detalle) ? 'Anticipos de temporada' : finFranq_(x.contraparte) ? 'Facturas a grandes cuentas' : (finPvNom_(finClave_(x.factura), x.pv) || 'Otras ventas');
   const v = {}, a = {};
   F.filter(x => x.tipo === 'ingreso' && /^ventas$/i.test(x.rubro) && x.mes).forEach(x => { const k = sec(x);
     if (meses.indexOf(x.mes) >= 0) v[k + '|' + x.mes] = (v[k + '|' + x.mes] || 0) + x.monto;
@@ -1171,7 +1171,7 @@ function finSectores_(F) {
   try { tAll_('Cierres').filter(c => Number(c.total) >= 0 && c.fecha).forEach(c => { const f = String(c.fecha).slice(0, 10), m = f.slice(0, 7);
     if (meses.indexOf(m) >= 0) { caja[m] = (caja[m] || 0) + Number(c.total || 0); dias[m] = (dias[m] || 0) + 1; }
     if (!ultimo || f > ultimo) ultimo = f; }); } catch (e) {}
-  const orden = ['Palermo', 'Lima', 'Janette', 'Anticipos de temporada', 'Facturas a franquicias', 'Otras ventas'];
+  const orden = ['Palermo', 'Lima', 'Janette', 'Anticipos de temporada', 'Facturas a grandes cuentas', 'Otras ventas'];
   return { meses: meses, filas: orden.map(s => ({ sector: s, valores: meses.map(m => v[s + '|' + m] || 0), anio: a[s] || 0 })).filter(f => f.anio || f.valores.some(Boolean)),
     cajaPalermo: meses.map(m => caja[m] || 0), diasCaja: meses.map(m => dias[m] || 0), ultimoCierre: ultimo };
 }
@@ -1219,7 +1219,7 @@ function audioFinanzas_(u, R) {
   if (S.destinoAnio && S.destinoAnio.length) { const d = S.destinoAnio.filter(x => x.cada100 != null).slice(0, 2);
     if (d.length) P.push('En el año, de cada cien pesos que entraron, ' + d.map(x => x.cada100 + ' se fueron en ' + x.nombre.split(' (')[0].toLowerCase()).join(' y ') + '.'); }
   if (C) P.push('En lo que va de ' + MES_NOM(C.mes).split(' ')[0] + ' entraron ' + millones_(C.ingresos) + ' y salieron ' + millones_(C.egresos) + '; faltan cargar cobros.');
-  if (R.franquicias.length) P.push('Lo que pagaron las franquicias en el año: ' + lista37_(R.franquicias.slice(0, 4).map(f => f.franquicia + ', ' + millones_(f.cobradoAnio))) + '.');
+  if (R.franquicias.length) P.push('Lo que pagaron las grandes cuentas en el año: ' + lista37_(R.franquicias.slice(0, 4).map(f => f.franquicia + ', ' + millones_(f.cobradoAnio))) + '.');
   const rec = R.recomendaciones.filter(t => !/^Vender más o bajar gastos/.test(t))[0];
   if (rec) P.push('Para revisar: ' + hablar_(rec.charAt(0).toLowerCase() + rec.slice(1).replace(/\$ ?([\d.,]+) M/g, (m, n) => millones_(Number(n.replace(',', '.')) * 1e6)).replace(/\$ ?[\d.]+/g, m => millones_(Number(m.replace(/[^\d]/g, ''))))));
   return P.join(' ').replace(/\s+/g, ' ').trim();
@@ -1245,7 +1245,7 @@ function finHojasExtra_(X, maria) {
   const K = X.contabilium || {};
   if (K.ok) K.conciliacion.forEach(c => H.push({ nombre: 'Conciliación ' + c.mes, columnas: ['Situación', 'Factura', 'Cliente', 'Contabilium', 'Templete'], dinero: [3, 4],
     filas: c.faltaCargar.map(f => ['Falta cargar en el Templete (ya sumada al panel)', f.factura, f.cliente, Math.round(f.monto), 0])
-      .concat(c.franquicias.map(f => ['Factura a franquicia: aplicar contra anticipos', f.factura, f.cliente, Math.round(f.monto), 0]))
+      .concat(c.franquicias.map(f => ['Factura a gran cuenta: aplicar contra anticipos', f.factura, f.cliente, Math.round(f.monto), 0]))
       .concat(c.diferencias.map(f => ['Importe distinto', f.factura, f.cliente, Math.round(f.contabilium), Math.round(f.templete)]))
       .concat(c.noEnCtb.map(f => ['Está en el Templete y no en Contabilium', f.factura, f.cliente, 0, Math.round(f.monto)]))
       .concat(c.anuladas.map(f => ['Anulada con nota de crédito total', f.factura, f.cliente, 0, Math.round(f.monto)])) }));
@@ -1271,7 +1271,7 @@ function descargaFinanzas(token) {
       { nombre: 'Egresos por cuenta y mes', columnas: ['Rubro', 'Cuenta'].concat(meses, ['Total']), dinero: meses.map((m, i) => i + 2).concat([meses.length + 2]), filas: filasRub },
       { nombre: 'Semanas', columnas: ['Semana del', 'Ingresos', 'Egresos', 'Resultado'], dinero: [1, 2, 3], filas: R.semanas.map(w => [fdm_(w.semana), Math.round(w.ingresos), Math.round(w.egresos), Math.round(w.ingresos - w.egresos)]) },
       { nombre: 'Ventas por canal (año)', columnas: ['Canal', 'Ventas'], dinero: [1], filas: R.canales.map(c => [c.nombre, Math.round(c.monto)]) },
-      { nombre: 'Franquicias cobrado', columnas: ['Franquicia', 'Cobrado total', 'Cobrado en el año', 'Último mes cerrado', 'Último pago'], dinero: [1, 2, 3], filas: R.franquicias.map(f => [f.franquicia, Math.round(f.cobrado), Math.round(f.cobradoAnio), Math.round(f.ultimoMes), f.ultimo ? fdm_(f.ultimo) : '']) },
+      { nombre: 'Grandes cuentas cobrado', columnas: ['Gran cuenta', 'Cobrado total', 'Cobrado en el año', 'Último mes cerrado', 'Último pago'], dinero: [1, 2, 3], filas: R.franquicias.map(f => [f.franquicia, Math.round(f.cobrado), Math.round(f.cobradoAnio), Math.round(f.ultimoMes), f.ultimo ? fdm_(f.ultimo) : '']) },
       { nombre: 'Retiros de socios (año)', columnas: ['Cuenta', 'Monto'], dinero: [1], filas: R.retiros.map(r => [r.nombre, Math.round(r.monto)]) }].concat(finHojasExtra_(X, maria)) };
 }
 /* =================== 3.8 · Contabilium (SOLO LECTURA) =================== */
