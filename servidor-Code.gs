@@ -1367,7 +1367,7 @@ function descargaFinanzas(token) {
 const CTB_BASE = 'https://rest.contabilium.com';
 const CTB_LECTURAS = [/^\/api\/usuarios\/tieneAcceso$/, /^\/api\/usuarios\/obtenerinfo$/, /^\/api\/comprobantes\/search$/, /^\/api\/clientes\/search$/,
   /^\/api\/inventarios\/getDepositos$/, /^\/api\/inventarios\/getStockByDeposito$/, /^\/api\/conceptos\/search$/, /^\/api\/puntosdeventa\/search$/,
-  /^\/api\/comprobantes\/?$/, /^\/api\/comprobantes\/getById$/];
+  /^\/api\/comprobantes\/?$/, /^\/api\/comprobantes\/getById$/, /^\/api\/cobranzas\/search$/];   // 3.9h · cobranzas: solo búsqueda (lectura)
 /** 3.8 · María conecta Contabilium desde la app (sin tocar Propiedades del script): pega el Client ID y la API key, se validan
     contra Contabilium y recién ahí se guardan en el servidor. Nunca vuelven al teléfono ni quedan en el Historial. Pide PIN. */
 function conectarContabilium(token, id, secreto) {
@@ -1500,7 +1500,12 @@ function ctbCobranzas_() {
   // 3.9f · Detalle de lo abierto de las grandes cuentas (factura por factura), para el panel de grandes cuentas
   try { const G = {}, GN = gcNombres_(); LC.filter(x => x.saldo > 0.5 && (finFranq_(x.cliente) || esGranCuenta_(x.cliente, GN))).forEach(x => {
       const k = finFranq_(x.cliente) || x.cliente; (G[k] = G[k] || []).push([x.clave, x.fecha, Math.round(x.total), Math.round(x.saldo), CTB_ES_NC(x.tipo) ? 1 : 0, x.vence || '']); });
-    PROPS.setProperty('CTB_COB_GC', JSON.stringify({ leida: new Date().toISOString(), cuentas: G }).slice(0, 9000)); } catch (e) {}
+    let R = {}; try { R = ctbRecibosGC_(SS27_DESDE, hasta, GN); } catch (e) {}
+    // Propiedades del script: máx. 9 KB por valor → si no entra, se resumen los recibos (total por cuenta) y se recortan listas
+    let o = { leida: new Date().toISOString(), cuentas: G, recibos: R }, s = JSON.stringify(o);
+    if (s.length > 8800) { Object.keys(R).forEach(k => { const tot = R[k].reduce((a, x) => a + x[2], 0); R[k] = [['varios', R[k].map(x => x[1]).sort().pop() || '', tot]]; }); s = JSON.stringify(o); }
+    if (s.length > 8800) { Object.keys(G).forEach(k => { G[k] = G[k].sort((a, b) => b[3] - a[3]).slice(0, 12); }); s = JSON.stringify(o); }
+    PROPS.setProperty('CTB_COB_GC', s.slice(0, 8900)); } catch (e) {}
   const L = Object.keys(cli).map(k => cli[k]).filter(c => c.saldo > 0.5).sort((a, b) => b.saldo - a.saldo);
   return { total: L.reduce((a, c) => a + c.saldo, 0), vencido: L.reduce((a, c) => a + c.vencido, 0), clientes: L.length, top: L.slice(0, 25).map(c => Object.assign({}, c, { saldo: Math.round(c.saldo), vencido: Math.round(c.vencido), aFavor: Math.round(c.aFavor) })), leida: new Date().toISOString() };
 }
@@ -1517,6 +1522,17 @@ function ctbFueraTemporada_() {
     .map(x => Object.assign(x, { palermo: dep.palermo ? (dep.palermo[x.codigo] || 0) : null, lima: dep.lima ? (dep.lima[x.codigo] || 0) : null, temporada: (x.codigo.match(/(SS|AW|FW|OI|PV)\d{2}$/i) || ['Anteriores'])[0].replace(/^[a-z]+\d+$/i, t => t.toUpperCase()),
       valorStock: Math.round(x.stock * x.precio) }))
     .sort((a, b) => b.stock - a.stock);
+}
+/** 3.9h · Cobranzas (recibos) de Contabilium de las grandes cuentas desde una fecha: incluye las «cobranzas a cuenta» que
+    María carga antes de que exista la factura. La búsqueda de Contabilium pagina desde 0 (page=0, 1, …). SOLO LECTURA. */
+function ctbRecibosGC_(desde, hasta, GN) {
+  const out = {}, vistos = {};
+  for (let p = 0; p < 60; p++) { let j; try { j = ctbGet_('/api/cobranzas/search', { fechaDesde: desde, fechaHasta: hasta, page: p }); } catch (e) { if (p) break; throw e; }
+    const I = j.Items || []; I.forEach(x => { if (vistos[x.ID]) return; vistos[x.ID] = 1; const k = finFranq_(x.RazonSocial) || (esGranCuenta_(x.RazonSocial, GN || {}) ? String(x.RazonSocial).trim() : null); if (!k) return;
+      const f = String(x.Fecha || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/), fe = f ? f[3] + '-' + ('0' + f[2]).slice(-2) + '-' + ('0' + f[1]).slice(-2) : '';
+      (out[k] = out[k] || []).push([String(x.Numero || ''), fe, Math.round(ctbNum_(x.ImporteTotal))]); });
+    if (I.length < 50) break; }
+  return out;
 }
 /** Recalcula y guarda (resumido) productos y cobranzas. Lo corre la actualización diaria y «Actualizar datos». */
 function ctbActualizarResumenes_() {
@@ -1937,7 +1953,8 @@ const SS27_DESDE = '2026-09-01';
 function gcContabilium_() {
   if (!ctbMensual_()) return null;
   const V = cmpVentas_(), anio = hoy_().slice(0, 4); let A = {}, leida = null;
-  try { const j = JSON.parse(PROPS.getProperty('CTB_COB_GC') || 'null'); if (j) { leida = j.leida; Object.keys(j.cuentas || {}).forEach(k => { A[k] = j.cuentas[k]; }); } } catch (e) {}
+  let RC = {};
+  try { const j = JSON.parse(PROPS.getProperty('CTB_COB_GC') || 'null'); if (j) { leida = j.leida; RC = j.recibos || {}; Object.keys(j.cuentas || {}).forEach(k => { A[k] = j.cuentas[k]; }); } } catch (e) {}
   const ab = {}; Object.keys(A).forEach(k => A[k].forEach(x => { ab[x[0]] = { saldo: x[3], nc: !!x[4], vence: x[5] }; }));
   let ped = {}; try { (control_(false).clientes || []).filter(c => c.seCuenta !== false).forEach(c => { const k = finFranq_(c.nombre) || (n => { const x = FIN_FRANQ_DET.find(y => y[1].test(n)); return x ? x[0] : null; })(finNorm_(c.nombre));
     if (k) ped[k] = (ped[k] || 0) + (c.montoTotal || c.monto || 0); }); } catch (e) {}
@@ -1945,15 +1962,22 @@ function gcContabilium_() {
   V.facturas.filter(f => f.mes.slice(0, 4) === anio && finFranq_(f.cliente)).forEach(f => { const k = finFranq_(f.cliente), g = G[k] = G[k] || { granCuenta: k, clientes: {}, facturadoAnio: 0, facturado27: 0, cobrado27: 0, debe: 0, vencido: 0, facturas27: [] };
     const neto = f.total - f.nc, sal = ab[f.clave] ? ab[f.clave].saldo : 0; g.clientes[f.cliente] = 1; g.facturadoAnio += neto; g.debe += sal;
     if (ab[f.clave] && ab[f.clave].vence && ab[f.clave].vence < hoy_()) g.vencido += sal;
-    if (f.fecha >= SS27_DESDE) { g.facturado27 += neto; g.cobrado27 += Math.max(0, neto - sal); g.facturas27.push({ factura: f.clave, fecha: f.fecha, monto: Math.round(neto), saldo: Math.round(sal) }); } });
+    if (f.fecha >= SS27_DESDE) { g.facturado27 += neto; g.saldo27 = (g.saldo27 || 0) + sal; g.facturas27.push({ factura: f.clave, fecha: f.fecha, monto: Math.round(neto), saldo: Math.round(sal) }); }
+    else g.debeAnterior = (g.debeAnterior || 0) + sal; });
+  Object.keys(RC).forEach(k => { const g = G[k] = G[k] || { granCuenta: k, clientes: {}, facturadoAnio: 0, facturado27: 0, cobrado27: 0, debe: 0, vencido: 0, facturas27: [] };
+    g.recibos27 = RC[k].reduce((a, x) => a + x[2], 0); g.recibos = RC[k].slice().sort((a, b) => b[1].localeCompare(a[1])).map(x => ({ recibo: x[0], fecha: x[1], monto: x[2] })); });
   // notas de crédito abiertas (plata a favor del cliente) descuentan de lo que debe
   Object.keys(A).forEach(k => { const g = G[k]; if (!g) return; A[k].filter(x => x[4]).forEach(x => { g.aFavorNc = (g.aFavorNc || 0) + x[3]; }); });
-  const L = Object.keys(G).map(k => { const g = G[k]; g.debe = Math.max(0, g.debe - (g.aFavorNc || 0)); g.vencido = Math.min(g.vencido, g.debe); g.pedido27 = ped[k] ? Math.round(ped[k]) : null;
+  // Cobrado SS27 = lo mayor entre las cobranzas cargadas (recibos, incluidas las «a cuenta») y lo ya aplicado a las facturas.
+  // Debe = lo facturado SS27 que no está cobrado + lo pendiente de facturas anteriores; si cobró más de lo facturado, queda a favor.
+  const L = Object.keys(G).map(k => { const g = G[k], aplicado = g.facturado27 - (g.saldo27 || 0);
+    g.cobrado27 = Math.max(g.recibos27 || 0, aplicado); g.aFavor = Math.max(0, g.cobrado27 - g.facturado27);
+    g.debe = Math.max(0, Math.max(0, g.facturado27 - g.cobrado27) + (g.debeAnterior || 0) - (g.aFavorNc || 0)); g.vencido = Math.min(g.vencido, g.debe); g.pedido27 = ped[k] ? Math.round(ped[k]) : null;
     g.faltaFacturar = g.pedido27 != null ? Math.max(0, Math.round(g.pedido27 - g.facturado27)) : null; g.clientes = Object.keys(g.clientes);
-    ['facturadoAnio', 'facturado27', 'cobrado27', 'debe', 'vencido'].forEach(x => { g[x] = Math.round(g[x]); }); g.facturas27.sort((a, b) => b.fecha.localeCompare(a.fecha)); return g; })
+    ['facturadoAnio', 'facturado27', 'cobrado27', 'debe', 'vencido', 'aFavor', 'debeAnterior', 'recibos27'].forEach(x => { g[x] = Math.round(g[x] || 0); }); g.facturas27.sort((a, b) => b.fecha.localeCompare(a.fecha)); return g; })
     .sort((a, b) => b.facturado27 - a.facturado27 || b.facturadoAnio - a.facturadoAnio);
   const t = k => L.reduce((s, g) => s + (g[k] || 0), 0);
-  return { cuentas: L, facturado27: t('facturado27'), cobrado27: t('cobrado27'), debe: t('debe'), vencido: t('vencido'), pedido27: t('pedido27'), desde27: SS27_DESDE, leida: leida };
+  return { cuentas: L, aFavor: t('aFavor'), facturado27: t('facturado27'), cobrado27: t('cobrado27'), debe: t('debe'), vencido: t('vencido'), pedido27: t('pedido27'), desde27: SS27_DESDE, leida: leida };
 }
 const pctVs_ = (a, b) => b > 0 ? Math.round((a - b) / b * 1000) / 10 : null;
 /** KPIs por canal: hoy, ayer, mes, año; vs. mismo período del mes anterior y del año pasado; ticket promedio; participación. */

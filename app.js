@@ -2899,10 +2899,10 @@ function pintarFinanzas(body, D, recargar){
   if (D.maria && R.grandesCuentasCtb && R.grandesCuentasCtb.cuentas.length){ const G = R.grandesCuentasCtb;
     const cab = el("tr",{}, ...["Gran cuenta","Facturado SS27","Cobrado","Debe hoy","Pedido SS27","Falta facturar"].map((t,i)=>el("th",{class:i?"n":"",text:t})));
     const filas = G.cuentas.map(g=>el("tr",{}, el("th",{scope:"row",text:g.granCuenta}), el("td",{class:"n",text:moneyK(g.facturado27)}), el("td",{class:"n",text:moneyK(g.cobrado27)}),
-      el("td",{class:"n"+(g.debe?" neg":""),text:g.debe?moneyK(g.debe)+(g.vencido?` (vencido ${moneyK(g.vencido)})`:""):"–"}), el("td",{class:"n",text:g.pedido27?moneyK(g.pedido27):"–"}), el("td",{class:"n",text:g.faltaFacturar!=null?moneyK(g.faltaFacturar):"–"})));
+      el("td",{class:"n"+(g.debe?" neg":""),text:g.debe?moneyK(g.debe)+(g.vencido?` (vencido ${moneyK(g.vencido)})`:""):g.aFavor?`a favor ${moneyK(g.aFavor)}`:"–"}), el("td",{class:"n",text:g.pedido27?moneyK(g.pedido27):"–"}), el("td",{class:"n",text:g.faltaFacturar!=null?moneyK(g.faltaFacturar):"–"})));
     filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), el("td",{class:"n",text:moneyK(G.facturado27)}), el("td",{class:"n",text:moneyK(G.cobrado27)}), el("td",{class:"n",text:moneyK(G.debe)}), el("td",{class:"n",text:G.pedido27?moneyK(G.pedido27):"–"}), el("td",{})));
     body.append(el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas según Contabilium"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
-      el("p",{class:"lead",text:`Temporada SS27 = facturas desde el ${fmtF(G.desde27)}. «Cobrado» = facturado menos el saldo pendiente de cada factura en Contabilium. «Debe hoy» = saldo pendiente (ya descontadas notas de crédito a favor). El pedido sale de «Control ingreso».`}),
+      el("p",{class:"lead",text:`Temporada SS27 = facturas desde el ${fmtF(G.desde27)}. «Cobrado» = las cobranzas cargadas en Contabilium (también las «a cuenta», todavía sin aplicar a una factura) o lo ya aplicado a las facturas, lo que sea mayor. «Debe hoy» = lo facturado que falta cobrar + lo pendiente de facturas anteriores (descontadas notas de crédito). Si cobró más de lo facturado, queda «a favor» (anticipo de mercadería por entregar). El pedido sale de «Control ingreso».`}),
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
       el("p",{class:"hint",text:`Saldos de Contabilium leídos ${G.leida?fechaHora(G.leida):"–"} (se actualizan a las 7 h). Factura por factura en «Descargar Excel» → hoja «Grandes cuentas (Contabilium)».`})));
   }
@@ -3445,7 +3445,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9g";
+const APP_V = "3.9h";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
