@@ -1460,7 +1460,7 @@ function vAuditar(body){
     el("span",{class:"pill",id:"r-inf",hidden:true}), el("div",{class:"meter"},el("i",{id:"r-meter"})), el("span",{class:"mono",id:"r-count",style:"font-size:12px"}),
     el("button",{class:"btn primary",type:"button",id:"btn-enviar",text:"✔ Validar y enviar",onclick:enviar}));
   body.append(
-    el("div",{class:"card"}, el("h2",{text:"Nueva auditoría · Palermo"}), el("p",{class:"lead",text:`Auditor: ${S.user.nombre} (queda registrado con tu usuario).`}),
+    el("div",{class:"card"}, el("h2",{text:"Nueva auditoría · Palermo"}), el("p",{class:"lead",text:`Auditor: ${S.user.nombre} (queda registrado con tu usuario).`}), el("p",{class:"hint",text:`Versión de la app ${typeof APP_V!=="undefined"?APP_V:""} · 9 puntos: los 7 de siempre («Otros» es opcional) + Perchero del showroom + Control de 10 artículos al azar.`}),
       el("div",{class:"grid2"}, el("label",{class:"f"},"📅 Fecha",fecha), el("label",{class:"f"},"📦 Días del pedido más viejo sin retirar",dias))),
     puntos,
     el("div",{class:"card"}, el("h3",{text:"💬 Comentario general"}), gen, el("h3",{style:"margin-top:14px",text:"📷 Fotos generales"}), generales),
@@ -3444,5 +3444,12 @@ function cardFeriadosConfig(F, alCambiar){
 /* ---------- Arranque ---------- */
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+/* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
+const APP_V = "3.9g";
+(async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
+  if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
+    try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
+    try{ const ks = await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); }catch(e){}
+    location.replace(location.pathname+"?v="+encodeURIComponent(v)+location.hash); } }catch(e){} })();
 iniciar();
 })();
