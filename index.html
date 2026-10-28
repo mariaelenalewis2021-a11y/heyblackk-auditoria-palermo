@@ -474,6 +474,28 @@ tr.caja38 th,tr.caja38 td{color:var(--muted);font-size:13px} tr.tot38 th,tr.tot3
 .bh38{display:grid;gap:8px} .bh-fila{display:grid;grid-template-columns:minmax(90px,38%) 1fr auto;gap:8px;align-items:center;font-size:13px}
 .bh-n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .bh-b{height:10px;border-radius:5px;background:color-mix(in srgb,var(--ink) 8%,transparent);overflow:hidden} .bh-b i{display:block;height:100%}
 .bh-v{font-size:12.5px;white-space:nowrap}
+
+/* 3.9j · Celulares: letra y botones más grandes (Android y iPhone) */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+@media (max-width:640px){
+  body{font-size:17px;line-height:1.5}
+  .who{font-size:14px} .sub{font-size:12px}
+  .tab{font-size:15.5px;min-height:50px} .btn{font-size:16px;min-height:48px} .btn.sm{font-size:15px;min-height:42px}
+  .card{padding:16px} .card h2{font-size:22px} .card h3{font-size:13.5px}
+  .lead{font-size:16.5px} .hint{font-size:14.5px!important} p,li{font-size:16px}
+  label.f{font-size:15.5px}
+  input[type=text],input[type=date],input[type=number],input[type=password],select,textarea{font-size:17px;padding:12px 14px;min-height:48px}
+  .punto{padding:16px} .punto-head b{font-size:18px} .punto-head .em{font-size:24px} .punto-head .idx{font-size:13px}
+  .score{gap:6px} .score button{min-height:62px} .score button .n{font-size:20px} .score button .t{font-size:12.5px}
+  .inf span{font-size:13px} .stepper button{width:46px;min-height:48px;font-size:24px}
+  .addfoto{width:96px;height:96px;font-size:14px}
+  .pill{font-size:14px;padding:4px 11px} .notice{font-size:16px}
+  .big{font-size:34px} .rlabel{font-size:17px}
+  table{font-size:15px} th{font-size:12.5px}
+  .kpi .k{font-size:14px} .kpi .v{font-size:30px} .kpi .s{font-size:14px}
+  .bar{font-size:15px} .dgrid > div{font-size:15px} .action li{font-size:16px}
+}
+@media (max-width:380px){ .score button .t{font-size:11px} .score{gap:4px} }
 </style>
 </head>
 <body>
