@@ -1948,7 +1948,7 @@ function gcContabilium_() {
     if (f.fecha >= SS27_DESDE) { g.facturado27 += neto; g.cobrado27 += Math.max(0, neto - sal); g.facturas27.push({ factura: f.clave, fecha: f.fecha, monto: Math.round(neto), saldo: Math.round(sal) }); } });
   // notas de crédito abiertas (plata a favor del cliente) descuentan de lo que debe
   Object.keys(A).forEach(k => { const g = G[k]; if (!g) return; A[k].filter(x => x[4]).forEach(x => { g.aFavorNc = (g.aFavorNc || 0) + x[3]; }); });
-  const L = Object.keys(G).map(k => { const g = G[k]; g.debe = Math.max(0, g.debe - (g.aFavorNc || 0)); g.pedido27 = ped[k] ? Math.round(ped[k]) : null;
+  const L = Object.keys(G).map(k => { const g = G[k]; g.debe = Math.max(0, g.debe - (g.aFavorNc || 0)); g.vencido = Math.min(g.vencido, g.debe); g.pedido27 = ped[k] ? Math.round(ped[k]) : null;
     g.faltaFacturar = g.pedido27 != null ? Math.max(0, Math.round(g.pedido27 - g.facturado27)) : null; g.clientes = Object.keys(g.clientes);
     ['facturadoAnio', 'facturado27', 'cobrado27', 'debe', 'vencido'].forEach(x => { g[x] = Math.round(g[x]); }); g.facturas27.sort((a, b) => b.fecha.localeCompare(a.fecha)); return g; })
     .sort((a, b) => b.facturado27 - a.facturado27 || b.facturadoAnio - a.facturadoAnio);
