@@ -1449,6 +1449,11 @@ function saveDraft(){ lsSet("hb_draft3",{form:S.form, fecha:$("f-fecha")&&$("f-f
 function vAuditar(body){
   const d = lsGet("hb_draft3");
   S.form = d && d.form ? d.form : blankForm(); S.fotos = S.fotos || [];
+  // 3.9i · Un borrador guardado por una versión anterior no tiene perchero ni control de stock: se completan para que se vean.
+  const bf = blankForm(); ["puntajes","coment","inf"].forEach(k=>{ if (!S.form[k] || typeof S.form[k]!=="object") S.form[k]=bf[k]; });
+  if (!S.form.perchero || typeof S.form.perchero!=="object") S.form.perchero = bf.perchero;
+  if (S.form.stock10===undefined) S.form.stock10 = null; if (S.form.stock10Err===undefined) S.form.stock10Err = null;
+  if (S.form.stock10 && (!Array.isArray(S.form.stock10.items) || !S.form.stock10.conteos)) S.form.stock10 = null;
   const fecha = el("input",{type:"date",id:"f-fecha",value:(d&&d.fecha)||hoy(),max:hoy()});
   const dias = el("input",{type:"number",id:"f-dias",min:"0",max:"999",inputmode:"numeric",placeholder:"Ej.: 3",value:(d&&d.dias)||""});
   const gen = el("textarea",{id:"f-general",maxlength:"600",placeholder:"Observaciones generales, recomendaciones y mensaje para el equipo"}); gen.value=(d&&d.gen)||"";
@@ -1484,8 +1489,9 @@ function buildPuntos(){
       el("div",{class:"fotos","data-punto":p.k}));
     box.append(card);
   });
-  box.append(cardPerchero(), el("div",{class:"punto",id:"p-stock10"}));
-  pintarStock10();
+  try { box.append(cardPerchero()); } catch(e){ S.form.perchero = {estado:null,coment:""}; box.append(cardPerchero()); }
+  box.append(el("div",{class:"punto",id:"p-stock10"}));
+  try { pintarStock10(); } catch(e){ S.form.stock10 = null; S.form.stock10Err = null; pintarStock10(); }
 }
 /* 3.9 · Perchero del showroom: OK / Con observaciones / Mal + comentario + foto */
 function cardPerchero(){
@@ -3445,7 +3451,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9h";
+const APP_V = "3.9i";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
