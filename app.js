@@ -3451,11 +3451,13 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9j";
+const APP_V = "3.9k";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
     try{ const ks = await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); }catch(e){}
+    try{ await Promise.all(["./","index.html","app.js","config.js","sw.js"].map(u=>fetch(u,{cache:"reload"}).catch(()=>null))); }catch(e){}
     location.replace(location.pathname+"?v="+encodeURIComponent(v)+location.hash); } }catch(e){} })();
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible"){ fetch("version.json?t="+Date.now(),{cache:"no-store"}).then(r=>r.json()).then(j=>{ if(j.v&&j.v!==APP_V){ let ya=null; try{ya=sessionStorage.getItem("hb_upd");}catch(e){} if(ya!==j.v) location.reload(); } }).catch(()=>{}); } });
 iniciar();
 })();
