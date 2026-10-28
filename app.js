@@ -2746,7 +2746,7 @@ function pintarFinanzas(body, D, recargar){
       el("li",{}, el("b",{text:"Entró / Cobrado"}), " = la plata que ingresó, según lo cargado a mano en el ", el("b",{text:"Templete"}), " (Dropbox). Incluye los anticipos de temporada, que se cobran antes de facturar."),
       el("li",{}, el("b",{text:"Facturado y cobrado no se suman nunca"}), ": son dos formas de mirar la misma venta. Si un cliente pagó un mes y la factura se hizo al mes siguiente, la plata se cuenta una sola vez, el mes en que entró."),
       el("li",{}, el("b",{text:"Lima en Contabilium es más grande"}), " porque el punto de venta 0005 factura también la Web (Tiendanube) y las grandes cuentas. La app los muestra separados."),
-      el("li",{}, el("b",{text:"Grandes cuentas"}), " = la planilla de cuentas corrientes (facturas, pagos y saldo de cada una). Una factura que se pagó con anticipos no es plata nueva: si el Templete la tiene como cobro, se descuenta para no contarla dos veces."),
+      el("li",{}, el("b",{text:"Grandes cuentas"}), " = facturas y cobranzas de Contabilium (cuánto se facturó, cuánto se cobró y cuánto deben). La planilla de cuentas corrientes se usa solo para avisar diferencias."),
       el("li",{}, el("b",{text:"Caja Palermo"}), " = los cierres de caja que se cargan en la app todos los días."))));
   // 1 · En pocas palabras
   if (U){
@@ -2895,9 +2895,21 @@ function pintarFinanzas(body, D, recargar){
         c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null))),
       el("p",{class:"hint",text:"El cliente sale del detalle del anticipo (a veces paga un tercero). El pedido y lo abonado vienen de «Control ingreso Nueva temporada 27». El detalle pago por pago está en la descarga."})));
   }
+  // 7b1 · Grandes cuentas según Contabilium (solo María): facturas y cobranzas
+  if (D.maria && R.grandesCuentasCtb && R.grandesCuentasCtb.cuentas.length){ const G = R.grandesCuentasCtb;
+    const cab = el("tr",{}, ...["Gran cuenta","Facturado SS27","Cobrado","Debe hoy","Pedido SS27","Falta facturar"].map((t,i)=>el("th",{class:i?"n":"",text:t})));
+    const filas = G.cuentas.map(g=>el("tr",{}, el("th",{scope:"row",text:g.granCuenta}), el("td",{class:"n",text:moneyK(g.facturado27)}), el("td",{class:"n",text:moneyK(g.cobrado27)}),
+      el("td",{class:"n"+(g.debe?" neg":""),text:g.debe?moneyK(g.debe)+(g.vencido?` (vencido ${moneyK(g.vencido)})`:""):"–"}), el("td",{class:"n",text:g.pedido27?moneyK(g.pedido27):"–"}), el("td",{class:"n",text:g.faltaFacturar!=null?moneyK(g.faltaFacturar):"–"})));
+    filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), el("td",{class:"n",text:moneyK(G.facturado27)}), el("td",{class:"n",text:moneyK(G.cobrado27)}), el("td",{class:"n",text:moneyK(G.debe)}), el("td",{class:"n",text:G.pedido27?moneyK(G.pedido27):"–"}), el("td",{})));
+    body.append(el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas según Contabilium"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
+      el("p",{class:"lead",text:`Temporada SS27 = facturas desde el ${fmtF(G.desde27)}. «Cobrado» = facturado menos el saldo pendiente de cada factura en Contabilium. «Debe hoy» = saldo pendiente (ya descontadas notas de crédito a favor). El pedido sale de «Control ingreso».`}),
+      el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
+      el("p",{class:"hint",text:`Saldos de Contabilium leídos ${G.leida?fechaHora(G.leida):"–"} (se actualizan a las 7 h). Factura por factura en «Descargar Excel» → hoja «Grandes cuentas (Contabilium)».`})));
+  }
   // 7b2 · Cuentas corrientes de grandes cuentas (solo María): saldo real, temporada SS27 y cruces
   if (D.maria && (R.cuentasCorrientes || R.ctaCteError)){ const CC = R.cuentasCorrientes;
-    const card = el("div",{class:"card cc39"}, el("h2",{text:"📒 Cuentas corrientes de grandes cuentas"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}));
+    const card = el("div",{class:"card cc39"}, el("h2",{text:"📒 Planilla de cuentas corrientes (referencia, a revisar)"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
+      el("p",{class:"notice warn",text:"Esta planilla todavía no está al día: los números del panel salen de Contabilium. Acá se muestra solo para detectar diferencias."}));
     if (!CC) card.append(el("p",{class:"notice warn",text:"No se pudo leer la planilla de cuentas corrientes: "+R.ctaCteError}));
     else {
       card.append(el("p",{class:"lead",text:"Saldo negativo = a favor del cliente: pagó por adelantado y todavía no se le despachó (o facturó) esa mercadería. SS27 = temporada nueva: lo que pagó, lo que ya se le facturó/despachó y lo que pidió en «Control ingreso»."}),
@@ -2910,7 +2922,7 @@ function pintarFinanzas(body, D, recargar){
           c.saldoConFaltantes!=null ? el("p",{class:"notice warn",text:`Si se suman las facturas de Contabilium que faltan en esta cuenta corriente, el saldo real sería ${c.saldoConFaltantes<0?"a favor "+moneyK(-c.saldoConFaltantes):"una deuda de "+moneyK(c.saldoConFaltantes)}.`}) : null,
           T ? el("p",{text:`SS27 (desde ${T.desde?fmtF(T.desde):"–"}): pagó ${moneyK(T.pagado)} en ${T.pagos} pagos · facturado/despachado ${moneyK(T.facturado)}`+(T.pedido?` · pedido ${moneyK(T.pedido)} (${T.pctCobrado} % cobrado, falta cobrar ${moneyK(T.faltaCobrar)}, falta facturar/despachar ${moneyK(T.faltaFacturar)})`:"")+(T.saldoAntes?` · antes de SS27 ${T.saldoAntes>0?"debía":"tenía a favor"} ${moneyK(Math.abs(T.saldoAntes))}`:"")+"."}) : el("p",{class:"hint",text:"Sin movimientos de SS27 todavía."}),
           c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null)); });
-      if ((R.dobleConteo||[]).length) card.append(el("p",{class:"notice warn",text:`No se cuenta dos veces: ${R.dobleConteo.map(x=>`factura ${x.factura} de ${x.granCuenta} (${moneyK(x.monto)}, ${mesLargo(x.mes)}, fila ${x.fila} del Templete)`).join("; ")}. Se pagó con anticipos que ya están cargados como cobro, así que se descontó del «entró».`}));
+      if ((R.dobleConteo||[]).length) card.append(el("p",{class:"notice warn",text:`Posible doble conteo: ${R.dobleConteo.map(x=>`factura ${x.factura} de ${x.granCuenta} (${moneyK(x.monto)}, ${mesLargo(x.mes)}, fila ${x.fila} del Templete)`).join("; ")}. Según la planilla se pagó con anticipos que ya están cargados como cobro: revisalo (no se descontó nada).`}));
       card.append(el("p",{class:"hint",text:`Fuente: «${CC.archivo}» (solo lectura, modificada ${fechaHora(CC.modificado)}). Cada factura se cruza con Contabilium y cada pago con el Templete. El detalle movimiento por movimiento está en la descarga → hojas «Cuentas corrientes» y «Grandes cuentas SS27».`}));
     }
     body.append(card);
