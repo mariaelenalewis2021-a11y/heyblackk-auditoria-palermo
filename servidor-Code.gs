@@ -1682,12 +1682,15 @@ function cmpGuardar_(meses, nuevas) {
   });
 }
 /** Actualiza la hoja: siempre el mes actual y el anterior; los meses que falten (desde enero 2026), con límite de tiempo. */
-function comprobantesSync_(limiteMs, todos) {
+function comprobantesSync_(limiteMs, todos, rapido) {
   if (!ctbConfigurado_()) return null;
   const t0 = Date.now(), mesHoy = hoy_().slice(0, 7), mesAnt = finMesAnt_(mesHoy), nombres = gcNombres_();
   let est = {}; try { est = JSON.parse(PROPS.getProperty('CMP_MESES') || '{}'); } catch (e) {}
   const lista = []; for (let m = CMP_DESDE; m <= mesHoy; m = mesSig_(m)) lista.push(m);
-  const orden = [mesHoy, mesAnt].filter(m => m >= CMP_DESDE).concat(lista.filter(m => m < mesAnt && (todos || !est[m])));
+  // rápido (botón «Actualizar datos»): solo el mes en curso, y el anterior si no se leyó en las últimas 20 h
+  const viejo = m => !est[m] || Date.now() - new Date(est[m]).getTime() > 20 * 3600000;
+  const orden = rapido ? [mesHoy].concat(viejo(mesAnt) && mesAnt >= CMP_DESDE ? [mesAnt] : [])
+    : [mesHoy, mesAnt].filter(m => m >= CMP_DESDE).concat(lista.filter(m => m < mesAnt && (todos || !est[m])));
   const leidos = [], filas = [];
   for (let i = 0; i < orden.length; i++) {
     const quedan = limiteMs - (Date.now() - t0); if (quedan < 15000) break;
@@ -1696,6 +1699,16 @@ function comprobantesSync_(limiteMs, todos) {
   }
   if (leidos.length) { cmpGuardar_(leidos, filas); const ts = new Date().toISOString(); leidos.forEach(m => est[m] = ts); PROPS.setProperty('CMP_MESES', JSON.stringify(est)); }
   return { leidos: leidos, comprobantes: filas.length, pendientes: lista.filter(m => !est[m]) };
+}
+/** 3.9e · Ventas por canal de los meses indicados armadas desde la hoja «Comprobantes» (ya leída): misma regla que vcLeer_
+    (ventas COT/FC/ND, notas de crédito restan en su día y van al canal de su factura), sin otra consulta a Contabilium. */
+function vcDesdeCmp_(meses) {
+  const agg = {};
+  tAll_('Comprobantes').filter(r => meses.indexOf(r.mes) >= 0).forEach(r => { const k = r.fecha + '|' + r.canal, A = agg[k] = agg[k] || { clave: k, fecha: r.fecha, canal: r.canal, ventas: 0, comprobantes: 0, nc: 0 };
+    A.ventas += r.conIva; if (r.conIva >= 0) A.comprobantes++; else A.nc += -r.conIva; });
+  const rangos = meses.map(m => { const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7)); return [m + '-01', Utilities.formatDate(new Date(y, mo, 0), TZ, 'yyyy-MM-dd')]; });
+  vcGuardar_(rangos, Object.keys(agg).map(k => agg[k])); PROPS.setProperty('VC_SYNC', JSON.stringify({ ts: new Date().toISOString(), ok: true, desde: 'Comprobantes' }));
+  return Object.keys(agg).length;
 }
 /** Editor: lee (o relee) todos los meses desde enero 2026. Solo lectura en Contabilium. */
 function comprobantesHistorial() { const r = comprobantesSync_(330000, true); console.log('CMP ' + JSON.stringify(r)); return r; }
@@ -3098,6 +3111,8 @@ function autoFeriados_() {
 /** Activador semanal (lo crea instalarActivadores): refresca los feriados. */
 function feriadosSemanal() { return feriadosActualizar_(null); }
 /** 3.8 · Activador diario (7 h): relee Control ingreso, Ventas Palermo, el Templete de Dropbox y las ventas de Contabilium. */
+/** Editor: la misma actualización que el botón «Actualizar datos» (modo rápido), para medir el tiempo. */
+function actualizarRapido() { SS_ = null; MEMO_ = {}; const t = Date.now(), out = actualizarPlanillas_(null, true); console.log('RAPIDO ' + Math.round((Date.now() - t) / 1000) + ' s ' + JSON.stringify(out.map(o => [o.planilla, o.ok, o.seg, o.error || '']))); return out; }
 function actualizacionDiaria() { SS_ = null; MEMO_ = {}; const out = actualizarPlanillas_(null); console.log('DIARIA ' + JSON.stringify(out)); return out; }
 /** Ejecutar UNA vez desde el editor de Apps Script: crea el activador semanal (si no existe) y hace la primera descarga. */
 function instalarActivadores() {
@@ -4836,6 +4851,11 @@ function resumenTaller37_(D) {
   L.forEach(x => { const e = estadoTaller37_(x); est[e].pedidos++; est[e].unidades += e === 'llegado' ? x.ingresado + x.sobrante : x.faltante; llegadas += x.ingresado + x.sobrante; if (x.ingresado) conLlegada++; });
   const ultimos = L.filter(x => x.ultimaLlegada && (x.ingresado || x.sobrante)).sort((a, b) => b.ultimaLlegada.localeCompare(a.ultimaLlegada) || (b.ingresado - a.ingresado)).slice(0, 5)
     .map(x => ({ taller: x.taller, modelo: x.nombreTienda || x.producto, cantidad: x.ingresado + x.sobrante, fecha: x.ultimaLlegada, ot: x.ot, completo: !x.faltante }));
+  // 3.9e · Lo que ingresó en el mes (según «Fecha última llegada» de la hoja INGRESO): producto y cantidad
+  const mesHoy = hoy_().slice(0, 7), delMesL = L.filter(x => x.ultimaLlegada && x.ultimaLlegada.slice(0, 7) === mesHoy && (x.ingresado || x.sobrante))
+    .sort((a, b) => b.ultimaLlegada.localeCompare(a.ultimaLlegada) || ((b.ingresado + b.sobrante) - (a.ingresado + a.sobrante)));
+  const delMes = { mes: mesHoy, unidades: delMesL.reduce((a, x) => a + x.ingresado + x.sobrante, 0), productos: delMesL.length,
+    lista: delMesL.map(x => ({ modelo: x.nombreTienda || x.producto, cantidad: x.ingresado + x.sobrante, fecha: x.ultimaLlegada, taller: x.taller, ot: x.ot, completo: !x.faltante })) };
   const pend = L.filter(x => x.faltante);
   const proximos = pend.slice().sort((a, b) => (b.atrasado - a.atrasado) || ((a.fechaPrometida || '9') .localeCompare(b.fechaPrometida || '9')) || ((a.taller === 'Sin taller') - (b.taller === 'Sin taller')) || (b.faltante - a.faltante)).slice(0, 5)
     .map(x => ({ taller: x.taller, modelo: x.nombreTienda || x.producto, pendiente: x.faltante, fecha: x.fechaPrometida, estado: estadoTaller37_(x), ot: x.ot }));
@@ -4843,7 +4863,7 @@ function resumenTaller37_(D) {
     t.pedidos++; t.pedido += x.planificado; t.llegado += x.ingresado; t.falta += x.faltante; if (x.atrasado) t.atrasados++;
     if (x.ultimaLlegada && (!t.ultima || x.ultimaLlegada > t.ultima)) t.ultima = x.ultimaLlegada; if (x.faltante && x.fechaPrometida && (!t.proxima || x.fechaPrometida < t.proxima)) t.proxima = x.fechaPrometida; });
   const total = L.reduce((a, x) => a + x.planificado, 0);
-  return { estados: est, llegadas: llegadas, conLlegada: conLlegada, total: total, ultimos: ultimos, proximos: proximos,
+  return { estados: est, llegadas: llegadas, conLlegada: conLlegada, total: total, ultimos: ultimos, proximos: proximos, delMes: delMes,
     talleres: Object.keys(T).map(k => T[k]).sort((a, b) => b.falta - a.falta || b.pedido - a.pedido) };
 }
 function resumenProduccion_(D) {
@@ -4957,7 +4977,9 @@ function descargaControl(token, tipo) {
   const EST = { llegado: 'Llegado', en_produccion: 'En producción', por_llegar: 'Por llegar', atrasado: 'Atrasado' };
   return Object.assign(meta, { titulo: 'Pedidos de taller', archivo: 'Pedidos-de-taller', hojas: [
     { nombre: 'Pedidos de taller', columnas: ['Taller', 'OT', 'Modelo', 'SKU', 'Pedido', 'Llegado', 'Pendiente', 'Estado', 'Fecha de llegada', 'Fecha prometida', 'Fallas'],
-      filas: D.lineas.map(x => { const t = talle36_(x.nombreTienda || x.producto); return [x.taller, x.ot, x.nombreTienda || x.producto, x.sku, x.planificado, x.ingresado + x.sobrante, x.faltante, EST[estadoTaller37_(x)], x.ultimaLlegada ? fdm_(x.ultimaLlegada) : '', x.fechaPrometida ? fdm_(x.fechaPrometida) : '', x.fallas || '']; }) }] });
+      filas: D.lineas.map(x => { const t = talle36_(x.nombreTienda || x.producto); return [x.taller, x.ot, x.nombreTienda || x.producto, x.sku, x.planificado, x.ingresado + x.sobrante, x.faltante, EST[estadoTaller37_(x)], x.ultimaLlegada ? fdm_(x.ultimaLlegada) : '', x.fechaPrometida ? fdm_(x.fechaPrometida) : '', x.fallas || '']; }) }, { nombre: 'Ingresó en el mes', columnas: ['Fecha de llegada', 'Modelo', 'SKU', 'Cantidad', 'Taller', 'OT', 'Pedido completo'],
+      filas: D.lineas.filter(x => x.ultimaLlegada && x.ultimaLlegada.slice(0, 7) === hoy_().slice(0, 7) && (x.ingresado || x.sobrante)).sort((a, b) => b.ultimaLlegada.localeCompare(a.ultimaLlegada))
+        .map(x => [fdm_(x.ultimaLlegada), x.nombreTienda || x.producto, x.sku, x.ingresado + x.sobrante, x.taller, x.ot, x.faltante ? 'No' : 'Sí']) }] });
 }
 /** «Actualizar datos»: relee las DOS planillas (Control ingreso y Ventas Palermo), cualquier día de la semana. */
 function actualizarPlanillas(token) {
@@ -4965,15 +4987,18 @@ function actualizarPlanillas(token) {
   if (!['clientes', 'produccion', 'cierre', 'kpi', 'finanzas'].some(p => s.perms.indexOf(p) >= 0)) throw new Error('PERM');
   return actualizarPlanillas_(s);
 }
-function actualizarPlanillas_(s) {
-  const out = [];
+let CMP_LEIDOS_ = [];
+function actualizarPlanillas_(s, rapido) { CMP_LEIDOS_ = []; const B = !!s || !!rapido;   // B = desde el botón: modo rápido (< 2 min)
+  const out = [], T0 = Date.now(); let tPaso = Date.now();
+  const marca = () => { const L = out[out.length - 1]; if (L && L.seg == null) L.seg = Math.round((Date.now() - tPaso) / 100) / 10; tPaso = Date.now(); };
+  const push0 = out.push.bind(out); out.push = o => { const n = push0(o); marca(); return n; };
   try { const d = control_(true, true); out.push({ planilla: d.archivo || 'Control ingreso Nueva temporada 27', ok: true, ts: d.leida, modificado: d.modificado, avisos: d.avisos }); }
   catch (e) { out.push({ planilla: 'Control ingreso Nueva temporada 27', ok: false, ts: new Date().toISOString(), error: String(e.message || e) }); }
   const c = sync_(s);
   out.push({ planilla: c.archivo || 'HeyBlackk_VentasPalermo_2026 (1)', ok: !!c.ok, ts: c.ts, modificado: c.modificado || null, error: c.ok ? null : c.error });
   // 3.9c · Copia de los comprobantes de Contabilium (antes del Templete: la conciliación la usa). Botón: mes actual y anterior.
   if (ctbConfigurado_()) {
-    try { const r = comprobantesSync_(s ? 90000 : 200000) || {}; out.push({ planilla: 'Contabilium · comprobantes de venta', ok: !(r.pendientes || []).length, ts: new Date().toISOString(), modificado: null,
+    try { const r = comprobantesSync_(B ? 60000 : 200000, false, B) || {}; CMP_LEIDOS_ = r.leidos || []; out.push({ planilla: 'Contabilium · comprobantes de venta', ok: !(r.pendientes || []).length, ts: new Date().toISOString(), modificado: null,
       error: (r.pendientes || []).length ? 'Faltan leer: ' + r.pendientes.join(', ') + ' (se completa en la próxima actualización)' : null }); }
     catch (e) { out.push({ planilla: 'Contabilium · comprobantes de venta', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
   }
@@ -4985,15 +5010,18 @@ function actualizarPlanillas_(s) {
     try { const R = finanzas_(true), k = R.contabilium || {};
       out.push({ planilla: 'Templete registro actividades (Dropbox)', ok: true, ts: R.leida, modificado: R.modificado });
       if (k.configurado) out.push({ planilla: 'Contabilium · ventas facturadas (COT)', ok: !!k.ok, ts: k.leida || R.leida, modificado: null, error: k.ok ? null : k.error });
-      if (k.configurado) { const r2 = ctbActualizarResumenes_() || {}; out.push({ planilla: 'Contabilium · productos y cobranzas', ok: !r2.productosError && !r2.cobranzasError, ts: new Date().toISOString(), modificado: null, error: r2.productosError || r2.cobranzasError || null }); }
+      let P0 = null; try { P0 = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
+      const resViejo = !B || !P0 || Date.now() - new Date(P0.leida).getTime() > 3 * 3600000;   // el botón no relee productos y cobranzas si tienen menos de 3 h
+      if (k.configurado && resViejo) { const r2 = ctbActualizarResumenes_() || {}; out.push({ planilla: 'Contabilium · productos y cobranzas', ok: !r2.productosError && !r2.cobranzasError, ts: new Date().toISOString(), modificado: null, error: r2.productosError || r2.cobranzasError || null }); }
     } catch (e) { out.push({ planilla: 'Templete registro actividades (Dropbox)', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
   }
   // 3.9 · Ventas por canal (Contabilium, no depende del Templete). Desde el botón solo los últimos días; el historial y el stock del sorteo, en la de las 7 h.
   if (ctbConfigurado_()) {
-    try { const v = ventasCanalSync_(!s) || {}; out.push({ planilla: 'Contabilium · ventas por canal', ok: !v.historialError, ts: new Date().toISOString(), modificado: null, error: v.historialError || null }); }
+    try { const v = CMP_LEIDOS_.indexOf(hoy_().slice(0, 7)) >= 0 && PROPS.getProperty('VC_HIST') === 'ok' ? { filas: vcDesdeCmp_(CMP_LEIDOS_) } : (ventasCanalSync_(!B) || {}); out.push({ planilla: 'Contabilium · ventas por canal', ok: !v.historialError, ts: new Date().toISOString(), modificado: null, error: v.historialError || null }); }
     catch (e) { out.push({ planilla: 'Contabilium · ventas por canal', ok: false, ts: new Date().toISOString(), error: String(e.message || e).slice(0, 200) }); }
-    if (!s) try { stockPalermoArt_(true); } catch (e) {}
+    if (!B) try { stockPalermoArt_(true); } catch (e) {}
   }
+  out.total = Math.round((Date.now() - T0) / 1000); out.push = push0; try { PROPS.setProperty('ACT_SEG', JSON.stringify({ ts: new Date().toISOString(), seg: out.total, boton: !!s })); } catch (e) {}
   log_(s, 'actualizar_planillas', out.every(x => x.ok) ? 'ok' : 'error', '', out.map(x => x.planilla + ': ' + (x.ok ? 'ok' : x.error)).join(' · ').slice(0, 300));
   return out;
 }

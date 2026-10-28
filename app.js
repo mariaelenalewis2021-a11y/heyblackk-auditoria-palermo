@@ -2596,6 +2596,10 @@ function pintarProduccion(body, D, recargar){
       el("div",{class:"split"},
         T.ultimos.length ? el("div",{}, el("h3",{text:"Últimos que llegaron"}), el("ol",{class:"top5"}, T.ultimos.map(x=>el("li",{}, el("b",{text:x.modelo}), ` · ${u36(x.cantidad)} · ${x.taller} · ${fmtF(x.fecha).slice(0,5)}`)))) : null,
         T.proximos.length ? el("div",{}, el("h3",{text:"Próximos a llegar"}), el("ol",{class:"top5"}, T.proximos.map(x=>{ const [ic,t,c]=EST_T[x.estado]; return el("li",{}, el("b",{text:x.modelo}), ` · faltan ${u36(x.pendiente)} · ${x.taller}${x.fecha?" · "+fmtF(x.fecha).slice(0,5):""} `, el("span",{class:"pill "+c,text:ic+" "+t})); }))) : null),
+      T.delMes && T.delMes.productos ? el("div",{class:"delmes39"}, el("h3",{text:`📥 Ingresó en ${["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"][Number(T.delMes.mes.slice(5,7))-1]}: ${u36(T.delMes.unidades)} en ${T.delMes.productos} productos`}),
+        el("ol",{class:"top5"}, T.delMes.lista.slice(0,12).map(x=>el("li",{}, el("b",{text:x.modelo}), ` · ${u36(x.cantidad)} · ${x.taller} · ${fmtF(x.fecha).slice(0,5)}${x.completo?" · ✅ completo":""}`))),
+        T.delMes.lista.length>12 ? el("p",{class:"hint",text:`Y ${T.delMes.lista.length-12} productos más: la lista completa está en la descarga (hoja «Ingresó en el mes»).`}) : null,
+        el("p",{class:"hint",text:"Sale de la hoja INGRESO de «Control ingreso» (fecha de la última llegada de cada producto)."})) : el("p",{class:"hint",text:"Todavía no ingresó mercadería de talleres este mes."}),
       el("h3",{text:"Talleres (tocá uno para ver su detalle)"}),
       el("div",{class:"row chips-taller"}, T.talleres.filter(t=>t.pedido).slice(0,10).map(t=>el("button",{class:"btn sm"+(t.atrasados?" danger":""),type:"button",onclick:()=>detalleTallerUI(t.taller)}, `${t.taller} · ${t.pedido?Math.round(t.llegado/t.pedido*100):0} %${t.falta?" · faltan "+t.falta:""}`))),
       botonesDescarga("taller","todos los pedidos de taller")));
