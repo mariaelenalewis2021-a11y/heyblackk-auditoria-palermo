@@ -2172,6 +2172,15 @@ function botonesCanales(){
 }
 function cardGrandes(K){
   const G = K && K.grandesCuentas; if (!G || !G.clientes) return null;
+  // 3.9l · Temporada SS27 con la misma fuente que Finanzas: pedido (Control ingreso) y lo abonado (Contabilium + cuenta corriente)
+  if (G.ss27 && G.ss27.cuentas.length){ const S = G.ss27;
+    return el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas · temporada SS27"}),
+      el("div",{class:"hkpis"}, hk("Pedido SS27", moneyK(S.pedido)), hk("Abonaron", moneyK(S.abono), S.pct!=null?`${S.pct} % del pedido`:"", "pos"),
+        hk("Falta pagar", moneyK(S.faltaPagar), "", S.faltaPagar?"neg":""), hk("Ya despachado (facturado)", moneyK(S.facturado))),
+      el("ol",{class:"top5"}, S.cuentas.map(c=>el("li",{}, el("b",{text:c.granCuenta}), ` · pidió ${moneyK(c.pedido)} · abonó ${moneyK(c.abono)}${c.pct!=null?` (${c.pct} %)`:""}`,
+        el("span",{class:"hint",text:` · falta ${moneyK(c.faltaPagar)} · despachado ${moneyK(c.facturado)}${c.aFavor?` · a favor ${moneyK(c.aFavor)}`:""}`})))),
+      el("p",{class:"hint",text:"Abonado = lo mayor entre las cobranzas de Contabilium y los pagos SS27 de la planilla de cuentas corrientes. Pedido: «Control ingreso Nueva temporada 27». Despachado: facturas de Contabilium desde el 1/9."}));
+  }
   return el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas (franquicias y mayoristas)"}),
     el("p",{class:"lead",text:`${G.clientes} clientes de «Control ingreso Nueva temporada 27».`}),
     el("div",{class:"hkpis"},
@@ -2875,7 +2884,10 @@ function pintarFinanzas(body, D, recargar){
   // 6 · Quién compra y quién paga
   const fila = el("div",{class:"split"});
   if (!R.sectores && R.canales.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🛍️ ¿Por dónde se vende? ("+R.anio+")"}), barrasH(R.canales.slice(0,6), "#4F46E5")));
-  if (R.franquicias.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que pagó cada gran cuenta ("+R.anio+")"}),
+  if (R.gcSS27 && R.gcSS27.cuentas.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que abonó cada gran cuenta · SS27"}),
+    el("ol",{class:"top5"}, R.gcSS27.cuentas.map(c=>el("li",{}, el("b",{text:c.granCuenta}), ` · ${moneyK(c.abono)}`, el("span",{class:"hint",text:` de ${moneyK(c.pedido)} pedidos${c.pct!=null?` (${c.pct} %)`:""} · compró en el año ${moneyK(c.facturadoAnio)}`})))),
+    el("p",{class:"hint",text:"Misma fuente que Indicadores: Contabilium + cuenta corriente (lo mayor) y pedido de «Control ingreso»."})));
+  else if (R.franquicias.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que pagó cada gran cuenta ("+R.anio+")"}),
     el("ol",{class:"top5"}, R.franquicias.slice(0,5).map(f=>el("li",{}, el("b",{text:f.franquicia}), ` · ${moneyK(f.cobradoAnio)}`, el("span",{class:"hint",text:f.ultimo?` · último pago ${fmtF(f.ultimo)}`:""}))))));
   if (R.topClientes.length) fila.append(el("div",{class:"card"}, el("h3",{text:"⭐ Los 5 que más compraron ("+R.anio+")"}), el("ol",{class:"top5"}, R.topClientes.map(c=>el("li",{}, el("b",{text:c.nombre}), " · "+moneyK(c.monto))))));
   if (fila.children.length) body.append(fila);
@@ -2901,16 +2913,20 @@ function pintarFinanzas(body, D, recargar){
         c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null))),
       el("p",{class:"hint",text:"El cliente sale del detalle del anticipo (a veces paga un tercero). El pedido y lo abonado vienen de «Control ingreso Nueva temporada 27». El detalle pago por pago está en la descarga."})));
   }
-  // 7b1 · Grandes cuentas según Contabilium (solo María): facturas y cobranzas
-  if (D.maria && R.grandesCuentasCtb && R.grandesCuentasCtb.cuentas.length){ const G = R.grandesCuentasCtb;
-    const cab = el("tr",{}, ...["Gran cuenta","Facturado SS27","Cobrado","Debe hoy","Pedido SS27","Falta facturar"].map((t,i)=>el("th",{class:i?"n":"",text:t})));
-    const filas = G.cuentas.map(g=>el("tr",{}, el("th",{scope:"row",text:g.granCuenta}), el("td",{class:"n",text:moneyK(g.facturado27)}), el("td",{class:"n",text:moneyK(g.cobrado27)}),
-      el("td",{class:"n"+(g.debe?" neg":""),text:g.debe?moneyK(g.debe)+(g.vencido?` (vencido ${moneyK(g.vencido)})`:""):g.aFavor?`a favor ${moneyK(g.aFavor)}`:"–"}), el("td",{class:"n",text:g.pedido27?moneyK(g.pedido27):"–"}), el("td",{class:"n",text:g.faltaFacturar!=null?moneyK(g.faltaFacturar):"–"})));
-    filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), el("td",{class:"n",text:moneyK(G.facturado27)}), el("td",{class:"n",text:moneyK(G.cobrado27)}), el("td",{class:"n",text:moneyK(G.debe)}), el("td",{class:"n",text:G.pedido27?moneyK(G.pedido27):"–"}), el("td",{})));
-    body.append(el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas según Contabilium"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
-      el("p",{class:"lead",text:`Temporada SS27 = facturas desde el ${fmtF(G.desde27)}. «Cobrado» = las cobranzas cargadas en Contabilium (también las «a cuenta», todavía sin aplicar a una factura) o lo ya aplicado a las facturas, lo que sea mayor. «Debe hoy» = lo facturado que falta cobrar + lo pendiente de facturas anteriores (descontadas notas de crédito). Si cobró más de lo facturado, queda «a favor» (anticipo de mercadería por entregar). El pedido sale de «Control ingreso».`}),
+  // 7b1 · Grandes cuentas · SS27 (solo María): pedido, abonado y lo que falta — la misma fuente que Indicadores
+  if (D.maria && R.gcSS27 && R.gcSS27.cuentas.length){ const S = R.gcSS27;
+    const cab = el("tr",{}, ...["Gran cuenta","Pedido SS27","Abonó","Falta pagar","Despachado (facturado)","Debe hoy / a favor"].map((t,i)=>el("th",{class:i?"n":"",text:t})));
+    const filas = S.cuentas.map(c=>el("tr",{}, el("th",{scope:"row",text:c.granCuenta}), el("td",{class:"n",text:c.pedido?moneyK(c.pedido):"–"}),
+      el("td",{class:"n",text:moneyK(c.abono)+(c.pct!=null?` (${c.pct} %)`:"")}), el("td",{class:"n"+(c.faltaPagar?" neg":""),text:c.pedido?moneyK(c.faltaPagar):"–"}),
+      el("td",{class:"n",text:moneyK(c.facturado)}), el("td",{class:"n"+(c.debe?" neg":""),text:c.debe?"debe "+moneyK(c.debe):c.aFavor?"a favor "+moneyK(c.aFavor):"–"})));
+    filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), el("td",{class:"n",text:moneyK(S.pedido)}), el("td",{class:"n",text:moneyK(S.abono)+(S.pct!=null?` (${S.pct} %)`:"")}),
+      el("td",{class:"n",text:moneyK(S.faltaPagar)}), el("td",{class:"n",text:moneyK(S.facturado)}), el("td",{class:"n",text:S.debe?"debe "+moneyK(S.debe):""})));
+    const av = [].concat(...S.cuentas.map(c=>c.avisos.map(t=>c.granCuenta+": "+t)));
+    body.append(el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas · temporada SS27"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
+      el("p",{class:"lead",text:"Pedido = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre las cobranzas de Contabilium (incluidas las «a cuenta») y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Debe / a favor = abonado contra lo ya despachado."}),
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
-      el("p",{class:"hint",text:`Saldos de Contabilium leídos ${G.leida?fechaHora(G.leida):"–"} (se actualizan a las 7 h). Factura por factura en «Descargar Excel» → hoja «Grandes cuentas (Contabilium)».`})));
+      av.length ? el("ul",{class:"ant38-av"}, av.map(t=>el("li",{text:"🟡 "+t}))) : el("p",{class:"hint",text:"✅ Contabilium y la planilla de cuentas corrientes coinciden."}),
+      el("p",{class:"hint",text:`Contabilium leído ${S.leida.contabilium?fechaHora(S.leida.contabilium):"–"} · planilla modificada ${S.leida.cuentaCorriente?fechaHora(S.leida.cuentaCorriente):"–"}. Lo que compró cada uno en el año está en «Lo que abonó cada gran cuenta».`})));
   }
   // 7b2 · Cuentas corrientes de grandes cuentas (solo María): saldo real, temporada SS27 y cruces
   if (D.maria && (R.cuentasCorrientes || R.ctaCteError)){ const CC = R.cuentasCorrientes;
@@ -3451,7 +3467,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9k";
+const APP_V = "3.9l";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}

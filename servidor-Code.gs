@@ -1234,6 +1234,7 @@ function finanzas_(forzar) {
   if (CC) try { R.cuentasCorrientes = ccPanel_(CC, Fo); } catch (e) { R.ctaCteError = String(e.message || e).slice(0, 200); }
   if (DC.length) R.alertas.unshift({ nivel: 'amarillo', texto: 'Revisar posible doble conteo: ' + DC.length + ' factura(s) a grandes cuentas por ' + $M_(DC.reduce((a, x) => a + x.monto, 0)) + ' están en el Templete como cobro y, según la planilla de cuentas corrientes, se pagaron con anticipos que también están cargados (fila ' + DC.map(x => x.fila).join(', ') + '). No se descontó nada: confirmalo.' });
   try { R.grandesCuentasCtb = gcContabilium_(); } catch (e) {}
+  try { R.gcSS27 = gcSS27_(); } catch (e) {}
   if (dup.duplicados.length) R.alertas.push({ nivel: 'amarillo', texto: 'En el Templete hay ' + dup.duplicados.length + ' facturas cargadas dos veces (mismo número y mismo cliente): suman ' + $M_(dup.montoDeMas) + ' de más en ventas. Están en «Control de facturas».' });
   if (dup.mismoNumero.length) R.alertas.push({ nivel: 'amarillo', texto: dup.mismoNumero.length + ' números de factura aparecen con clientes distintos en el Templete: seguramente es un error de tipeo en el número.' });
   if (ctb.ok) ctb.conciliacion.forEach(c => { if (c.montoFalta > 0) R.recomendaciones.push('Cargar en el Templete las ' + c.faltaCargar.length + ' facturas de ' + MES_NOM(c.mes).split(' ')[0] + ' que están en Contabilium (' + $M_(c.montoFalta) + '). Mientras tanto el panel ya las suma.'); });
@@ -1978,6 +1979,30 @@ function gcContabilium_() {
     .sort((a, b) => b.facturado27 - a.facturado27 || b.facturadoAnio - a.facturadoAnio);
   const t = k => L.reduce((s, g) => s + (g[k] || 0), 0);
   return { cuentas: L, aFavor: t('aFavor'), facturado27: t('facturado27'), cobrado27: t('cobrado27'), debe: t('debe'), vencido: t('vencido'), pedido27: t('pedido27'), desde27: SS27_DESDE, leida: leida };
+}
+/** 3.9l · Grandes cuentas · temporada SS27, UNA sola fuente para toda la app (Indicadores, Finanzas y audio):
+    pedido (Control ingreso), facturado/despachado (Contabilium) y lo que ABONÓ: se toma lo mayor entre las cobranzas de
+    Contabilium (recibos + lo aplicado a facturas) y los pagos SS27 de la planilla de cuentas corrientes, y se avisa si difieren. */
+function gcSS27_() {
+  let G = null; try { G = gcContabilium_(); } catch (e) {}
+  let CC = null; try { CC = ctaCte_(false); } catch (e) {}
+  const nom = n => finFranq_(n) || (x => { const y = FIN_FRANQ_DET.find(z => z[1].test(x)); return y ? y[0] : null; })(finNorm_(n));
+  const ped = {}; try { (control_(false).clientes || []).filter(c => c.seCuenta !== false).forEach(c => { const k = nom(c.nombre); if (!k) return; const p = ped[k] = ped[k] || { pedido: 0, entregado: 0, pedidoU: 0, entregadoU: 0 };
+    p.pedido += c.montoTotal || c.monto || 0; p.entregado += c.montoDespachado || 0; p.pedidoU += v37_(c, 'pedidoTotal', 'pedido') || 0; p.entregadoU += v37_(c, 'despachado', 'entregado') || 0; }); } catch (e) {}
+  const cc = {}; ((CC && CC.cuentas) || []).forEach(a => { const T = a.ss27; if (T) cc[a.granCuenta] = { pagado: T.pagado, desde: T.desde, ultimo: a.ultimo }; });
+  const ctb = {}; ((G && G.cuentas) || []).forEach(g => { ctb[g.granCuenta] = g; });
+  const ks = FIN_FRANQ.map(x => x[0]).filter(k => ped[k] || cc[k] || ctb[k]);
+  const L = ks.map(k => { const g = ctb[k] || {}, p = ped[k] || {}, c = cc[k] || {};
+    const cobCtb = Math.round(g.cobrado27 || 0), cobCc = Math.round(c.pagado || 0), abono = Math.max(cobCtb, cobCc), fac = Math.round(g.facturado27 || 0);
+    const r = { granCuenta: k, pedido: Math.round(p.pedido || 0), pedidoU: p.pedidoU || 0, entregadoU: p.entregadoU || 0, facturado: fac, facturadoAnio: Math.round(g.facturadoAnio || 0),
+      abonoContabilium: cobCtb, abonoCuentaCorriente: cobCc, abono: abono, fuente: abono === cobCtb && abono === cobCc ? 'ambas' : abono === cobCtb ? 'Contabilium' : 'cuenta corriente',
+      faltaPagar: Math.max(0, Math.round((p.pedido || 0) - abono)), aFavor: Math.max(0, abono - fac), debe: Math.max(0, fac - abono) + Math.round(g.debeAnterior || 0),
+      pct: p.pedido ? Math.round(abono / p.pedido * 100) : null, avisos: [] };
+    if (cobCtb !== cobCc && Math.abs(cobCtb - cobCc) > Math.max(10000, abono * 0.01)) r.avisos.push('Lo abonado no coincide: Contabilium ' + $M_(cobCtb) + ' y cuenta corriente ' + $M_(cobCc) + (cobCc > cobCtb ? ' (faltan cargar cobranzas en Contabilium)' : ' (falta actualizar la planilla)') + '.');
+    return r; }).sort((a, b) => b.pedido - a.pedido || b.abono - a.abono);
+  const t = k => L.reduce((s, x) => s + (x[k] || 0), 0);
+  return { cuentas: L, pedido: t('pedido'), abono: t('abono'), facturado: t('facturado'), faltaPagar: t('faltaPagar'), aFavor: t('aFavor'), debe: t('debe'), desde: SS27_DESDE,
+    pct: t('pedido') ? Math.round(t('abono') / t('pedido') * 100) : null, leida: { contabilium: G && G.leida, cuentaCorriente: CC && CC.modificado } };
 }
 const pctVs_ = (a, b) => b > 0 ? Math.round((a - b) / b * 1000) / 10 : null;
 /** KPIs por canal: hoy, ayer, mes, año; vs. mismo período del mes anterior y del año pasado; ticket promedio; participación. */
@@ -3495,6 +3520,7 @@ function getKPIs(token, desde, hasta) {
   let canales = null, grandes = null, google = null;
   try { canales = kpiCanales_(hoy, !verGC); } catch (e) { console.warn('kpiCanales_ ' + e); }
   if (verGC) try { grandes = kpiGrandesCuentas_(control_(false)); if (grandes) delete grandes.lista; } catch (e) {}
+  if (verGC) try { const S = gcSS27_(); if (grandes) { grandes.ss27 = S; grandes.cobrado = S.abono; grandes.saldo = S.faltaPagar; } } catch (e) {}
   try { google = googlePanel_(hoy); } catch (e) {}   // 3.7: dólar y noticias que pueden impactar a la marca
   const audio = audio_(s.user, comercial, auditoria, { canales: canales, grandes: grandes, google: google, pendientes: pendientes, acciones: accionesK, feriados: feriados, hoy: hoy, rrhh: rrhh, clientes: cliR, clientesLista: cliL, produccion: proR, clima: comercial && !comercial.sinDatos ? clima37_() : null, contexto: ctxK });
   return {
