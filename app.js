@@ -2597,6 +2597,33 @@ function pestanas39(clave, tabs){
   return el("div",{class:"tabs39-wrap"}, bar, panel);
 }
 const MES39 = m => ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"][Number(String(m).slice(5,7))-1];
+/** 3.9q · Distribución SS27: últimos ingresos, compromisos por gran cuenta y cuánto repartir sin dejar a Lima con menos de 5 u. */
+function tabDistribucion(X){
+  const out = [], T = X.totales;
+  out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"📦 Distribución · Nueva temporada SS27"}), el("span",{class:"spacer"}), el("span",{class:"pill",text:`Mínimo en Lima: ${X.minimoLima} u por producto y talle`})),
+    el("div",{class:"hkpis",style:"margin-top:10px"}, hk("Pendiente de separar", u36(T.pendiente), "grandes cuentas habilitadas", "neg"), hk("Se puede separar hoy", u36(T.separar), "sin bajar Lima de 5", "pos"), hk("En producción", u36(T.enProduccion), "OT abiertas"), T.aValidar ? hk("Para validar", String(T.aValidar)+" productos", "fuentes no coinciden", "neg") : null),
+    el("p",{class:"hint",text:"Solo cuenta la producción SS27. «Pendiente» ya descuenta lo que cada cliente se llevó y lo que está separado en su depósito, así nada se cuenta dos veces. La app recomienda: no mueve stock ni cambia planillas."})));
+  if (X.recordatorios.length) out.push(el("div",{class:"card"}, el("h3",{text:"🔔 Recordatorios"}),
+    el("ul",{class:"alertas-rrhh"}, X.recordatorios.slice(0,8).map(r=>el("li",{class:"al-"+(r.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:r.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:r.texto}))))));
+  if (X.ingresos.length) out.push(el("div",{class:"card"}, el("h3",{text:"📥 Últimos ingresos · SS27"}),
+    el("ol",{class:"lista39"}, X.ingresos.slice(0,8).map(i=>el("li",{}, el("b",{text:i.producto}), ` · ingresaron ${u36(i.cantidad)} el ${fmtF(i.fecha).slice(0,5)}`,
+      el("span",{class:"hint",text: i.comprometido==null ? " · ⚠️ sin cruce con «STOCK vs Pedidos»: validar" : ` · comprometido ${u36(i.comprometido)} · separar hoy ${u36(i.separar)} · quedaría en Lima ${i.quedaLima==null?"sin dato":u36(i.quedaLima)}${i.validar?" · validar":""}`})))) ));
+  if (X.clientes.length) out.push(el("div",{class:"card"}, el("h3",{text:"🤝 Por gran cuenta"}),
+    el("div",{class:"lista-cli"}, X.clientes.map(c=>el("div",{class:"cli37"+(c.bloqueado?" bloq39":"")},
+      el("b",{text:c.cliente}), c.estadoPago ? el("span",{class:"pill "+(c.bloqueado?"bad":""),text:c.bloqueado?"⛔ "+c.estadoPago:c.estadoPago}) : null,
+      el("span",{class:"hint",text:`Pidió ${u36(c.pedido)} · se llevó ${u36(c.sellevo)} · separado ${u36(c.separado)} · pendiente ${u36(c.pendiente)}`}),
+      c.bloqueado ? el("span",{class:"notice bad",text:"No separar mercadería hasta confirmar el pago."}) :
+        el("span",{text: c.separar ? `👉 Separar hoy ${u36(c.separar)}: `+c.top.map(x=>`${x.producto} ${x.separar}`).join(" · ")+(c.pendiente>c.separar?` (faltan ${u36(c.pendiente-c.separar)} por falta de stock)`:"") : c.pendiente ? "Sin stock para separar hoy sin bajar Lima de 5." : "✅ Nada pendiente."}),
+      c.validar ? el("span",{class:"hint",text:"⚠️ "+c.validar}) : null)))));
+  const P = X.productos.filter(p=>p.pendiente||p.alertas.length).slice(0,6);
+  if (P.length) out.push(el("div",{class:"card"}, el("h3",{text:"🧮 Productos con más pendiente"}),
+    el("ol",{class:"top5"}, P.slice(0,5).map(p=>el("li",{}, el("b",{text:p.producto}), ` · Lima ${p.stock==null?"sin dato":u36(p.stock)} · pendiente ${u36(p.pendiente)} · separar ${u36(p.asignado)} · queda ${p.quedaLima==null?"–":u36(p.quedaLima)}`,
+      p.distribucion.length ? el("span",{class:"hint",text:" · "+p.distribucion.map(a=>`${a.cliente} ${a.separar}`).join(", ")}) : null,
+      p.alertas.length ? el("span",{class:"hint",text:" · ⚠️ "+p.alertas[0]}) : null))),
+    el("p",{class:"hint",text:"Criterio: primero los compromisos de cada cliente; si no alcanza, se reparte en proporción a lo que le falta a cada uno (no en partes iguales), siempre dejando 5 u en Lima. Si la planilla y Contabilium no coinciden, se usa el stock menor y se marca para validar."}),
+    botonesDescarga("distribucion","por producto y talle, por cliente y últimos ingresos")));
+  return out;
+}
 /** 3.9o · Lo más vendido de SS27 (Contabilium, última semana) con su stock: alerta si quedan menos de 5 u. */
 function cardSS27Stock(R){
   const L = R.ss27Top || []; if (!L.length) return null;
@@ -2619,6 +2646,8 @@ function pintarProduccion(body, D, recargar){
   if (kp.length || al.length) body.append(el("div",{class:"card"}, el("h2",{text:"🧵 Producción hoy"}), kp.length?el("div",{class:"hkpis"}, kp):null,
     al.length ? el("ul",{class:"alertas-rrhh",style:"margin-top:10px"}, al.map(([i,c,t])=>el("li",{class:c}, el("span",{class:"sem",text:i}), el("div",{text:t})))) : null));
   const tabs = [];
+  // ---- 3.9q · Distribución SS27 (primera pestaña: responde qué ingresó, qué reservar y cuánto se puede repartir)
+  if (R.distribucion) tabs.push(["dist","📦 Distribución SS27", ()=>tabDistribucion(R.distribucion)]);
   // ---- Ingresos del mes
   if (T) tabs.push(["ingresos","📥 Qué ingresó", ()=>[el("div",{class:"card"},
     DM && DM.productos ? [el("h3",{text:`Ingresó en ${MES39(DM.mes)}: ${u36(DM.unidades)} en ${DM.productos} productos`}),
@@ -3521,7 +3550,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9p";
+const APP_V = "3.9q";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
