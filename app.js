@@ -2597,6 +2597,14 @@ function pestanas39(clave, tabs){
   return el("div",{class:"tabs39-wrap"}, bar, panel);
 }
 const MES39 = m => ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"][Number(String(m).slice(5,7))-1];
+/** 3.9o · Lo más vendido de SS27 (Contabilium, última semana) con su stock: alerta si quedan menos de 5 u. */
+function cardSS27Stock(R){
+  const L = R.ss27Top || []; if (!L.length) return null;
+  return el("div",{class:"card"}, el("h3",{text:"🌱 SS27 que más se vende · stock en Contabilium"}),
+    el("ol",{class:"top5"}, L.slice(0,5).map(x=>el("li",{}, el("b",{text:x.nombre||x.codigo}), ` · vendió ${x.unidades} u`,
+      x.stock==null ? null : x.stock<5 ? el("span",{class:"pill bad",text:x.stock<=0?"⚠️ sin stock":`⚠️ quedan ${x.stock} u`}) : el("span",{class:"hint",text:` · stock ${x.stock} u`})))),
+    el("p",{class:"hint",text:"Alerta cuando quedan menos de 5 unidades. Ventas de la última semana; stock total de Contabilium (se lee en cada actualización)."}));
+}
 function pintarProduccion(body, D, recargar){
   const R = D.resumen, S = R.stock, F = R.falta, T = R.taller, DM = T && T.delMes, E = T && T.estados;
   body.append(filaActualizacion(D, recargar));
@@ -2607,7 +2615,7 @@ function pintarProduccion(body, D, recargar){
     F ? hk("🧵 Falta producir", u36(F.total), F.paraPedidos?u36(F.paraPedidos)+" son para pedidos":"", "neg") : null,
     E && E.atrasado.pedidos ? hk("🔴 Atrasados", E.atrasado.pedidos+(E.atrasado.pedidos===1?" pedido":" pedidos"), u36(E.atrasado.unidades)+" sin llegar", "neg")
       : E && E.en_produccion.unidades ? hk("🟡 En producción", u36(E.en_produccion.unidades), E.en_produccion.pedidos+" pedidos") : null].filter(Boolean);
-  const al = [].concat((R.alertas||[]).slice(0,2).map(a=>[a.nivel==="rojo"?"🔴":"🟡", "al-"+(a.nivel==="rojo"?"rojo":"amarillo"), a.texto]), (R.recomendaciones||[]).slice(0,1).map(t=>["👉","al-verde",t]));
+  const al = [].concat((R.alertas||[]).slice(0,(R.ss27Bajo||[]).length?3:2).map(a=>[a.nivel==="rojo"?"🔴":"🟡", "al-"+(a.nivel==="rojo"?"rojo":"amarillo"), a.texto]), (R.recomendaciones||[]).slice(0,1).map(t=>["👉","al-verde",t]));
   if (kp.length || al.length) body.append(el("div",{class:"card"}, el("h2",{text:"🧵 Producción hoy"}), kp.length?el("div",{class:"hkpis"}, kp):null,
     al.length ? el("ul",{class:"alertas-rrhh",style:"margin-top:10px"}, al.map(([i,c,t])=>el("li",{class:c}, el("span",{class:"sem",text:i}), el("div",{text:t})))) : null));
   const tabs = [];
@@ -2631,7 +2639,7 @@ function pintarProduccion(body, D, recargar){
   if (F) tabs.push(["falta","✂️ Falta producir", ()=>[el("div",{class:"card"},
     el("div",{class:"hkpis"}, hk("Total", u36(F.total), (F.pctPlanificado||0)+" % de lo planificado", "neg"), hk("Para pedidos", u36(F.paraPedidos)), hk("Para stock mínimo", u36(F.paraMinimo)), F.sinOt ? hk("Talles sin OT", String(F.sinOt), "", "neg") : null),
     F.top.length ? [el("h3",{text:"Lo más urgente"}), el("ol",{class:"top5"}, F.top.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.pedidos+m.minimo)}`, m.urgente?el("span",{class:"pill bad",text:"urgente"}):null, m.taller?el("span",{class:"hint",text:" · "+m.taller}):null)))] : null,
-    botonesDescarga("falta","modelo, talle, cantidad y taller"))]]);
+    botonesDescarga("falta","modelo, talle, cantidad y taller")), cardSS27Stock(R)]]);
   // ---- Talleres
   if (T) tabs.push(["talleres","🚚 Talleres", ()=>[el("div",{class:"card"},
     el("div",{class:"hkpis"}, hk("Llegaron", u36(T.llegadas), `${T.conLlegada} pedidos`), E.en_produccion.unidades ? hk("En producción", u36(E.en_produccion.unidades), `${E.en_produccion.pedidos} pedidos`) : null,
@@ -2776,19 +2784,33 @@ function pintarFinanzas(body, D, recargar){
     el("span",{class:"hint",text:`Datos al ${fechaHora(R.leida)}${S.ultimaCarga?" · último movimiento cargado "+fmtF(S.ultimaCarga):""}`}), el("span",{class:"spacer"}), bAct));
   const ba = barraSeccion(D.audio, "Administración y Finanzas"); if (ba) body.append(ba);
 
-  // ===== 1 · Cómo venimos (una sola tarjeta) =====
-  if (U){
-    const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""}, E = S.equilibrio;
-    const em = {verde:"🟢",amarillo:"🟡",rojo:"🔴"}[sem.color];
-    body.append(el("div",{class:"card sem38 sem-"+sem.color},
-      el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:em}), el("div",{}, el("span",{class:"k",text:"Cómo venimos · "+mesLargo(U.mes)}), el("h2",{text:sem.titulo}), sem.texto?el("p",{class:"lead",text:sem.texto}):null)),
+  // ===== 1 · Cómo venimos (3.9o: el MES EN CURSO primero; el último mes cerrado queda como comparación) =====
+  const E = S.equilibrio, FXc = R.sectores && R.sectores.facturado ? R.sectores.facturado.totalConIva[2] : 0;
+  if (C){
+    const hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date()), dia = Number(hoyAR.slice(8,10)), dm = new Date(Number(C.mes.slice(0,4)), Number(C.mes.slice(5,7)), 0).getDate();
+    const neto = C.ingresos - C.egresos, color = neto >= 0 ? "verde" : (E && C.ingresos >= E.necesario*dia/dm ? "amarillo" : "rojo");
+    const titulo = neto >= 0 ? `Por ahora quedan ${moneyK(neto)} a favor` : `Por ahora salió ${moneyK(-neto)} más de lo que entró`;
+    body.append(el("div",{class:"card sem38 sem-"+color},
+      el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:{verde:"🟢",amarillo:"🟡",rojo:"🔴"}[color]}),
+        el("div",{}, el("span",{class:"k",text:`Cómo venimos · ${mesLargo(C.mes)} (día ${dia} de ${dm})`}), el("h2",{text:titulo}),
+          el("p",{class:"lead",text:`Lo cargado en el Templete hasta ${S.ultimaCarga?fmtF(S.ultimaCarga):"hoy"}. Puede haber cobros que todavía no se cargaron.`}))),
       el("div",{class:"hkpis"},
-        hk("💵 Entró", moneyK(U.ingresos), P?vsNormal(U.ingresos,P.ingresos):"", "pos"),
-        hk("💸 Salió", moneyK(U.egresos), P?vsNormal(U.egresos,P.egresos):"", "neg"),
-        hk(U.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(U.neto)), U.retiros?`con ${moneyK(U.retiros)} de retiros de socios`:"", U.neto<0?"neg":"pos"),
-        C ? hk("📆 "+capi(MESL(C.mes))+" (en curso)", moneyK(C.ingresos), "entró hasta hoy") : null),
-      E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que vender unos ${moneyK(E.necesario)} por mes.`}), medidorVenta(U.ingresos, E.necesario)) : null));
+        hk("💵 Entró", moneyK(C.ingresos), "en lo que va del mes", "pos"),
+        hk("💸 Salió", moneyK(C.egresos), "en lo que va del mes", "neg"),
+        FXc ? hk("🧾 Facturado", moneyK(FXc), "Contabilium, con IVA") : null,
+        U ? hk("📆 "+capi(MESL(U.mes))+" cerró", (U.neto>=0?"+":"−")+moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"en contra", U.neto<0?"neg":"pos") : null),
+      E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que llegar a ${moneyK(E.necesario)} en el mes${C.ingresos<E.necesario&&dia<dm?` · faltan ${moneyK(E.necesario-C.ingresos)} en ${dm-dia} días`:""}.`}), medidorVenta(C.ingresos, E.necesario)) : null));
+  } else if (U){
+    const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""};
+    body.append(el("div",{class:"card sem38 sem-"+sem.color},
+      el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:{verde:"🟢",amarillo:"🟡",rojo:"🔴"}[sem.color]}), el("div",{}, el("span",{class:"k",text:"Cómo venimos · "+mesLargo(U.mes)}), el("h2",{text:sem.titulo}), sem.texto?el("p",{class:"lead",text:sem.texto}):null)),
+      el("div",{class:"hkpis"}, hk("💵 Entró", moneyK(U.ingresos), P?vsNormal(U.ingresos,P.ingresos):"", "pos"), hk("💸 Salió", moneyK(U.egresos), P?vsNormal(U.egresos,P.egresos):"", "neg"),
+        hk(U.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(U.neto)), U.retiros?`con ${moneyK(U.retiros)} de retiros de socios`:"", U.neto<0?"neg":"pos")),
+      E ? medidorVenta(U.ingresos, E.necesario) : null));
   }
+  // Mes cerrado en una línea (el detalle está en «La plata»)
+  if (C && U){ const sem = S.semaforo || {};
+    body.append(el("p",{class:"hint",style:"margin:-4px 2px 0",text:`${capi(mesLargo(U.mes))}: entraron ${moneyK(U.ingresos)} y salieron ${moneyK(U.egresos)}${U.retiros?` (con ${moneyK(U.retiros)} de retiros de socios)`:""}. ${sem.titulo||""}`})); }
   // Qué hacer (máx. 3, siempre a la vista)
   const recs = R.recomendaciones.slice(0,2), pal = t => new Set((String(t).toLowerCase().match(/[a-záéíóúñ]{7,}/g)||[]));
   const yaDicho = t => { const w = pal(t); return recs.some(r=>[...pal(r)].some(x=>w.has(x) && !/septiembre|octubre|noviembre|diciembre|necesario/.test(x))); };
@@ -3450,7 +3472,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9m";
+const APP_V = "3.9o";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}

@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.9n';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.9o';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -1256,14 +1256,18 @@ function audioFinanzas_(u, R) {
   if (!R || !R.meses.length) return '';
   const nombre = String(u && u.nombre || '').trim().split(' ')[0], P = [], U = R.ultimoCerrado, C = R.enCurso, S = R.simple || {};
   P.push((nombre ? 'Hola ' + nombre + '. ' : 'Hola. ') + 'Te cuento, en pocas palabras, cómo viene la plata de Hey Blackk.');
-  if (U) P.push('En ' + MES_NOM(U.mes).split(' ')[0] + ' entraron ' + millones_(U.ingresos) + ' y salieron ' + millones_(U.egresos) + '. ' +
-    (U.neto >= 0 ? 'Quedaron ' + millones_(U.neto) + ' a favor.' : 'Faltaron ' + millones_(-U.neto) + '.') +
-    (U.retiros ? ' De lo que salió, ' + millones_(U.retiros) + ' fueron retiros de los socios.' : ''));
-  if (S.equilibrio) P.push('Para no perder plata, hoy hay que vender ' + millones_(S.equilibrio.necesario).replace(/^(\d)/, 'unos $1') + ' por mes. ' +
+  // 3.9o · Primero el mes en curso
+  if (C) { const fx = R.sectores && R.sectores.facturado, fac = fx ? fx.totalConIva[2] : 0, mc = MES_NOM(C.mes).split(' ')[0], dia = Number(hoy_().slice(8, 10)), dm = new Date(Number(C.mes.slice(0, 4)), Number(C.mes.slice(5, 7)), 0).getDate();
+    P.push('En lo que va de ' + mc + ' entraron ' + millones_(C.ingresos) + ' y salieron ' + millones_(C.egresos) + (C.ingresos >= C.egresos ? '; por ahora quedan ' + millones_(C.ingresos - C.egresos) + ' a favor.' : '; por ahora salió ' + millones_(C.egresos - C.ingresos) + ' más de lo que entró.') +
+      (fac ? ' Facturado en ' + mc + ', según Contabilium: ' + millones_(fac) + '.' : '') +
+      (S.equilibrio && dia < dm ? ' Para no perder plata hay que llegar a ' + millones_(S.equilibrio.necesario) + (C.ingresos >= S.equilibrio.necesario ? ', y ya se llegó.' : '; faltan ' + millones_(S.equilibrio.necesario - C.ingresos) + ' en los ' + palabras_(dm - dia) + ' días que quedan.') : '') +
+      ' Ojo: puede haber cobros que todavía no se cargaron en el Templete.'); }
+  if (U) P.push('Para comparar, ' + MES_NOM(U.mes).split(' ')[0] + ' cerró con ' + (U.neto >= 0 ? millones_(U.neto) + ' a favor.' : millones_(-U.neto) + ' en contra.'));
+  if (U && !C) P.push('En ' + MES_NOM(U.mes).split(' ')[0] + ' entraron ' + millones_(U.ingresos) + ' y salieron ' + millones_(U.egresos) + '.');
+  if (S.equilibrio && !C) P.push('Para no perder plata, hoy hay que vender ' + millones_(S.equilibrio.necesario).replace(/^(\d)/, 'unos $1') + ' por mes. ' +
     (U && U.ingresos >= S.equilibrio.necesario ? 'En ' + MES_NOM(U.mes).split(' ')[0] + ' se llegó.' : 'En ' + MES_NOM(U.mes).split(' ')[0] + ' no se llegó.'));
   if (S.destinoAnio && S.destinoAnio.length) { const d = S.destinoAnio.filter(x => x.cada100 != null).slice(0, 2);
     if (d.length) P.push('En el año, de cada cien pesos que entraron, ' + d.map(x => x.cada100 + ' se fueron en ' + x.nombre.split(' (')[0].toLowerCase()).join(' y ') + '.'); }
-  if (C) P.push('En lo que va de ' + MES_NOM(C.mes).split(' ')[0] + ' entraron ' + millones_(C.ingresos) + ' y salieron ' + millones_(C.egresos) + '; faltan cargar cobros.');
   // 3.9m · Productos (Contabilium, última semana) y, solo para María, la temporada SS27 de las grandes cuentas
   const PR = R.productos, nom = x => String(x.nombre || x.codigo).toLowerCase();
   if (PR && (PR.palermo || []).length) P.push('Lo más vendido en Palermo esta semana: ' + lista37_(PR.palermo.slice(0, 3).map(x => nom(x) + ', ' + x.unidades + ' unidades')) + '.');
@@ -1545,9 +1549,22 @@ function ctbRecibosGC_(desde, hasta, GN) {
 function ctbActualizarResumenes_() {
   if (!ctbConfigurado_()) return null;
   const out = {};
-  try { const P = ctbProductos_(7); let J = JSON.stringify(P); ['todos', 'fuera', 'ss27', 'palermo'].forEach(k => { while (J.length > 8800 && P[k].length > 5) { P[k].pop(); J = JSON.stringify(P); } }); PROPS.setProperty('CTB_PROD', J); out.productos = P.comprobantes; } catch (e) { out.productosError = String(e.message || e).slice(0, 150); }
+  try { const P = ctbProductos_(7); try { ctbStockDe_(P.ss27 || []); } catch (e) { P.stockError = String(e.message || e).slice(0, 100); } let J = JSON.stringify(P); ['todos', 'fuera', 'ss27', 'palermo'].forEach(k => { while (J.length > 8800 && P[k].length > 5) { P[k].pop(); J = JSON.stringify(P); } }); PROPS.setProperty('CTB_PROD', J); out.productos = P.comprobantes; } catch (e) { out.productosError = String(e.message || e).slice(0, 150); }
   try { const K = ctbCobranzas_(); PROPS.setProperty('CTB_COB', JSON.stringify(K).slice(0, 8500)); out.cobranzas = K.clientes; } catch (e) { out.cobranzasError = String(e.message || e).slice(0, 150); }
   return out;
+}
+/** 3.9o · Stock actual (Contabilium, total) de una lista de productos: lee el catálogo de conceptos (solo GET) y corta apenas los encuentra a todos. */
+function ctbStockDe_(L) {
+  const falta = {}; L.forEach(x => { if (x.codigo) falta[String(x.codigo).trim().toUpperCase()] = x; }); let quedan = Object.keys(falta).length;
+  for (let p = 1; p <= 80 && quedan; p++) { const j = ctbGet_('/api/conceptos/search', { page: p }), I = j.Items || [];
+    I.forEach(c => { const k = String(c.Codigo || '').trim().toUpperCase(), x = falta[k]; if (x && x.stock == null) { x.stock = Math.round(ctbNum_(c.Stock)); quedan--; } });
+    if (!I.length || p * 50 >= (j.TotalItems || 0)) break; }
+  return L;
+}
+/** 3.9o · Lo más vendido de la temporada nueva con menos de 5 unidades en Contabilium (para alertar en Producción). */
+function ss27Bajo_() {
+  let P = null; try { P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
+  return P && P.ss27 ? P.ss27.filter(x => x.stock != null && x.stock < 5).map(x => ({ codigo: x.codigo, nombre: x.nombre, vendidas: x.unidades, stock: x.stock, desde: P.desde, hasta: P.hasta })) : [];
 }
 /** Para correr desde el editor: recalcula productos y cobranzas de Contabilium (solo lectura). */
 function actualizarContabilium() { const r = ctbActualizarResumenes_(); console.log('CTB ' + JSON.stringify(r)); return r; }
@@ -3205,11 +3222,23 @@ function feriadosSemanal() { return feriadosActualizar_(null); }
 /** Editor: la misma actualización que el botón «Actualizar datos» (modo rápido), para medir el tiempo. */
 function actualizarRapido() { SS_ = null; MEMO_ = {}; const t = Date.now(), out = actualizarPlanillas_(null, true); console.log('RAPIDO ' + Math.round((Date.now() - t) / 1000) + ' s ' + JSON.stringify(out.map(o => [o.planilla, o.ok, o.seg, o.error || '']))); return out; }
 function actualizacionDiaria() { SS_ = null; MEMO_ = {}; const out = actualizarPlanillas_(null); console.log('DIARIA ' + JSON.stringify(out)); return out; }
+/** 3.9n · Segunda actualización automática del día, a las 19 h (misma lectura completa que la de las 7 h). */
+function actualizacionTarde() { return actualizacionDiaria(); }
+/** Editor: crea (una sola vez, sin duplicar) el activador de las 19 h y actualiza todo ahora. */
+function instalarActualizacion19() {
+  const T = ScriptApp.getProjectTriggers(), ya = T.filter(t => t.getHandlerFunction() === 'actualizacionTarde');
+  ya.slice(1).forEach(t => ScriptApp.deleteTrigger(t));   // si por error hubiera dos, queda uno
+  if (!ya.length) ScriptApp.newTrigger('actualizacionTarde').timeBased().everyDays(1).atHour(19).nearMinute(0).create();
+  const out = actualizacionDiaria();
+  console.log('ACT19 ' + (ya.length ? 'ya existía' : 'creado') + ' · activadores: ' + ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction()).join(', ') + ' · tz ' + Session.getScriptTimeZone());
+  return out;
+}
 /** Ejecutar UNA vez desde el editor de Apps Script: crea el activador semanal (si no existe) y hace la primera descarga. */
 function instalarActivadores() {
   const hay = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'feriadosSemanal');
   if (!hay) ScriptApp.newTrigger('feriadosSemanal').timeBased().everyWeeks(1).onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(6).create();
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'actualizacionDiaria')) ScriptApp.newTrigger('actualizacionDiaria').timeBased().everyDays(1).atHour(7).create();
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'actualizacionTarde')) ScriptApp.newTrigger('actualizacionTarde').timeBased().everyDays(1).atHour(19).create();
   const st = feriadosActualizar_(null);
   console.log((hay ? 'El activador semanal ya existía.' : 'Activador semanal creado (lunes, 6 h).') + ' FERIADOS ' + JSON.stringify(st));
   return st;
@@ -5033,6 +5062,7 @@ function audioProduccion_(u, R) {
     if (T.ultimos.length) P.push('Últimos ingresos: ' + lista37_(T.ultimos.slice(0, 3).map(x => x.modelo.toLowerCase() + ' de ' + x.taller + ', ' + unid36_(x.cantidad))) + '.');
     if (T.estados.atrasado.pedidos) P.push('Hay ' + palabras_(T.estados.atrasado.pedidos) + (T.estados.atrasado.pedidos === 1 ? ' pedido atrasado' : ' pedidos atrasados') + ', con ' + unid36_(T.estados.atrasado.unidades) + ' que no llegaron.');
   }
+  if ((R.ss27Bajo || []).length) P.push('Atención: de lo que más se vende de la temporada nueva quedan menos de cinco unidades en ' + lista37_(R.ss27Bajo.slice(0, 3).map(x => x.nombre.toLowerCase() + ', ' + (x.stock > 0 ? unid36_(x.stock) : 'sin stock'))) + '.');
   if (R.recomendaciones.length) P.push('La prioridad de hoy: ' + R.recomendaciones[0].replace(/\((\d+) u\)/g, (m, n) => ', ' + unid36_(Number(n))).replace(/^\w/, c => c.toLowerCase()));
   return P.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
@@ -5050,6 +5080,9 @@ function clientesPedidos(token) {
 }
 function produccionPanel(token) {
   const s = sesion_(token, 'produccion'), D = control_(false), R = resumenProduccion_(D);
+  R.ss27Bajo = ss27Bajo_(); let P = null; try { P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
+  R.ss27Top = P && P.ss27 ? P.ss27.slice(0, 10) : [];
+  if (R.ss27Bajo.length) R.alertas.unshift({ nivel: R.ss27Bajo.some(x => x.stock <= 0) ? 'rojo' : 'amarillo', texto: 'SS27 que se vende bien y queda poco en Contabilium (menos de 5 u): ' + R.ss27Bajo.slice(0, 4).map(x => x.nombre + ' · quedan ' + Math.max(0, x.stock) + ' u (vendió ' + x.vendidas + ' en la semana)').join('; ') + '. Conviene reponer o pedir producción.' });
   return { sync: sync36_(), cierreSync: JSON.parse(PROPS.getProperty('CIERRE_SYNC') || 'null'), resumen: R, avisos: D.avisos, audio: audioProduccion_(s.user, R) };
 }
 /** Detalle de un taller (al tocarlo en pantalla): sus pedidos, sin listas largas (hasta 8). */
