@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.9o';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.9p';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -164,7 +164,7 @@ const API = {
   verificarUbicacion: verificarUbicacion, solicitarFichajeManual: solicitarFichajeManual, misSolicitudes: misSolicitudes, resumenHoras: resumenHoras, exportarHoras: exportarHoras,
   probarUbicacion: probarUbicacion, previaBorrado: previaBorrado, borrarFichajes: borrarFichajes, borrarFichaje: borrarFichaje,   // 3.5
   panoramaRRHH: panoramaRRHH, setUmbralesRRHH: setUmbralesRRHH,   // 3.5
-  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, descargaFinanzas: descargaFinanzas, descargaCyber: descargaCyber, descargaCanales: descargaCanales, guardarGoogle: guardarGoogle, auditoriaSorteo10: auditoriaSorteo10, conectarContabilium: conectarContabilium, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
+  clientesPedidos: clientesPedidos, produccionPanel: produccionPanel, detalleTaller: detalleTaller, vozNeural: vozNeural, contratoSugerido: contratoSugerido, finanzasPanel: finanzasPanel, cierreMarcar: cierreMarcar, descargaFinanzas: descargaFinanzas, descargaCyber: descargaCyber, descargaCanales: descargaCanales, guardarGoogle: guardarGoogle, auditoriaSorteo10: auditoriaSorteo10, conectarContabilium: conectarContabilium, descargaControl: descargaControl, actualizarPlanillas: actualizarPlanillas, setTipoCliente: setTipoCliente, permisosJefes: permisosJefes, setPermisoJefe: setPermisoJefe,   // 3.6
   panelFichajesHoy: panelFichajesHoy, corregirFichaje: corregirFichaje, cargarFichajeJefe: cargarFichajeJefe, listarSucursales: listarSucursales, guardarSucursal: guardarSucursal,
   // Personal (altas, bajas)
   listarPersonal: listarPersonal, altaEmpleado: altaEmpleado, editarEmpleado: editarEmpleado, bajaEmpleado: bajaEmpleado,
@@ -1235,6 +1235,7 @@ function finanzas_(forzar) {
   if (DC.length) R.alertas.unshift({ nivel: 'amarillo', texto: 'Revisar posible doble conteo: ' + DC.length + ' factura(s) a grandes cuentas por ' + $M_(DC.reduce((a, x) => a + x.monto, 0)) + ' están en el Templete como cobro y, según la planilla de cuentas corrientes, se pagaron con anticipos que también están cargados (fila ' + DC.map(x => x.fila).join(', ') + '). No se descontó nada: confirmalo.' });
   try { R.grandesCuentasCtb = gcContabilium_(); } catch (e) {}
   try { R.gcSS27 = gcSS27_(); } catch (e) {}
+  try { R.cierre = cierreDatos_(Fo, R); } catch (e) { R.cierre = { error: String(e.message || e).slice(0, 150) }; }   // 3.9p · checklist de cierre (solo María)
   if (dup.duplicados.length) R.alertas.push({ nivel: 'amarillo', texto: 'En el Templete hay ' + dup.duplicados.length + ' facturas cargadas dos veces (mismo número y mismo cliente): suman ' + $M_(dup.montoDeMas) + ' de más en ventas. Están en «Control de facturas».' });
   if (dup.mismoNumero.length) R.alertas.push({ nivel: 'amarillo', texto: dup.mismoNumero.length + ' números de factura aparecen con clientes distintos en el Templete: seguramente es un error de tipeo en el número.' });
   if (ctb.ok) ctb.conciliacion.forEach(c => { if (c.montoFalta > 0) R.recomendaciones.push('Cargar en el Templete las ' + c.faltaCargar.length + ' facturas de ' + MES_NOM(c.mes).split(' ')[0] + ' que están en Contabilium (' + $M_(c.montoFalta) + '). Mientras tanto el panel ya las suma.'); });
@@ -1277,6 +1278,88 @@ function audioFinanzas_(u, R) {
   if (rec) P.push('Para revisar: ' + hablar_(rec.charAt(0).toLowerCase() + rec.slice(1).replace(/\$ ?([\d.,]+) M/g, (m, n) => millones_(Number(n.replace(',', '.')) * 1e6)).replace(/\$ ?[\d.]+/g, m => millones_(Number(m.replace(/[^\d]/g, ''))))));
   return P.join(' ').replace(/\s+/g, ' ').trim();
 }
+/* =================== 3.9p · Cierre de mes (solo María) =================== */
+/* Checklist para cerrar el mes: sueldos, cargas del Templete y cobranzas pendientes. Cada punto que la app puede comprobar
+   se valida solo con los datos (Templete, Contabilium, cajas); los demás los marca María. Las marcas se guardan en el servidor. */
+const CIERRE_FIJOS = /^(Gtos_Admin|Gtos_Comerciales|Impuestos)$/i;
+const cierreK_ = t => nh_(t).replace(/MERCADO ?PAGO/g, 'MP').replace(/[^A-Z0-9]+/g, ' ').trim().split(' ').filter(w => w.length > 1 && !/^(SA|SRL|DE|DEL|LA|EL|Y)$/.test(w)).sort().join(' ');   // mismo nombre aunque cambie el orden («Planas Victor» = «Victor Planas»)
+function cierreDatos_(F, R) {
+  const hoy = hoy_(), mesHoy = hoy.slice(0, 7), mesAnt = finMesAnt_(mesHoy);
+  const eg = F.filter(x => x.tipo === 'egreso' && x.monto > 0 && x.mes);
+  const porMes = m => eg.filter(x => x.mes === m);
+  const unMes = M => {
+    const prev = [finMesAnt_(M), finMesAnt_(finMesAnt_(M)), finMesAnt_(finMesAnt_(finMesAnt_(M)))];
+    // Pagos que se repiten: misma cuenta y misma contraparte en al menos 2 de los 3 meses anteriores (gastos fijos, sueldos, impuestos)
+    const esSue = x => /sueldo|cargas sociales|haberes|aguinaldo/i.test(x.cuenta);
+    const clave = x => (esSue(x) ? 'SUELDO' : cierreK_(x.cuenta)) + '|' + cierreK_(x.contraparte || x.detalle || x.cuenta);   // sueldos: por persona (aunque cambie la cuenta)
+    const hist = {}; prev.forEach((m, i) => porMes(m).filter(x => CIERRE_FIJOS.test(x.rubro)).forEach(x => { const k = clave(x), h = hist[k] = hist[k] || { cuenta: x.cuenta, rubro: x.rubro, contraparte: x.contraparte || x.detalle || '', meses: {}, total: 0 };
+      h.meses[m] = (h.meses[m] || 0) + x.monto; h.total += x.monto; }));
+    const ahora = {}; porMes(M).forEach(x => { const k = clave(x); ahora[k] = (ahora[k] || 0) + x.monto; });
+    const rec = Object.keys(hist).map(k => Object.assign({ clave: k, n: Object.keys(hist[k].meses).length, promedio: Math.round(hist[k].total / Object.keys(hist[k].meses).length),
+      ultimo: Object.keys(hist[k].meses).sort().pop(), cargado: Math.round(ahora[k] || 0) }, hist[k])).filter(h => h.n >= 2);
+    rec.forEach(h => delete h.meses);
+    const esSueldo = h => /sueldo|cargas sociales|haberes|aguinaldo/i.test(h.cuenta);
+    const sueldos = rec.filter(esSueldo).sort((a, b) => b.promedio - a.promedio);
+    const fijos = rec.filter(h => !esSueldo(h) && h.promedio >= 20000).sort((a, b) => b.promedio - a.promedio).slice(0, 25);
+    const sueM = porMes(M).filter(x => /sueldo|cargas sociales|haberes|aguinaldo/i.test(x.cuenta)), sueA = porMes(prev[0]).filter(x => /sueldo|cargas sociales|haberes|aguinaldo/i.test(x.cuenta));
+    const conc = ((R.contabilium || {}).conciliacion || []).find(c => c.mes === M) || null;
+    const SX = R.sectores, iCaja = SX ? SX.meses.indexOf(M) : -1;
+    return { mes: M, enCurso: M === mesHoy, sueldos: sueldos, fijos: fijos,
+      totalSueldos: Math.round(sueM.reduce((a, x) => a + x.monto, 0)), totalSueldosAnt: Math.round(sueA.reduce((a, x) => a + x.monto, 0)),
+      impuestos: Math.round(porMes(M).filter(x => /^Impuestos$/i.test(x.rubro)).reduce((a, x) => a + x.monto, 0)),
+      retiros: Math.round(porMes(M).filter(x => /^Caja$/i.test(x.rubro)).reduce((a, x) => a + x.monto, 0)),
+      movimientos: F.filter(x => x.mes === M).length,
+      templete: conc ? { faltaCargar: conc.faltaCargar.length, montoFalta: Math.round(conc.montoFalta || 0), diferencias: conc.diferencias.length, noEnCtb: conc.noEnCtb.length, anuladas: conc.anuladas.length } : null,
+      diasCaja: iCaja >= 0 ? SX.diasCaja[iCaja] : null };
+  };
+  const dup = R.duplicados || { duplicados: [], mismoNumero: [] };
+  return { meses: [mesAnt, mesHoy].map(unMes), duplicados: dup.duplicados.length, montoDuplicado: Math.round(dup.montoDeMas || 0), mismoNumero: dup.mismoNumero.length,
+    ultimaCarga: (R.simple || {}).ultimaCarga || null, generado: new Date().toISOString() };
+}
+function cierreChecks_() { try { return JSON.parse(PROPS.getProperty('CIERRE_CHK') || '{}'); } catch (e) { return {}; } }
+/** Arma el checklist de un mes: cada punto con su estado (validado por la app, marcado por María, o pendiente). */
+function cierreItems_(m, R) {
+  const C = cierreChecks_()[m.mes] || {}, I = [], $ = $M_;
+  const add = (grupo, id, texto, auto, detalle, manual) => { const ch = C[id];
+    I.push({ grupo: grupo, id: id, texto: texto, detalle: detalle || '', auto: auto, manual: !!manual, marcado: !!(ch && ch.ok), marcadoTs: ch && ch.ts || null,
+      estado: auto === true ? 'validado' : (ch && ch.ok) ? (auto === false ? 'revisar' : 'marcado') : 'pendiente' }); };
+  // 👥 Sueldos: cada persona que se pagó en los meses anteriores
+  m.sueldos.forEach(h => { const completo = h.cargado >= h.promedio * 0.6;   // pagos en partes: se valida cuando llega a ~lo habitual
+    add('sueldos', 'sue:' + h.clave, 'Sueldo · ' + cap36_(h.contraparte || h.cuenta), completo,
+      !h.cargado ? 'No está en el Templete este mes. Lo habitual: ' + $(h.promedio) + '.' : completo ? 'Cargado ' + $(h.cargado) + (h.cargado > h.promedio * 1.25 ? ' (más que lo habitual, ' + $(h.promedio) + ')' : '') + '.' : 'Cargado ' + $(h.cargado) + ' de ~' + $(h.promedio) + ' habituales: ¿falta una parte?'); });
+  if (!m.sueldos.length) add('sueldos', 'sue:total', 'Sueldos del mes cargados en el Templete', m.totalSueldos > 0, m.totalSueldos ? 'Cargado ' + $(m.totalSueldos) : 'Todavía no hay sueldos cargados.');
+  // 📒 Templete
+  const T = m.templete;
+  if (T) { add('templete', 'tpl:facturas', 'Facturas de Contabilium cargadas en el Templete', T.faltaCargar === 0, T.faltaCargar ? T.faltaCargar + ' facturas por ' + $(T.montoFalta) + ' todavía no están (lista en «Descargar Excel»).' : 'Todas cargadas.');
+    add('templete', 'tpl:importes', 'Importes iguales a Contabilium', T.diferencias === 0, T.diferencias ? T.diferencias + ' facturas con importe distinto.' : 'Sin diferencias.');
+    add('templete', 'tpl:anuladas', 'Facturas anuladas sacadas como venta', T.anuladas === 0, T.anuladas ? T.anuladas + ' anuladas con nota de crédito siguen como venta.' : 'Sin anuladas.');
+    add('templete', 'tpl:noctb', 'Números de factura que existen en Contabilium', T.noEnCtb === 0, T.noEnCtb ? T.noEnCtb + ' números del Templete no están en Contabilium (¿error de tipeo?).' : 'Todos existen.'); }
+  const DR = (R.cierre || {}); add('templete', 'tpl:duplicadas', 'Sin facturas cargadas dos veces', !DR.duplicados && !DR.mismoNumero,
+    DR.duplicados || DR.mismoNumero ? (DR.duplicados ? DR.duplicados + ' cargadas dos veces (' + $(DR.montoDuplicado) + ' de más)' : '') + (DR.duplicados && DR.mismoNumero ? ' · ' : '') + (DR.mismoNumero ? DR.mismoNumero + ' números repetidos con clientes distintos' : '') + ' (todo el año).' : 'Sin repetidas.');
+  m.fijos.forEach(h => add('templete', 'pag:' + h.clave, 'Pago fijo · ' + h.cuenta + (h.contraparte && cierreK_(h.contraparte) !== cierreK_(h.cuenta) ? ' · ' + cap36_(h.contraparte) : ''), h.cargado > 0,
+    h.cargado > 0 ? 'Cargado ' + $(h.cargado) : '⚠️ No lo cargaste este mes (lo cargás todos los meses, ~' + $(h.promedio) + '). Último: ' + MES_NOM(h.ultimo).split(' ')[0] + '.'));
+  add('templete', 'tpl:impuestos', 'Impuestos del mes (AFIP, planes, IIBB)', m.impuestos > 0 ? true : null, m.impuestos ? 'Cargado ' + $(m.impuestos) : 'No hay impuestos cargados este mes: marcalo si no corresponde.', true);
+  add('templete', 'tpl:caja', 'Cierres de caja de Palermo cargados', null, m.diasCaja != null ? m.diasCaja + ' días con cierre de caja en la app.' : '', true);
+  add('templete', 'tpl:bancos', 'Conciliar bancos y Mercado Pago contra el Templete', null, 'Lo marcás vos cuando esté conciliado.', true);
+  add('templete', 'tpl:retiros', 'Retiros de socios registrados', null, m.retiros ? 'Cargado ' + $(m.retiros) + ' en retiros.' : 'No hay retiros cargados este mes.', true);
+  // 💰 Cobranzas pendientes
+  const K = R.cobranzas; if (K && K.top) K.top.filter(c => c.vencido > 0).slice(0, 8).forEach(c => add('cobranzas', 'cob:' + cierreK_(c.cliente), 'Reclamar a ' + c.cliente + (c.franquicia ? ' (' + c.franquicia + ')' : ''), null, 'Vencido ' + $(c.vencido) + ' de ' + $(c.saldo) + ' pendiente.', true));
+  const G = R.gcSS27; if (G && G.cuentas) G.cuentas.filter(c => c.debe > 0).forEach(c => add('cobranzas', 'gc:' + cierreK_(c.granCuenta), 'Gran cuenta ' + c.granCuenta + ': cobrar lo despachado', null, 'Debe hoy ' + $(c.debe) + ' · falta pagar del pedido SS27 ' + $(c.faltaPagar) + '.', true));
+  if (G && G.cuentas) G.cuentas.filter(c => (c.avisos || []).length).forEach(c => add('cobranzas', 'gca:' + cierreK_(c.granCuenta), 'Cargar en Contabilium las cobranzas de ' + c.granCuenta, null, c.avisos[0], true));
+  const ok = I.filter(x => x.estado === 'validado' || x.estado === 'marcado').length;
+  return { mes: m.mes, enCurso: m.enCurso, items: I, total: I.length, listos: ok, revisar: I.filter(x => x.estado === 'revisar').length,
+    alertasPago: m.fijos.filter(h => !h.cargado).length + m.sueldos.filter(h => h.cargado < h.promedio * 0.6).length, totalSueldos: m.totalSueldos, totalSueldosAnt: m.totalSueldosAnt };
+}
+/** María marca / desmarca un punto del cierre. Se guarda en el servidor (últimos 4 meses). */
+function cierreMarcar(token, mes, id, ok) {
+  const s = sesion_(token, 'finanzas'); if (!esMaria_(s.user)) throw new Error('PERM');
+  mes = String(mes || ''); id = String(id || '').slice(0, 120); if (!/^\d{4}-\d{2}$/.test(mes) || !id) throw new Error('Datos inválidos.');
+  return lock_(() => { const C = cierreChecks_(); C[mes] = C[mes] || {};
+    if (ok) C[mes][id] = { ok: true, ts: new Date().toISOString() }; else delete C[mes][id];
+    Object.keys(C).sort().slice(0, -4).forEach(k => delete C[k]);
+    let J = JSON.stringify(C); while (J.length > 8800 && Object.keys(C).length > 1) { delete C[Object.keys(C).sort()[0]]; J = JSON.stringify(C); }
+    PROPS.setProperty('CIERRE_CHK', J); return { ok: true, mes: mes, id: id, marcado: !!ok }; });
+}
 /** Solo la cuenta de administración de María (legajo MARIA) ve anticipos y cobranzas pendientes. */
 const esMaria_ = u => !!u && u.rol === 'admin' && String(u.legajo || '').toUpperCase() === 'MARIA';
 function finanzasPanel(token, forzar) {
@@ -1284,9 +1367,10 @@ function finanzasPanel(token, forzar) {
   if (!dbxConfigurado_()) return { conectado: false };
   if (forzar && ctbConfigurado_()) { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (!P || Date.now() - new Date(P.leida).getTime() > 2 * 3600000) try { ctbActualizarResumenes_(); } catch (e) {} }
   const R = Object.assign({}, finanzas_(!!forzar)), maria = esMaria_(s.user);
-  if (!maria) { delete R.anticipos; delete R.gcSS27; delete R.cuentasCorrientes; delete R.grandesCuentasCtb; (R.dobleConteo || []).forEach(x => { delete x.granCuenta; }); delete R.ctaCteFalta; R.recomendaciones = R.recomendaciones.filter(t => !/cuenta corriente/.test(t)); }   // cobranzas pendientes y anticipos: solo el usuario MARIA
+  if (!maria) { delete R.cierre; delete R.anticipos; delete R.gcSS27; delete R.cuentasCorrientes; delete R.grandesCuentasCtb; (R.dobleConteo || []).forEach(x => { delete x.granCuenta; }); delete R.ctaCteFalta; R.recomendaciones = R.recomendaciones.filter(t => !/cuenta corriente/.test(t)); }   // cobranzas pendientes y anticipos: solo el usuario MARIA
   try { R.productos = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
   if (maria) try { R.cobranzas = JSON.parse(PROPS.getProperty('CTB_COB') || 'null'); } catch (e) {}
+  if (maria && R.cierre && !R.cierre.error) try { R.cierre.checklists = R.cierre.meses.map(m => cierreItems_(m, R)); } catch (e) { R.cierre.error = String(e.message || e).slice(0, 150); }
   return { conectado: true, resumen: R, maria: maria, audio: audioFinanzas_(s.user, R), sync: JSON.parse(PROPS.getProperty('FIN_SYNC') || 'null') };
 }
 /** Hojas extra de la descarga: control de facturas, conciliación con Contabilium y (solo MARIA) anticipos por cliente. */
