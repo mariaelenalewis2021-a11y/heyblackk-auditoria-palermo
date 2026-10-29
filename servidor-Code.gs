@@ -4842,7 +4842,7 @@ function terminadasIngresan_(lineas, ots) {
     let L = lineas.filter(x => sku && k(x.sku) === sku);
     if (!L.length) L = lineas.filter(x => ot && k(x.ot) === ot && (!pr || k(x.producto).indexOf(pr) >= 0 || k(x.nombreTienda).indexOf(pr) >= 0 || pr.indexOf(k(x.nombreTienda) || '~') >= 0));
     if (!L.length) L = lineas.filter(x => pr && (k(x.nombreTienda) === pr || k(x.producto) === pr));
-    if (L.length) L.forEach(x => { const rec = L.length === 1 && o.recibidas ? o.recibidas : x.planificado, tot = Math.max(x.ingresado + x.sobrante, rec);
+    if (L.length) L.forEach(x => { const rec = L.length === 1 && o.recibidas ? Math.min(o.recibidas, x.planificado) : x.planificado, tot = Math.max(x.ingresado + x.sobrante, rec);   // nunca infla: a lo sumo completa lo planificado
       x.ingresado = Math.min(tot, x.planificado); x.sobrante = Math.max(0, tot - x.planificado); x.faltante = 0; x.estado = 'completo'; x.atrasado = false; x.terminadaOT = true;
       if (!x.ultimaLlegada && o.ingreso) x.ultimaLlegada = o.ingreso; if (!x.ot) x.ot = o.ot; });
     else if (o.recibidas || o.cantidad) { const q = o.recibidas || o.cantidad;
