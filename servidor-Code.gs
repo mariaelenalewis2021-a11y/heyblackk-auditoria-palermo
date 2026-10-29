@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.9m';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.9n';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -4627,6 +4627,7 @@ function f36_(v, d) {
   const s = String(d != null && d !== '' ? d : v || '').trim();
   let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return y + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2); }
   m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0];
+  m = s.match(/^(\d{1,2})\/(\d{1,2})$/); if (m) return hoy_().slice(0, 4) + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);   // «16/10» sin año → año en curso
   return null;
 }
 /** Hoja por nombre (sin importar tildes ni mayúsculas): valores + texto mostrado. */
@@ -4801,7 +4802,7 @@ function leerControl_() {
   const ots = [];
   if (eO) {
     const c = { ot: eO.col(/^N° OT|^NO OT|^N OT/), sku: eO.col(/^CODIGO|SKU/), prenda: eO.col(/^PRENDA/), tipo: eO.col(/^TIPO$/), cant: eO.col(/^CANTIDAD/), taller: eO.col(/^TALLER/),
-      ini: eO.col(/^FECHA INICIO/), rec: eO.col(/^RECIBIDAS/), est: eO.col(/^ESTADO ACTUAL/), paso: eO.col(/^PASO SIGUIENTE/), al: eO.col(/^ALERTA/) };
+      ini: eO.col(/^FECHA INICIO/), rec: eO.col(/^RECIBIDAS/), fing: eO.col(/^FECHA INGRESO/), est: eO.col(/^ESTADO ACTUAL/), paso: eO.col(/^PASO SIGUIENTE/), al: eO.col(/^ALERTA/) };
     for (let i = eO.i + 1; i < O.v.length; i++) {
       const d = O.d[i], ot = String(d[c.ot] || '').trim(); if (!/^OT/i.test(ot)) continue;
       const cant = Math.max(0, n36_(O.v[i][c.cant])), rec = c.rec >= 0 ? Math.max(0, n36_(O.v[i][c.rec])) : 0;
@@ -4810,7 +4811,7 @@ function leerControl_() {
       ots.push({ ot: ot, sku: c.sku >= 0 ? String(d[c.sku] || '').trim() : '', prenda: c.prenda >= 0 ? String(d[c.prenda] || '').trim() : '', tipo: c.tipo >= 0 ? String(d[c.tipo] || '').trim() : '',
         cantidad: cant, recibidas: rec, taller: c.taller >= 0 ? String(d[c.taller] || '').trim() : '', inicio: c.ini >= 0 ? f36_(O.v[i][c.ini], d[c.ini]) : null,
         estado: est.replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim(), paso: c.paso >= 0 ? String(d[c.paso] || '').replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim() : '', alerta: al.replace(/^[^\wÁÉÍÓÚáéíóúñÑ]+/, '').trim(),
-        terminada: term, atrasada: /ATRAS/i.test(al) });
+        terminada: term, atrasada: !term && /ATRAS/i.test(al), ingreso: c.fing >= 0 ? f36_(O.v[i][c.fing], d[c.fing]) : null });
     }
   }
   // ---- A FABRICAR (lo que falta fabricar para pedidos y para llegar al stock mínimo)
@@ -4827,8 +4828,27 @@ function leerControl_() {
         llega: c.llega >= 0 ? f36_(r[c.llega], d[c.llega]) : null, prioridad: c.prio >= 0 ? String(d[c.prio] || '').trim() : '', queHacer: c.que >= 0 ? String(d[c.que] || '').trim() : '' });
     }
   }
+  terminadasIngresan_(lineas, ots);
   let modificado = null; try { modificado = DriveApp.getFileById(id).getLastUpdated().toISOString(); } catch (e) {}
   return { leida: new Date().toISOString(), modificado: modificado, archivo: ss.getName(), avisos: avisos, clientes: listaCli, lineas: lineas, ots: ots, fabricar: fabricar, stock: stockSku };
+}
+/** 3.9n · En PRODUCCIÓN, una OT «Terminada» quiere decir que esa mercadería YA INGRESÓ (aunque la fila siga en la hoja).
+    Manda el estado: la línea de INGRESO de esa OT/código queda completa (sin faltante ni atraso) con lo recibido y la fecha de ingreso.
+    Si la OT terminada no está en INGRESO, se suma como ingreso. No se cuenta dos veces: se toma lo mayor entre INGRESO y lo recibido. */
+function terminadasIngresan_(lineas, ots) {
+  const k = x => nh_(x).replace(/[^A-Z0-9]/g, '');
+  (ots || []).filter(o => o.terminada).forEach(o => {
+    const sku = k(o.sku), ot = k(o.ot), pr = k(o.prenda);
+    let L = lineas.filter(x => sku && k(x.sku) === sku);
+    if (!L.length) L = lineas.filter(x => ot && k(x.ot) === ot && (!pr || k(x.producto).indexOf(pr) >= 0 || k(x.nombreTienda).indexOf(pr) >= 0 || pr.indexOf(k(x.nombreTienda) || '~') >= 0));
+    if (!L.length) L = lineas.filter(x => pr && (k(x.nombreTienda) === pr || k(x.producto) === pr));
+    if (L.length) L.forEach(x => { const rec = L.length === 1 && o.recibidas ? o.recibidas : x.planificado, tot = Math.max(x.ingresado + x.sobrante, rec);
+      x.ingresado = Math.min(tot, x.planificado); x.sobrante = Math.max(0, tot - x.planificado); x.faltante = 0; x.estado = 'completo'; x.atrasado = false; x.terminadaOT = true;
+      if (!x.ultimaLlegada && o.ingreso) x.ultimaLlegada = o.ingreso; if (!x.ot) x.ot = o.ot; });
+    else if (o.recibidas || o.cantidad) { const q = o.recibidas || o.cantidad;
+      lineas.push({ producto: o.prenda || o.sku, nombreTienda: o.prenda, ot: o.ot, sku: o.sku, taller: o.taller || 'Sin taller', planificado: q, ingresado: q, sobrante: 0, faltante: 0, fallas: 0,
+        estado: 'completo', estadoPlanilla: 'Terminada (PRODUCCIÓN)', fechaPrometida: null, ultimaLlegada: o.ingreso, salioDelTaller: true, atrasado: false, terminadaOT: true, desdeProduccion: true }); }
+  });
 }
 /** 3.7 · Totales de una hoja de cliente o «SE LLEVÓ»: busca las etiquetas y toma el primer número a su derecha. */
 function totales36_(H) {
