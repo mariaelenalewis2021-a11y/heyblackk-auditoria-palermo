@@ -2459,10 +2459,10 @@ const hk = (k,v,s,cls) => el("div",{class:"hk"+(cls?" "+cls:"")}, el("span",{cla
 /* ---------------- 3.7 · Regla de diseño: en pantalla solo indicadores, gráficos simples y Top 5. El detalle va en Excel y PDF. ---------------- */
 const nh = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
 /** Botones «Descargar Excel» y «Descargar PDF» de una sección (el servidor valida el permiso y arma el detalle completo). */
-function botonesDescarga(tipo, etiqueta){
+function botonesDescarga(tipo, etiqueta, extra){
   const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ Descargar PDF"});
   const ir = async (b, fmt)=>{ spinBtn(b, fmt==="xlsx"?"Armando el Excel…":"Armando el PDF…");
-    try{ const D = await apiS("descargaControl", tipo); await (fmt==="xlsx" ? exportarXLSX37(D) : exportarPDF37(D)); }
+    try{ const D = await apiS("descargaControl", tipo, extra||""); await (fmt==="xlsx" ? exportarXLSX37(D) : exportarPDF37(D)); }
     catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); }
     unspin(b); };
   bx.onclick = ()=>ir(bx,"xlsx"); bp.onclick = ()=>ir(bp,"pdf");
@@ -2608,6 +2608,13 @@ function tabDistribucion(X){
   if (X.ingresos.length) out.push(el("div",{class:"card"}, el("h3",{text:"📥 Últimos ingresos · SS27"}),
     el("ol",{class:"lista39"}, X.ingresos.slice(0,8).map(i=>el("li",{}, el("b",{text:i.producto}), ` · ingresaron ${u36(i.cantidad)} el ${fmtF(i.fecha).slice(0,5)}`,
       el("span",{class:"hint",text: i.comprometido==null ? " · ⚠️ sin cruce con «STOCK vs Pedidos»: validar" : ` · comprometido ${u36(i.comprometido)} · separar hoy ${u36(i.separar)} · quedaría en Lima ${i.quedaLima==null?"sin dato":u36(i.quedaLima)}${i.validar?" · validar":""}`})))) ));
+  const bx1 = (t, c) => { const b = el("button",{class:"btn sm",type:"button",text:t}); b.onclick = async ()=>{ spinBtn(b,"Armando el Excel…");
+      try{ const D = await apiS("descargaControl","separacion",c||""); await exportarXLSX37(D); }catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); }; return b; };
+  out.push(el("div",{class:"card"}, el("h3",{text:"📋 Planillas de separación (Excel)"}),
+    el("p",{class:"hint",text:"Solo lo que realmente falta separar: pendiente de «STOCK vs Pedidos» menos lo que se llevó, lo separado y lo ya confirmado. Cada archivo trae las hojas «Falta separar», «Movimientos» e «Inconsistencias», con la fuente de cada cantidad. Miami no lleva mercadería hasta confirmar el pago."}),
+    el("div",{class:"row descargas37"}, bx1("⬇️ Consolidado (todas)",""), ...X.clientes.filter(c=>!c.bloqueado).map(c=>bx1("⬇️ "+c.cliente, c.cliente)))));
+  if ((X.confirmados||[]).length) out.push(el("div",{class:"card"}, el("h3",{text:"✅ Separaciones ya confirmadas (no se vuelven a pedir)"}),
+    el("ul",{class:"ant38-av"}, X.confirmados.map(m=>el("li",{text:`${m.cliente} · ${m.producto} · ${u36(m.u)} — falta reflejarlo en la planilla del cliente`})))));
   if (X.clientes.length) out.push(el("div",{class:"card"}, el("h3",{text:"🤝 Por gran cuenta"}),
     el("div",{class:"lista-cli"}, X.clientes.map(c=>el("div",{class:"cli37"+(c.bloqueado?" bloq39":"")},
       el("b",{text:c.cliente}), c.estadoPago ? el("span",{class:"pill "+(c.bloqueado?"bad":""),text:c.bloqueado?"⛔ "+c.estadoPago:c.estadoPago}) : null,
@@ -3550,7 +3557,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9q";
+const APP_V = "3.9r";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
