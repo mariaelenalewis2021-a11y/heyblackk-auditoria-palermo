@@ -2581,44 +2581,66 @@ async function vProduccion(main){
   cargar();
 }
 const EST_T = {llegado:["🟢","Llegado","ok"], en_produccion:["🟡","En producción","warn"], por_llegar:["⚪","Por llegar",""], atrasado:["🔴","Atrasado","bad"]};
+/* 3.9m · Pestañas simples (recuerda la última elegida en este teléfono). tabs = [[clave, título, () => [nodos]], …] */
+function pestanas39(clave, tabs){
+  const bar = el("div",{class:"tabs39",role:"tablist"}), panel = el("div",{class:"stack tabpanel39",role:"tabpanel"});
+  let act = null; try{ act = localStorage.getItem("hb_tab_"+clave); }catch(e){}
+  if (!tabs.some(t=>t[0]===act)) act = tabs[0][0];
+  const ver = k => { try{ localStorage.setItem("hb_tab_"+clave, k); }catch(e){}
+    [...bar.children].forEach(b=>b.setAttribute("aria-selected", String(b.dataset.k===k)));
+    panel.textContent=""; let r = [];
+    try{ r = [].concat(tabs.find(x=>x[0]===k)[2]() || []); }catch(e){ r = [el("p",{class:"card notice bad",text:"No se pudo mostrar esta parte: "+(e && e.message || e)})]; }
+    r.filter(Boolean).forEach(n=>panel.append(n));
+    if (!panel.children.length) panel.append(el("p",{class:"card hint",text:"Todavía no hay datos para mostrar acá."})); };
+  tabs.forEach(([k,t])=>{ const b = el("button",{class:"tab39",type:"button",role:"tab","data-k":k,text:t}); b.onclick = ()=>ver(k); bar.append(b); });
+  ver(act);
+  return el("div",{class:"tabs39-wrap"}, bar, panel);
+}
+const MES39 = m => ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"][Number(String(m).slice(5,7))-1];
 function pintarProduccion(body, D, recargar){
-  const R = D.resumen, S = R.stock, F = R.falta, T = R.taller;
+  const R = D.resumen, S = R.stock, F = R.falta, T = R.taller, DM = T && T.delMes, E = T && T.estados;
   body.append(filaActualizacion(D, recargar));
   const ba = barraSeccion(D.audio, "Producción"); if (ba) body.append(ba);
-  if ((R.alertas||[]).length || (R.recomendaciones||[]).length) body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas y prioridades"}),
-    el("ul",{class:"alertas-rrhh"}, R.alertas.slice(0,5).map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
-      R.recomendaciones.slice(0,3).map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
-  // ---- STOCK REAL DE LIMA
-  if (S) body.append(el("div",{class:"card"}, el("h2",{text:"🏬 Stock real de Lima"}),
-    el("div",{class:"hkpis"}, hk("Stock físico", u36(S.fisico)), hk("Comprometido", u36(S.comprometido), "por pedidos de clientes"), hk("Real (libre)", u36(S.libre), "para vender"), S.faltante ? hk("Falta para pedidos", u36(S.faltante), "", "neg") : null),
+  // ---- Producción hoy: lo justo, en una tarjeta
+  const kp = [DM && DM.productos ? hk("📥 Ingresó en "+MES39(DM.mes), u36(DM.unidades), DM.productos+" productos", "pos") : null,
+    S ? hk("🏬 Stock libre en Lima", u36(S.libre), "para vender") : null,
+    F ? hk("🧵 Falta producir", u36(F.total), F.paraPedidos?u36(F.paraPedidos)+" son para pedidos":"", "neg") : null,
+    E && E.atrasado.pedidos ? hk("🔴 Atrasados", E.atrasado.pedidos+(E.atrasado.pedidos===1?" pedido":" pedidos"), u36(E.atrasado.unidades)+" sin llegar", "neg")
+      : E && E.en_produccion.unidades ? hk("🟡 En producción", u36(E.en_produccion.unidades), E.en_produccion.pedidos+" pedidos") : null].filter(Boolean);
+  const al = [].concat((R.alertas||[]).slice(0,2).map(a=>[a.nivel==="rojo"?"🔴":"🟡", "al-"+(a.nivel==="rojo"?"rojo":"amarillo"), a.texto]), (R.recomendaciones||[]).slice(0,1).map(t=>["👉","al-verde",t]));
+  if (kp.length || al.length) body.append(el("div",{class:"card"}, el("h2",{text:"🧵 Producción hoy"}), kp.length?el("div",{class:"hkpis"}, kp):null,
+    al.length ? el("ul",{class:"alertas-rrhh",style:"margin-top:10px"}, al.map(([i,c,t])=>el("li",{class:c}, el("span",{class:"sem",text:i}), el("div",{text:t})))) : null));
+  const tabs = [];
+  // ---- Ingresos del mes
+  if (T) tabs.push(["ingresos","📥 Qué ingresó", ()=>[el("div",{class:"card"},
+    DM && DM.productos ? [el("h3",{text:`Ingresó en ${MES39(DM.mes)}: ${u36(DM.unidades)} en ${DM.productos} productos`}),
+        el("ol",{class:"lista39"}, DM.lista.slice(0,10).map(x=>el("li",{}, el("b",{text:x.modelo}), ` · ${u36(x.cantidad)}`, el("span",{class:"hint",text:` · ${x.taller} · ${fmtF(x.fecha).slice(0,5)}${x.completo?" · ✅ completo":""}`})))),
+        DM.lista.length>10 ? el("p",{class:"hint",text:`Y ${DM.lista.length-10} productos más en la descarga (hoja «Ingresó en el mes»).`}) : null]
+      : el("p",{class:"hint",text:"Todavía no ingresó mercadería de talleres este mes."}),
+    T.proximos.length ? [el("h3",{text:"⏭️ Lo próximo que llega"}), el("ol",{class:"top5"}, T.proximos.slice(0,5).map(x=>{ const [ic,t,c]=EST_T[x.estado]; return el("li",{}, el("b",{text:x.modelo}), ` · faltan ${u36(x.pendiente)}`, el("span",{class:"hint",text:` · ${x.taller}${x.fecha?" · "+fmtF(x.fecha).slice(0,5):""} `}), el("span",{class:"pill "+c,text:ic+" "+t})); }))] : null,
+    botonesDescarga("taller","todo lo que ingresó y los pedidos de taller"))]]);
+  // ---- Stock real de Lima
+  if (S) tabs.push(["stock","🏬 Stock Lima", ()=>[el("div",{class:"card"},
+    el("div",{class:"hkpis"}, hk("Hay", u36(S.fisico), "stock físico"), hk("Comprometido", u36(S.comprometido), "para pedidos"), hk("Libre", u36(S.libre), "para vender", "pos"), S.faltante ? hk("Falta para pedidos", u36(S.faltante), "", "neg") : null),
     barraPartes([{t:"Libre",v:S.libre,c:"#16A34A"},{t:"Comprometido",v:S.comprometido,c:"#D97706"}]),
     el("div",{class:"split"},
-      S.topLibre.length ? el("div",{}, el("h3",{text:"Top 5 · más stock libre"}), el("ol",{class:"top5"}, S.topLibre.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.libre)} libres`)))) : null,
-      S.topMenos.length ? el("div",{}, el("h3",{text:"Top 5 · menos stock libre"}), el("ol",{class:"top5"}, S.topMenos.map(m=>el("li",{}, el("b",{text:m.modelo}), m.faltante ? ` · faltan ${u36(m.faltante)}` : ` · ${u36(m.libre)} libres`)))) : null),
-    el("p",{class:"hint",text:"Real (libre) = lo que le queda a Lima después de cubrir lo que piden los clientes («Stock Lima final» de STOCK vs Pedidos)."}),
-    botonesDescarga("stock","por modelo, color y talle")));
-  // ---- QUÉ FALTA PRODUCIR
-  if (F) body.append(el("div",{class:"card"}, el("h2",{text:"🧵 Qué falta producir"}),
-    el("div",{class:"hkpis"}, hk("Total a producir", u36(F.total), (F.pctPlanificado||0)+" % de lo planificado", "neg"), hk("Para pedidos", u36(F.paraPedidos)), hk("Para el stock mínimo", u36(F.paraMinimo)), F.sinOt ? hk("Talles sin OT", String(F.sinOt), "", "neg") : null),
-    F.top.length ? el("div",{}, el("h3",{text:"Top 5 · más urgente o mayor faltante"}), el("ol",{class:"top5"}, F.top.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.pedidos+m.minimo)}`, m.urgente?el("span",{class:"pill bad",text:"urgente"}):null, m.taller?el("span",{class:"hint",text:" · "+m.taller}):null)))) : null,
-    botonesDescarga("falta","modelo, talle, cantidad y taller")));
-  // ---- PEDIDOS DE TALLER
-  if (T){ const E = T.estados;
-    body.append(el("div",{class:"card"}, el("h2",{text:"🚚 Pedidos de taller"}),
-      el("div",{class:"hkpis"}, hk("Llegaron", u36(T.llegadas), `${T.conLlegada} pedidos`), E.en_produccion.unidades ? hk("En producción", u36(E.en_produccion.unidades), `${E.en_produccion.pedidos} pedidos`) : null,
-        E.por_llegar.unidades ? hk("Por llegar", u36(E.por_llegar.unidades), `${E.por_llegar.pedidos} sin taller asignado`) : null, E.atrasado.pedidos ? hk("Atrasados", String(E.atrasado.pedidos), u36(E.atrasado.unidades)+" sin llegar", "neg") : null),
-      barraPartes([{t:"Llegado",v:T.llegadas,c:"#16A34A"},{t:"En producción",v:E.en_produccion.unidades,c:"#D97706"},{t:"Atrasado",v:E.atrasado.unidades,c:"#DC2626"},{t:"Por llegar",v:E.por_llegar.unidades,c:"#9CA3AF"}]),
-      el("div",{class:"split"},
-        T.ultimos.length ? el("div",{}, el("h3",{text:"Últimos que llegaron"}), el("ol",{class:"top5"}, T.ultimos.map(x=>el("li",{}, el("b",{text:x.modelo}), ` · ${u36(x.cantidad)} · ${x.taller} · ${fmtF(x.fecha).slice(0,5)}`)))) : null,
-        T.proximos.length ? el("div",{}, el("h3",{text:"Próximos a llegar"}), el("ol",{class:"top5"}, T.proximos.map(x=>{ const [ic,t,c]=EST_T[x.estado]; return el("li",{}, el("b",{text:x.modelo}), ` · faltan ${u36(x.pendiente)} · ${x.taller}${x.fecha?" · "+fmtF(x.fecha).slice(0,5):""} `, el("span",{class:"pill "+c,text:ic+" "+t})); }))) : null),
-      T.delMes && T.delMes.productos ? el("div",{class:"delmes39"}, el("h3",{text:`📥 Ingresó en ${["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"][Number(T.delMes.mes.slice(5,7))-1]}: ${u36(T.delMes.unidades)} en ${T.delMes.productos} productos`}),
-        el("ol",{class:"top5"}, T.delMes.lista.slice(0,12).map(x=>el("li",{}, el("b",{text:x.modelo}), ` · ${u36(x.cantidad)} · ${x.taller} · ${fmtF(x.fecha).slice(0,5)}${x.completo?" · ✅ completo":""}`))),
-        T.delMes.lista.length>12 ? el("p",{class:"hint",text:`Y ${T.delMes.lista.length-12} productos más: la lista completa está en la descarga (hoja «Ingresó en el mes»).`}) : null,
-        el("p",{class:"hint",text:"Sale de la hoja INGRESO de «Control ingreso» (fecha de la última llegada de cada producto)."})) : el("p",{class:"hint",text:"Todavía no ingresó mercadería de talleres este mes."}),
-      el("h3",{text:"Talleres (tocá uno para ver su detalle)"}),
-      el("div",{class:"row chips-taller"}, T.talleres.filter(t=>t.pedido).slice(0,10).map(t=>el("button",{class:"btn sm"+(t.atrasados?" danger":""),type:"button",onclick:()=>detalleTallerUI(t.taller)}, `${t.taller} · ${t.pedido?Math.round(t.llegado/t.pedido*100):0} %${t.falta?" · faltan "+t.falta:""}`))),
-      botonesDescarga("taller","todos los pedidos de taller")));
-  }
+      S.topLibre.length ? el("div",{}, el("h3",{text:"Más stock libre"}), el("ol",{class:"top5"}, S.topLibre.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.libre)}`)))) : null,
+      S.topMenos.length ? el("div",{}, el("h3",{text:"Menos stock libre"}), el("ol",{class:"top5"}, S.topMenos.map(m=>el("li",{}, el("b",{text:m.modelo}), m.faltante ? ` · faltan ${u36(m.faltante)}` : ` · ${u36(m.libre)}`)))) : null),
+    botonesDescarga("stock","por modelo, color y talle"))]]);
+  // ---- Qué falta producir
+  if (F) tabs.push(["falta","✂️ Falta producir", ()=>[el("div",{class:"card"},
+    el("div",{class:"hkpis"}, hk("Total", u36(F.total), (F.pctPlanificado||0)+" % de lo planificado", "neg"), hk("Para pedidos", u36(F.paraPedidos)), hk("Para stock mínimo", u36(F.paraMinimo)), F.sinOt ? hk("Talles sin OT", String(F.sinOt), "", "neg") : null),
+    F.top.length ? [el("h3",{text:"Lo más urgente"}), el("ol",{class:"top5"}, F.top.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.pedidos+m.minimo)}`, m.urgente?el("span",{class:"pill bad",text:"urgente"}):null, m.taller?el("span",{class:"hint",text:" · "+m.taller}):null)))] : null,
+    botonesDescarga("falta","modelo, talle, cantidad y taller"))]]);
+  // ---- Talleres
+  if (T) tabs.push(["talleres","🚚 Talleres", ()=>[el("div",{class:"card"},
+    el("div",{class:"hkpis"}, hk("Llegaron", u36(T.llegadas), `${T.conLlegada} pedidos`), E.en_produccion.unidades ? hk("En producción", u36(E.en_produccion.unidades), `${E.en_produccion.pedidos} pedidos`) : null,
+      E.por_llegar.unidades ? hk("Sin taller asignado", u36(E.por_llegar.unidades), `${E.por_llegar.pedidos} pedidos`) : null, E.atrasado.pedidos ? hk("Atrasados", String(E.atrasado.pedidos), u36(E.atrasado.unidades)+" sin llegar", "neg") : null),
+    barraPartes([{t:"Llegado",v:T.llegadas,c:"#16A34A"},{t:"En producción",v:E.en_produccion.unidades,c:"#D97706"},{t:"Atrasado",v:E.atrasado.unidades,c:"#DC2626"},{t:"Sin taller",v:E.por_llegar.unidades,c:"#9CA3AF"}]),
+    el("h3",{text:"Tocá un taller para ver su detalle"}),
+    el("div",{class:"row chips-taller"}, T.talleres.filter(t=>t.pedido).slice(0,10).map(t=>el("button",{class:"btn sm"+(t.atrasados?" danger":""),type:"button",onclick:()=>detalleTallerUI(t.taller)}, `${t.taller} · ${t.pedido?Math.round(t.llegado/t.pedido*100):0} %${t.falta?" · faltan "+t.falta:""}`))),
+    botonesDescarga("taller","todos los pedidos de taller"))]]);
+  if (tabs.length) body.append(pestanas39("prod", tabs));
 }
 async function detalleTallerUI(taller){
   let d; try{ d = await apiS("detalleTaller", taller); }catch(e){ return toast(msgErr(e)); }
@@ -2740,262 +2762,223 @@ function formContabilium(recargar){
     el("p",{class:"lead",text:"🔒 Conectar Contabilium (solo lo ves vos). En Contabilium: tu nombre → Configuración → API → Credenciales. Copiá y pegá los dos datos acá. Se verifican con Contabilium y se guardan en el servidor; no quedan en el teléfono."}),
     id, sec, err, b);
 }
+/* 3.9m · Pantalla compacta: arriba «Cómo venimos» (lo justo); el resto en pestañas. Lo que no tiene datos no se muestra. */
 function pintarFinanzas(body, D, recargar){
   if (!D.conectado){
     body.append(el("div",{class:"card notice warn"}, el("b",{text:"El panel todavía no está conectado a la planilla."}),
       el("p",{text:"Falta autorizar una sola vez la conexión de solo lectura con Dropbox (la hace la administración). Apenas esté, acá se ve en palabras simples qué plata entró, qué salió, a dónde se fue y qué conviene hacer."})));
     return;
   }
-  const R = D.resumen, U = R.ultimoCerrado, C = R.enCurso, P = R.promedio3, S = R.simple || {};
+  const R = D.resumen, U = R.ultimoCerrado, C = R.enCurso, P = R.promedio3, S = R.simple || {}, K = R.contabilium || {}, PR = R.productos;
   const bAct = el("button",{class:"btn sm",type:"button",text:"🔄 Actualizar"});
   bAct.onclick = ()=>{ spinBtn(bAct,"Leyendo la planilla…"); recargar(true); };
-  body.append(el("div",{class:"card row act36"},
-    el("span",{class:"pill",text:"📦 Planilla de Dropbox (solo lectura)"}),
-    S.ultimaCarga ? el("span",{class:"pill",text:"Último movimiento cargado: "+fmtF(S.ultimaCarga)}) : null,
-    el("span",{class:"pill",text:"Leída: "+fechaHora(R.leida)}), el("span",{class:"spacer"}), bAct));
+  body.append(el("div",{class:"row act36 act39m"},
+    el("span",{class:"hint",text:`Datos al ${fechaHora(R.leida)}${S.ultimaCarga?" · último movimiento cargado "+fmtF(S.ultimaCarga):""}`}), el("span",{class:"spacer"}), bAct));
   const ba = barraSeccion(D.audio, "Administración y Finanzas"); if (ba) body.append(ba);
-  // 3.9c · De dónde sale cada número (para que nadie mezcle facturado con cobrado)
-  body.append(el("details",{class:"card fuentes39"}, el("summary",{text:"📌 ¿De dónde sale cada número? (tocá para leer)"}),
-    el("ul",{class:"fuentes39-l"},
-      el("li",{}, el("b",{text:"Facturado"}), " = lo que se hizo factura en ", el("b",{text:"Contabilium"}), ", con IVA y restando las notas de crédito del mes. Es el mismo número que el informe «Ventas por punto de venta» de Contabilium (columna «Total bruto»)."),
-      el("li",{}, el("b",{text:"Entró / Cobrado"}), " = la plata que ingresó, según lo cargado a mano en el ", el("b",{text:"Templete"}), " (Dropbox). Incluye los anticipos de temporada, que se cobran antes de facturar."),
-      el("li",{}, el("b",{text:"Facturado y cobrado no se suman nunca"}), ": son dos formas de mirar la misma venta. Si un cliente pagó un mes y la factura se hizo al mes siguiente, la plata se cuenta una sola vez, el mes en que entró."),
-      el("li",{}, el("b",{text:"Lima en Contabilium es más grande"}), " porque el punto de venta 0005 factura también la Web (Tiendanube) y las grandes cuentas. La app los muestra separados."),
-      el("li",{}, el("b",{text:"Grandes cuentas"}), " = facturas y cobranzas de Contabilium (cuánto se facturó, cuánto se cobró y cuánto deben). La planilla de cuentas corrientes se usa solo para avisar diferencias."),
-      el("li",{}, el("b",{text:"Caja Palermo"}), " = los cierres de caja que se cargan en la app todos los días."))));
-  // 1 · En pocas palabras
+
+  // ===== 1 · Cómo venimos (una sola tarjeta) =====
   if (U){
     const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""}, E = S.equilibrio;
     const em = {verde:"🟢",amarillo:"🟡",rojo:"🔴"}[sem.color];
-    const bullets = [
-      `En ${MESL(U.mes)} entraron ${moneyK(U.ingresos)} y salieron ${moneyK(U.egresos)}. ${U.neto>=0?"Quedaron "+moneyK(U.neto)+" a favor.":"Faltaron "+moneyK(-U.neto)+"."}`,
-      E ? `Para no perder plata hay que vender unos ${moneyK(E.necesario)} por mes. En ${MESL(U.mes)} entraron ${moneyK(U.ingresos)}.` : null,
-      S.mejor && S.peor && S.mejor.mes!==S.peor.mes ? `El mejor mes del año fue ${MESL(S.mejor.mes)} (${S.mejor.neto>=0?"quedaron ":"faltaron "}${moneyK(Math.abs(S.mejor.neto))}). El más flojo, ${MESL(S.peor.mes)}.` : null,
-      C ? `En lo que va de ${MESL(C.mes)}: entraron ${moneyK(C.ingresos)} y salieron ${moneyK(C.egresos)} (todavía faltan cargar cobros).` : null].filter(Boolean);
     body.append(el("div",{class:"card sem38 sem-"+sem.color},
-      el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:em}), el("div",{}, el("span",{class:"k",text:"En pocas palabras"}), el("h2",{text:sem.titulo}), el("p",{class:"lead",text:sem.texto}))),
-      el("ul",{class:"sem38-lista"}, bullets.map(t=>el("li",{text:t}))),
-      E ? medidorVenta(U.ingresos, E.necesario) : null));
+      el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:em}), el("div",{}, el("span",{class:"k",text:"Cómo venimos · "+mesLargo(U.mes)}), el("h2",{text:sem.titulo}), sem.texto?el("p",{class:"lead",text:sem.texto}):null)),
+      el("div",{class:"hkpis"},
+        hk("💵 Entró", moneyK(U.ingresos), P?vsNormal(U.ingresos,P.ingresos):"", "pos"),
+        hk("💸 Salió", moneyK(U.egresos), P?vsNormal(U.egresos,P.egresos):"", "neg"),
+        hk(U.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(U.neto)), U.retiros?`con ${moneyK(U.retiros)} de retiros de socios`:"", U.neto<0?"neg":"pos"),
+        C ? hk("📆 "+capi(MESL(C.mes))+" (en curso)", moneyK(C.ingresos), "entró hasta hoy") : null),
+      E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que vender unos ${moneyK(E.necesario)} por mes.`}), medidorVenta(U.ingresos, E.necesario)) : null));
   }
-  // 2 · El último mes en números
-  if (U) body.append(el("div",{class:"card"}, el("h2",{text:"📊 "+capi(mesLargo(U.mes))+" en números"}),
-    el("div",{class:"hkpis"},
-      hk("💵 Entró", moneyK(U.ingresos), P?vsNormal(U.ingresos,P.ingresos):"", "pos"),
-      hk("💸 Salió", moneyK(U.egresos), P?vsNormal(U.egresos,P.egresos):"", "neg"),
-      hk(U.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"salió más de lo que entró", U.neto<0?"neg":"pos"),
-      U.retiros ? hk("👤 Retiros de socios", moneyK(U.retiros), "sin estos retiros: "+(U.operativo>=0?"quedaban ":"faltaban ")+moneyK(Math.abs(U.operativo))) : null),
-    el("p",{class:"hint",text:"«Lo normal» = el promedio de los 3 meses anteriores."})));
-  // 3 · A dónde se va la plata
-  if ((S.destinoAnio||[]).length){
-    const caja = el("div",{}), tabs = el("div",{class:"row seg38"});
-    const ver = (L, t)=>{ caja.textContent=""; caja.append(barraCada100(L)); [...tabs.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.k===t)); };
-    const opc = [["anio","Todo "+R.anio, S.destinoAnio]].concat((S.destinoMeses||[]).length ? S.destinoMeses.map(d=>[d.mes, capi(MESL(d.mes))+(d.enCurso?" (en curso)":""), d.lista]) : [["mes", U?capi(MESL(U.mes)):"", S.destinoMes]]);
-    opc.filter(x=>(x[2]||[]).length).forEach(([k,t,L])=>{
-      const b = el("button",{class:"btn sm",type:"button",text:t,"data-k":k}); b.onclick=()=>ver(L,k); tabs.append(b); });
-    body.append(el("div",{class:"card"}, el("h2",{text:"🧭 ¿A dónde se va la plata?"}),
-      el("p",{class:"lead",text:"De cada $ 100 que entran a Hey Blackk, cuánto se va en cada cosa:"}), tabs, caja));
-    ver(S.destinoAnio,"anio");
-  }
-  // 4 · Cuánto hay que vender
-  if (S.equilibrio){ const E = S.equilibrio;
-    body.append(el("div",{class:"card"}, el("h2",{text:"🎯 ¿Cuánto hay que vender para no perder plata?"}),
-      el("div",{class:"hkpis"}, hk("Vender por mes", moneyK(E.necesario), "para cubrir todos los gastos"), hk("Con los retiros de socios", moneyK(E.conSocios), "si además se retira lo de siempre")),
-      el("ol",{class:"pasos38"},
-        el("li",{text:`Gastos fijos por mes (sueldos, alquileres, publicidad, bancos, impuestos): ${moneyK(E.fijosMes)}.`}),
-        el("li",{text:`De cada $ 100 que se vende, $ ${E.ropaCada100} se van en hacer la ropa (talleres, telas, insumos, envíos).`}),
-        el("li",{text:`Entonces solo quedan $ ${100-E.ropaCada100} de cada $ 100 para pagar los gastos fijos: por eso hay que vender unos ${moneyK(E.necesario)}.`})),
-      el("p",{class:"hint",text:"Calculado con "+E.meses.map(MESL).join(", ")+"."})));
-  }
-  // 5 · Mes a mes y semana a semana
-  const meses = R.meses.slice(-9);
-  if (meses.length) body.append(el("div",{class:"card"}, el("h3",{text:"📅 Mes a mes: lo que entró y lo que salió"}), barrasIE(meses, x=>mesTxt(x.mes)),
-    el("div",{class:"row leyenda"}, el("span",{}, el("i",{class:"dot",style:"background:#16A34A"})," Entró"), el("span",{}, el("i",{class:"dot",style:"background:#DC2626"})," Salió"), el("span",{class:"hint",text:"El número de abajo es lo que quedó (en rojo, lo que faltó)."})),
-    el("p",{class:"hint",text:`En ${R.anio}: entraron ${moneyK(R.anioTotales.ingresos)} y salieron ${moneyK(R.anioTotales.egresos)}. De eso, ${moneyK(R.anioTotales.retiros)} fueron retiros de socios.`})));
-  const sem = R.semanas.slice(-8);
-  if (sem.length) body.append(el("div",{class:"card"}, el("h3",{text:"🗓️ Semana a semana"}), barrasIE(sem, x=>fmtF(x.semana).slice(0,5)),
-    el("p",{class:"hint",text:"Si una semana aparece sin «entró», casi siempre es porque los cobros todavía no se cargaron."})));
-  // 5b · Ventas por canal: FACTURADO (Contabilium) y COBRADO (Templete), en tablas separadas + cierres de caja de Palermo
-  if (R.sectores && (R.sectores.filas.length || R.sectores.facturado)){ const SX = R.sectores, M = SX.meses, FX = SX.facturado;
-    const cabe = t => el("tr",{}, el("th",{text:t}), ...M.map((m,i)=>el("th",{class:"n",text:i===2?mesTxt(m)+" (en curso)":mesTxt(m)})), el("th",{class:"n",text:"Año "+R.anio}));
-    const fila = (t, vals, anio, cls) => el("tr",cls?{class:cls}:{}, el("th",{scope:"row",text:t}), ...vals.map(v=>el("td",{class:"n",text:v?moneyK(v):"–"})), el("td",{class:"n",text:anio!=null?moneyK(anio):""}));
-    const card = el("div",{class:"card"}, el("h2",{text:"🏬 Ventas por canal: lo facturado y lo cobrado"}));
-    if (FX){
-      const tf = FX.filas.map(f=>fila(f.canal, f.valores, f.anio));
-      tf.push(fila("Total con IVA", FX.totalConIva, FX.filas.reduce((a,f)=>a+f.anio,0), "tot38"), fila("Total sin IVA", FX.totalSinIva, null, "caja38"));
-      card.append(el("h3",{text:"🧾 Facturado (Contabilium, con IVA)"}),
-        el("p",{class:"hint",text:"Igual al informe de Contabilium. Web y Grandes cuentas se facturan por el punto de venta de Lima (0005) y acá van separados."}),
-        el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cabe("Canal")), el("tbody",{},tf))));
+  // Qué hacer (máx. 3, siempre a la vista)
+  const recs = R.recomendaciones.slice(0,2), pal = t => new Set((String(t).toLowerCase().match(/[a-záéíóúñ]{7,}/g)||[]));
+  const yaDicho = t => { const w = pal(t); return recs.some(r=>[...pal(r)].some(x=>w.has(x) && !/septiembre|octubre|noviembre|diciembre|necesario/.test(x))); };
+  const hacer = [].concat(recs.map(t=>["👉","al-verde",t]), R.alertas.filter(a=>a.nivel!=="rojo" && !yaDicho(a.texto)).slice(0,1).map(a=>["🟡","al-amarillo",a.texto]));
+  if (hacer.length) body.append(el("div",{class:"card"}, el("h3",{text:"✅ Lo que conviene hacer ahora"}),
+    el("ul",{class:"alertas-rrhh"}, hacer.map(([i,c,t])=>el("li",{class:c}, el("span",{class:"sem",text:i}), el("div",{text:t}))))));
+
+  // ===== 2 · Pestañas =====
+  const tabs = [
+    ["ventas","🛍️ Ventas y productos", ()=>tabVentas(R, PR, K)],
+    ["plata","💵 La plata", ()=>tabPlata(R, U, S)],
+    D.maria && (R.gcSS27 || R.cobranzas || R.anticipos || R.cuentasCorrientes) ? ["gc","🤝 Grandes cuentas", ()=>tabGrandes(R)] : null,
+    ["control","🔎 Control", ()=>tabControl(D, R, K, recargar)]].filter(Boolean);
+  body.append(pestanas39("fin", tabs));
+}
+/** Pestaña Ventas: facturado por canal + lo más vendido (Palermo · SS27 · fuera de temporada) + Excel fuera de temporada. */
+function tabVentas(R, PR, K){
+  const out = [];
+  if (K.configurado){
+    const lista = L => el("ol",{class:"top5 prod38"}, L.map(x=>el("li",{}, el("b",{text:x.nombre||x.codigo}), ` · ${x.unidades} u`, el("span",{class:"hint",text:" · "+x.codigo}))));
+    const bloque = (t, L, vacio) => el("div",{class:"prod39"}, el("h3",{text:t}), L && L.length ? lista(L.slice(0,5)) : el("p",{class:"hint",text:vacio}));
+    const card = el("div",{class:"card"}, el("h2",{text:"🔥 Lo que más se vende"}));
+    if (!PR) card.append(el("p",{class:"hint",text:"Todavía no se calculó: tocá «🔄 Actualizar» (o esperá a la actualización de las 7 h)."}));
+    else {
+      const ss27 = PR.ss27 || (PR.todos||[]).filter(x=>x.temporada==="SS27"), fuera = PR.fuera || (PR.todos||[]).filter(x=>x.temporada!=="SS27");
+      card.append(el("p",{class:"hint",text:`Unidades vendidas del ${fmtF(PR.desde)} al ${fmtF(PR.hasta)} (Contabilium, ya restadas las devoluciones).`}),
+        el("div",{class:"prod39-grid"},
+          bloque("🏬 Palermo", PR.palermo, "Sin ventas de Palermo en la semana."),
+          bloque("🌱 Temporada SS27", ss27, "Todavía no hay ventas de SS27 en la semana."),
+          bloque("🍂 Fuera de temporada", fuera, "Sin ventas fuera de temporada en la semana.")));
     }
-    if (SX.filas.length){
-      const tc = SX.filas.map(f=>fila(f.sector, f.valores, f.anio));
-      if (SX.cajaPalermo.some(Boolean)) tc.splice(1,0, el("tr",{class:"caja38"}, el("th",{scope:"row",text:"↳ Palermo según cierres de caja"}), ...SX.cajaPalermo.map((v,i)=>el("td",{class:"n",text:v?moneyK(v)+` (${SX.diasCaja[i]} d)`:"–"})), el("td",{})));
-      tc.push(fila("Total cobrado", M.map((m,i)=>SX.filas.reduce((a,f)=>a+f.valores[i],0)), SX.filas.reduce((a,f)=>a+f.anio,0), "tot38"));
-      card.append(el("h3",{text:"💵 Cobrado (Templete)"}),
-        el("p",{class:"hint",text:"La plata que entró, según el Templete. El mes en curso suma las facturas de Contabilium que todavía no se cargaron, salvo las de clientes que ya habían pagado (para no contar dos veces) y las de grandes cuentas (se cobran con anticipos)."}),
-        el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cabe("Sector")), el("tbody",{},tc))));
-    }
-    const pal = SX.filas.find(f=>f.sector==="Palermo"), dif = pal ? SX.cajaPalermo[1]-pal.valores[1] : 0;
-    if (SX.cajaPalermo[2]) card.append(el("p",{class:"hint",text:`Palermo en ${mesLargo(M[2])}: ${moneyK(SX.cajaPalermo[2])} según los cierres de caja (${SX.diasCaja[2]} días, último ${fmtF(SX.ultimoCierre)}).`}));
-    if (pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03)) card.append(el("p",{class:"notice warn",text:`En ${mesLargo(M[1])} Palermo vendió ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} según el Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}). Conviene revisar qué no se facturó o qué falta cargar.`}));
-    body.append(card);
-  }
-  // 5b2 · Control mes a mes: ¿coincide con Contabilium? ¿y con el Templete?
-  if (R.controlMeses && R.controlMeses.meses && R.controlMeses.meses.length){ const CMx = R.controlMeses;
-    const MOT = {faltaCargar:"facturas que todavía no están en el Templete", grandesCuentas:"facturas a grandes cuentas (se cobran con anticipos)", cobradaAntes:"facturas de clientes que ya habían pagado sin número de factura (la plata ya está contada)", pagadaConAnticipo:"facturas a grandes cuentas pagadas con anticipos ya cargados (no se cuentan dos veces)",
-      cargadaOtroMes:"facturas de este mes cargadas en el Templete en otro mes", deOtroMes:"cobros de facturas de otro mes", noEstaEnContabilium:"números de factura del Templete que no existen en Contabilium (¿error de tipeo?)",
-      importeDistinto:"importes distintos entre Templete y Contabilium", repetidaEnTemplete:"facturas cargadas más de una vez en el Templete", notasCreditoOtroMes:"notas de crédito (Contabilium las resta el mes en que se emiten)",
-      sinNumeroFactura:"ventas del Templete sin número de factura", otroPuntoVenta:"ventas del Templete de otro punto de venta"};
-    const filas = CMx.meses.slice().reverse().map(r=>{ const ok = Math.abs(r.diferencia) < Math.max(10000, r.informe.conIva*0.005);
-      const ks = Object.keys(r.motivos).filter(k=>Math.abs(r.motivos[k].monto)>=1000).sort((a,b)=>Math.abs(r.motivos[b].monto)-Math.abs(r.motivos[a].monto));
-      return el("details",{class:"ctl39"}, el("summary",{}, el("b",{text:capi(mesLargo(r.mes))}), el("span",{text:` · Facturado ${moneyK(r.informe.conIva)} · Templete ${moneyK(r.templete.ventas)} · `}),
-          el("span",{class:"pill "+(ok?"ok":""),text: ok?"✅ coincide":`diferencia ${moneyK(Math.abs(r.diferencia))}`})),
-        el("p",{class:"hint",text:`Contabilium: ${r.informe.comprobantes} comprobantes · ${moneyK(r.informe.sinIva)} sin IVA · ${moneyK(r.informe.conIva)} con IVA`+["0001","0005","0007"].filter(p=>r.pv[p]).map(p=>` · ${p==="0001"?"Palermo":p==="0005"?"Lima":"Janette"} ${p} ${moneyK(r.pv[p].conIva)}`).join("")+`.`+(r.templete.anticipos?` En el Templete además entraron ${moneyK(r.templete.anticipos)} de anticipos de temporada.`:"")}),
-        ks.length ? el("ul",{class:"ant38-av"}, ks.map(k=>el("li",{text:`${r.motivos[k].monto>0?"➕":"➖"} ${moneyK(Math.abs(r.motivos[k].monto))} · ${r.motivos[k].n} ${MOT[k]||k}`}))) : null,
-        Math.abs(r.sinExplicar)>=1000 ? el("p",{class:"notice warn",text:`Quedan ${moneyK(Math.abs(r.sinExplicar))} sin explicar: revisarlo en la descarga.`}) : null); });
-    body.append(el("div",{class:"card"}, el("h2",{text:"🔎 Control mes a mes: Contabilium vs. Templete"}),
-      el("p",{class:"lead",text:"«Facturado» es igual al informe de Contabilium. «Templete» es lo que se registró como venta cobrada (sin anticipos). La diferencia se explica factura por factura: ➕ suma a lo facturado frente al Templete, ➖ resta."}),
-      ...filas, el("p",{class:"hint",text:`${CMx.comprobantes} comprobantes de Contabilium leídos (última lectura ${fechaHora(CMx.leido)}). La lista factura por factura está en «Descargar Excel» → hojas «Facturado (= Contabilium)», «Facturado vs Templete» y «Detalle de diferencias».`})));
-  }
-  // 5c · Productos (Contabilium): más vendidos en Palermo, top 10 de movimiento y Excel para el Cyber Monday
-  if ((R.contabilium||{}).configurado){ const PR = R.productos;
-    const lista = (L, cap) => el("ol",{class:"top5 prod38"}, L.map(x=>el("li",{}, el("b",{text:x.nombre||x.codigo}), ` · ${x.unidades} u`, el("span",{class:"hint",text:` · ${x.codigo}${x.temporada==="fuera"?" · fuera de temporada":""}`}))));
-    const bx = el("button",{class:"btn primary",type:"button",text:"⬇️ Excel fuera de temporada (Cyber Monday)"}), bpc = el("button",{class:"btn",type:"button",text:"⬇️ PDF fuera de temporada"});
-    // El stock se lee de Contabilium una sola vez: si después se pide el otro formato (dentro de 10 min), se reusa.
+    const bx = el("button",{class:"btn primary",type:"button",text:"⬇️ Excel fuera de temporada"}), bpc = el("button",{class:"btn",type:"button",text:"⬇️ PDF"});
     const cyber = async (b, fmt)=>{ spinBtn(b,"Leyendo el stock de Contabilium… (puede tardar un minuto)");
       try{ if (!CYB38.D || Date.now()-CYB38.t > 600000){ CYB38.D = await apiS("descargaCyber"); CYB38.t = Date.now(); }
         await (fmt==="pdf" ? exportarPDF37(CYB38.D) : exportarXLSX37(CYB38.D)); }
       catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); };
     bx.onclick = ()=>cyber(bx,"xlsx"); bpc.onclick = ()=>cyber(bpc,"pdf");
-    const card = el("div",{class:"card"}, el("h2",{text:"🛍️ Productos: lo que más se vende"}));
-    if (!PR) card.append(el("p",{class:"hint",text:"Todavía no se calculó. Tocá «🔄 Actualizar» arriba de este panel (o esperá a la actualización de las 7 h) para leer los productos de Contabilium."}));
-    else card.append(el("p",{class:"hint",text:`Unidades vendidas del ${fmtF(PR.desde)} al ${fmtF(PR.hasta)} según Contabilium (COT menos notas de crédito, ${PR.comprobantes} comprobantes).`}),
-      el("div",{class:"split"},
-        el("div",{}, el("h3",{text:"🏬 Más vendidos en Palermo · última semana"}), PR.palermo.length ? lista(PR.palermo.slice(0,10)) : el("p",{class:"hint",text:"Sin ventas de Palermo en la semana."})),
-        el("div",{}, el("h3",{text:"🔥 Top 10 de mayor movimiento (todos los locales)"}), PR.todos.length ? lista(PR.todos) : el("p",{class:"hint",text:"Sin datos."}))));
-    card.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Productos que NO son SS27 y tienen stock, con stock en HB Palermo y HB Lima, precio y valor del stock:"}), bx, bpc));
-    body.append(card);
-    if (D.maria && R.cobranzas){ const K = R.cobranzas;
-      body.append(el("div",{class:"card"}, el("h2",{text:"💰 Cobranzas pendientes"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
-        el("div",{class:"hkpis"}, hk("Pendiente de cobro", moneyK(K.total), `${K.clientes} clientes`), hk("Vencido", moneyK(K.vencido), "", K.vencido?"neg":""), hk("Por vencer", moneyK(K.total-K.vencido))),
-        el("ol",{class:"top5"}, K.top.slice(0,10).map(c=>el("li",{}, el("b",{text:c.cliente+(c.franquicia?" ("+c.franquicia+")":"")}), ` · ${moneyK(c.saldo)}`, c.vencido?el("span",{class:"pill bad",text:`vencido ${moneyK(c.vencido)}`}):null, el("span",{class:"hint",text:` · ${c.comprobantes} comprobante(s) · desde ${fmtF(c.masViejo)}`})))),
-        el("p",{class:"hint",text:"Sale del saldo de los comprobantes del último año en Contabilium. Se actualiza todos los días a las 7 h y con «Actualizar datos»."})));
+    card.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"📋 Listado para liquidar: todo lo que no es SS27 y tiene stock (Palermo y Lima, precio, valor del stock y lo vendido en la semana)."}), bx, bpc));
+    out.push(card);
+  }
+  // Facturado por canal (Contabilium); lo cobrado del Templete queda plegado
+  if (R.sectores && (R.sectores.filas.length || R.sectores.facturado)){ const SX = R.sectores, M = SX.meses, FX = SX.facturado;
+    const cabe = t => el("tr",{}, el("th",{text:t}), ...M.map((m,i)=>el("th",{class:"n",text:i===2?mesTxt(m)+" *":mesTxt(m)})), el("th",{class:"n",text:"Año"}));
+    const fila = (t, vals, anio, cls) => el("tr",cls?{class:cls}:{}, el("th",{scope:"row",text:t}), ...vals.map(v=>el("td",{class:"n",text:v?moneyK(v):"–"})), el("td",{class:"n",text:anio!=null?moneyK(anio):""}));
+    const card = el("div",{class:"card"}, el("h2",{text:"🏬 Ventas por canal"}));
+    if (FX){
+      const tf = FX.filas.map(f=>fila(f.canal, f.valores, f.anio));
+      tf.push(fila("Total", FX.totalConIva, FX.filas.reduce((a,f)=>a+f.anio,0), "tot38"));
+      card.append(el("p",{class:"hint",text:"Facturado en Contabilium, con IVA y restadas las notas de crédito (igual al informe de Contabilium). * mes en curso."}),
+        el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cabe("Canal")), el("tbody",{},tf))));
     }
+    if (SX.filas.length){
+      const tc = SX.filas.map(f=>fila(f.sector, f.valores, f.anio));
+      if (SX.cajaPalermo.some(Boolean)) tc.splice(1,0, el("tr",{class:"caja38"}, el("th",{scope:"row",text:"↳ Palermo según caja"}), ...SX.cajaPalermo.map((v,i)=>el("td",{class:"n",text:v?moneyK(v):"–"})), el("td",{})));
+      tc.push(fila("Total cobrado", M.map((m,i)=>SX.filas.reduce((a,f)=>a+f.valores[i],0)), SX.filas.reduce((a,f)=>a+f.anio,0), "tot38"));
+      card.append(el("details",{class:"mas39"}, el("summary",{text:"Ver lo cobrado por sector (Templete)"}),
+        el("p",{class:"hint",text:"La plata que entró según el Templete. No se suma a lo facturado: es la misma venta vista del lado del cobro."}),
+        el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cabe("Sector")), el("tbody",{},tc)))));
+    }
+    const pal = SX.filas.find(f=>f.sector==="Palermo"), dif = pal ? SX.cajaPalermo[1]-pal.valores[1] : 0;
+    if (pal && SX.cajaPalermo[1] && Math.abs(dif) > Math.max(50000, SX.cajaPalermo[1]*0.03)) card.append(el("p",{class:"notice warn",text:`Palermo en ${mesLargo(M[1])}: ${moneyK(SX.cajaPalermo[1])} según la caja y ${moneyK(pal.valores[1])} en el Templete (${dif>0?"faltan":"sobran"} ${moneyK(Math.abs(dif))}).`}));
+    out.push(card);
+  } else if (R.canales.length) out.push(el("div",{class:"card"}, el("h3",{text:"🛍️ ¿Por dónde se vende? ("+R.anio+")"}), barrasH(R.canales.slice(0,6), "#4F46E5")));
+  if (R.topClientes.length) out.push(el("div",{class:"card"}, el("h3",{text:"⭐ Los que más compraron en "+R.anio}), el("ol",{class:"top5"}, R.topClientes.slice(0,5).map(c=>el("li",{}, el("b",{text:c.nombre}), " · "+moneyK(c.monto))))));
+  return out;
+}
+/** Pestaña La plata: mes a mes, a dónde se va, gastos, mercadería y retiros. */
+function tabPlata(R, U, S){
+  const out = [], meses = R.meses.slice(-6);
+  if (meses.length) out.push(el("div",{class:"card"}, el("h3",{text:"📅 Mes a mes"}), barrasIE(meses, x=>mesTxt(x.mes)),
+    el("div",{class:"row leyenda"}, el("span",{}, el("i",{class:"dot",style:"background:#16A34A"})," Entró"), el("span",{}, el("i",{class:"dot",style:"background:#DC2626"})," Salió"), el("span",{class:"hint",text:"Abajo: lo que quedó (en rojo, lo que faltó)."})),
+    el("p",{class:"hint",text:`En ${R.anio}: entraron ${moneyK(R.anioTotales.ingresos)} y salieron ${moneyK(R.anioTotales.egresos)} (${moneyK(R.anioTotales.retiros)} fueron retiros de socios).`})));
+  if ((S.destinoAnio||[]).length){
+    const caja = el("div",{}), segs = el("div",{class:"row seg38"});
+    const ver = (L, t)=>{ caja.textContent=""; caja.append(barraCada100(L)); [...segs.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.k===t)); };
+    const opc = [["anio","Año "+R.anio, S.destinoAnio]].concat((S.destinoMeses||[]).slice(-2).map(d=>[d.mes, capi(MESL(d.mes))+(d.enCurso?" (en curso)":""), d.lista]));
+    opc.filter(x=>(x[2]||[]).length).forEach(([k,t,L])=>{ const b = el("button",{class:"btn sm",type:"button",text:t,"data-k":k}); b.onclick=()=>ver(L,k); segs.append(b); });
+    out.push(el("div",{class:"card"}, el("h3",{text:"🧭 De cada $ 100 que entran, ¿a dónde van?"}), segs, caja));
+    ver(S.destinoAnio,"anio");
   }
-  // 6 · Quién compra y quién paga
+  if (S.equilibrio){ const E = S.equilibrio;
+    out.push(el("details",{class:"card mas39"}, el("summary",{text:`🎯 ¿Por qué hay que vender ${moneyK(E.necesario)} por mes?`}),
+      el("ol",{class:"pasos38"},
+        el("li",{text:`Gastos fijos por mes (sueldos, alquileres, publicidad, bancos, impuestos): ${moneyK(E.fijosMes)}.`}),
+        el("li",{text:`De cada $ 100 vendidos, $ ${E.ropaCada100} se van en hacer la ropa (talleres, telas, insumos, envíos).`}),
+        el("li",{text:`Quedan $ ${100-E.ropaCada100} de cada $ 100 para los gastos fijos → hay que vender unos ${moneyK(E.necesario)}. Con los retiros de socios de siempre: ${moneyK(E.conSocios)}.`})),
+      el("p",{class:"hint",text:"Calculado con "+E.meses.map(MESL).join(", ")+"."})));
+  }
   const fila = el("div",{class:"split"});
-  if (!R.sectores && R.canales.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🛍️ ¿Por dónde se vende? ("+R.anio+")"}), barrasH(R.canales.slice(0,6), "#4F46E5")));
-  if (R.gcSS27 && R.gcSS27.cuentas.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que abonó cada gran cuenta · SS27"}),
-    el("ol",{class:"top5"}, R.gcSS27.cuentas.map(c=>el("li",{}, el("b",{text:c.granCuenta}), ` · ${moneyK(c.abono)}`, el("span",{class:"hint",text:` de ${moneyK(c.pedido)} pedidos${c.pct!=null?` (${c.pct} %)`:""} · compró en el año ${moneyK(c.facturadoAnio)}`})))),
-    el("p",{class:"hint",text:"Misma fuente que Indicadores: Contabilium + cuenta corriente (lo mayor) y pedido de «Control ingreso»."})));
-  else if (R.franquicias.length) fila.append(el("div",{class:"card"}, el("h3",{text:"🤝 Lo que pagó cada gran cuenta ("+R.anio+")"}),
-    el("ol",{class:"top5"}, R.franquicias.slice(0,5).map(f=>el("li",{}, el("b",{text:f.franquicia}), ` · ${moneyK(f.cobradoAnio)}`, el("span",{class:"hint",text:f.ultimo?` · último pago ${fmtF(f.ultimo)}`:""}))))));
-  if (R.topClientes.length) fila.append(el("div",{class:"card"}, el("h3",{text:"⭐ Los 5 que más compraron ("+R.anio+")"}), el("ol",{class:"top5"}, R.topClientes.map(c=>el("li",{}, el("b",{text:c.nombre}), " · "+moneyK(c.monto))))));
-  if (fila.children.length) body.append(fila);
-  // 7 · Gastos, mercadería y socios
-  const fila2 = el("div",{class:"split"});
-  if (U && R.cuentasUltimoMes.length) fila2.append(el("div",{class:"card"}, el("h3",{text:"💸 En qué más se gastó en "+MESL(U.mes)}),
-    el("ol",{class:"top5"}, R.cuentasUltimoMes.map(c=>el("li",{}, el("b",{text:c.nombre}), ` · ${moneyK(c.monto)}`,
-      c.vsPromPct!=null && c.promedio>=1000000 ? el("span",{class:"pill "+(c.vsPromPct>=40?"bad":c.vsPromPct<=-20?"ok":""),text: Math.abs(c.vsPromPct)<8?"normal":c.vsPromPct>0?`+${c.vsPromPct} % que lo normal`:`${c.vsPromPct} % que lo normal`}) : null)))));
-  if (S.stock) fila2.append(el("div",{class:"card"}, el("h3",{text:"📦 Mercadería guardada (al cierre de "+MESL(S.stock.mes)+")"}),
-    el("div",{class:"hkpis"}, hk("Vale", moneyK(S.stock.total), S.stock.previo?(S.stock.total>=S.stock.previo?"▲ ":"▼ ")+moneyK(Math.abs(S.stock.total-S.stock.previo))+" vs. mes anterior":"")),
-    barrasH(S.stock.locales.slice(0,6), "#0F766E"),
-    el("p",{class:"hint",text:"Es plata «parada» en ropa sin vender. Sale de la hoja «cierre» de la planilla."})));
-  if (R.retiros.length) fila2.append(el("div",{class:"card"}, el("h3",{text:"👤 Retiros de los socios ("+R.anio+")"}), barrasH(R.retiros.slice(0,5).map(r=>({nombre:r.nombre.replace(/^Dividendos\s*/i,"").trim()||"Sin nombre", monto:r.monto})), "#B45309")));
-  if (fila2.children.length) body.append(fila2);
-  // 7b · Anticipos y cobranzas (solo María)
-  if (D.maria && R.anticipos && R.anticipos.clientes.length){ const A = R.anticipos;
-    body.append(el("div",{class:"card ant38"}, el("h2",{text:"💳 Anticipos de temporada y saldo a cobrar"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
-      el("div",{class:"hkpis"}, hk("Pedidos", moneyK(A.pedidos)), hk("Anticipado", moneyK(A.total), A.pedidos?Math.round(A.total/A.pedidos*100)+" % de los pedidos":"","pos"), hk("Falta cobrar", moneyK(A.saldo), "", "neg")),
-      el("div",{class:"ant38-lista"}, A.clientes.map(c=>el("div",{class:"ant38-cli"},
-        el("div",{class:"row"}, el("b",{text:c.cliente}), el("span",{class:"spacer"}), c.pedido?el("span",{class:"hint",text:`Pedido ${moneyK(c.pedido)}`}):null),
-        c.pedido ? el("div",{class:"med-barra",role:"img","aria-label":`${c.cliente}: cobrado ${c.pct} %`}, el("i",{class:c.pct>=50?"ok":"bad",style:`width:${Math.min(100,c.pct)}%`})) : null,
-        el("p",{class:"hint",text:`Anticipado ${moneyK(c.anticipado)}${c.pedido?` · ${c.pct} % · falta ${moneyK(c.saldo)}`:""}${c.pagadoPlanilla!=null?` · Control ingreso: ${moneyK(c.pagadoPlanilla)}`:""}${c.facturasAnio?` · facturas pagadas en el año: ${moneyK(c.facturasAnio)}`:""}${c.terceros?` · pagaron también: ${c.terceros.join(", ")}`:""}`}),
-        c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null))),
-      el("p",{class:"hint",text:"El cliente sale del detalle del anticipo (a veces paga un tercero). El pedido y lo abonado vienen de «Control ingreso Nueva temporada 27». El detalle pago por pago está en la descarga."})));
-  }
-  // 7b1 · Grandes cuentas · SS27 (solo María): pedido, abonado y lo que falta — la misma fuente que Indicadores
-  if (D.maria && R.gcSS27 && R.gcSS27.cuentas.length){ const S = R.gcSS27;
-    const cab = el("tr",{}, ...["Gran cuenta","Pedido SS27","Abonó","Falta pagar","Despachado (facturado)","Debe hoy / a favor"].map((t,i)=>el("th",{class:i?"n":"",text:t})));
-    const filas = S.cuentas.map(c=>el("tr",{}, el("th",{scope:"row",text:c.granCuenta}), el("td",{class:"n",text:c.pedido?moneyK(c.pedido):"–"}),
-      el("td",{class:"n",text:moneyK(c.abono)+(c.pct!=null?` (${c.pct} %)`:"")}), el("td",{class:"n"+(c.faltaPagar?" neg":""),text:c.pedido?moneyK(c.faltaPagar):"–"}),
-      el("td",{class:"n",text:moneyK(c.facturado)}), el("td",{class:"n"+(c.debe?" neg":""),text:c.debe?"debe "+moneyK(c.debe):c.aFavor?"a favor "+moneyK(c.aFavor):"–"})));
-    filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), el("td",{class:"n",text:moneyK(S.pedido)}), el("td",{class:"n",text:moneyK(S.abono)+(S.pct!=null?` (${S.pct} %)`:"")}),
-      el("td",{class:"n",text:moneyK(S.faltaPagar)}), el("td",{class:"n",text:moneyK(S.facturado)}), el("td",{class:"n",text:S.debe?"debe "+moneyK(S.debe):""})));
-    const av = [].concat(...S.cuentas.map(c=>c.avisos.map(t=>c.granCuenta+": "+t)));
-    body.append(el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas · temporada SS27"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
-      el("p",{class:"lead",text:"Pedido = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre las cobranzas de Contabilium (incluidas las «a cuenta») y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Debe / a favor = abonado contra lo ya despachado."}),
+  if (U && R.cuentasUltimoMes.length) fila.append(el("div",{class:"card"}, el("h3",{text:"💸 En qué más se gastó en "+MESL(U.mes)}),
+    el("ol",{class:"top5"}, R.cuentasUltimoMes.slice(0,5).map(c=>el("li",{}, el("b",{text:c.nombre}), ` · ${moneyK(c.monto)}`,
+      c.vsPromPct!=null && c.promedio>=1000000 && Math.abs(c.vsPromPct)>=8 ? el("span",{class:"pill "+(c.vsPromPct>=40?"bad":c.vsPromPct<=-20?"ok":""),text: c.vsPromPct>0?`+${c.vsPromPct} %`:`${c.vsPromPct} %`}) : null)))));
+  if (S.stock) fila.append(el("div",{class:"card"}, el("h3",{text:"📦 Mercadería sin vender"}),
+    el("div",{class:"hkpis"}, hk("Vale", moneyK(S.stock.total), (S.stock.previo?(S.stock.total>=S.stock.previo?"▲ ":"▼ ")+moneyK(Math.abs(S.stock.total-S.stock.previo))+" vs. mes anterior · ":"")+"cierre de "+MESL(S.stock.mes))),
+    barrasH(S.stock.locales.slice(0,5), "#0F766E")));
+  if (R.retiros.length) fila.append(el("div",{class:"card"}, el("h3",{text:"👤 Retiros de socios ("+R.anio+")"}), barrasH(R.retiros.slice(0,5).map(r=>({nombre:r.nombre.replace(/^Dividendos\s*/i,"").trim()||"Sin nombre", monto:r.monto})), "#B45309")));
+  if (fila.children.length) out.push(fila);
+  return out;
+}
+/** Pestaña Grandes cuentas (solo María): temporada SS27 primero; cobranzas y el detalle, plegados. */
+function tabGrandes(R){
+  const out = [];
+  if (R.gcSS27 && R.gcSS27.cuentas.length){ const G = R.gcSS27;
+    const cab = el("tr",{}, ...["Gran cuenta","Pidió","Abonó","Falta pagar","Despachado","Hoy"].map((t,i)=>el("th",{class:i?"n":"",text:t})));
+    const filas = G.cuentas.map(c=>el("tr",{}, el("th",{scope:"row",text:c.granCuenta}), el("td",{class:"n",text:c.pedido?moneyK(c.pedido):"–"}),
+      el("td",{class:"n",text:moneyK(c.abono)+(c.pct!=null?` · ${c.pct} %`:"")}), el("td",{class:"n"+(c.faltaPagar?" neg":""),text:c.pedido?moneyK(c.faltaPagar):"–"}),
+      el("td",{class:"n",text:moneyK(c.facturado)}), el("td",{class:"n"+(c.debe?" neg":""),text:c.debe?"debe "+moneyK(c.debe):c.aFavor?"a favor "+moneyK(c.aFavor):"al día"})));
+    filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), el("td",{class:"n",text:moneyK(G.pedido)}), el("td",{class:"n",text:moneyK(G.abono)+(G.pct!=null?` · ${G.pct} %`:"")}),
+      el("td",{class:"n",text:moneyK(G.faltaPagar)}), el("td",{class:"n",text:moneyK(G.facturado)}), el("td",{class:"n",text:G.debe?"debe "+moneyK(G.debe):""})));
+    const av = [].concat(...G.cuentas.map(c=>c.avisos.map(t=>c.granCuenta+": "+t)));
+    out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"🤝 Temporada SS27"}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"🔒 Solo vos"})),
+      el("div",{class:"hkpis",style:"margin-top:10px"}, hk("Pidieron", moneyK(G.pedido)), hk("Abonaron", moneyK(G.abono), G.pct!=null?G.pct+" % del pedido":"", "pos"), hk("Falta que paguen", moneyK(G.faltaPagar), "", G.faltaPagar?"neg":"")),
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
       av.length ? el("ul",{class:"ant38-av"}, av.map(t=>el("li",{text:"🟡 "+t}))) : el("p",{class:"hint",text:"✅ Contabilium y la planilla de cuentas corrientes coinciden."}),
-      el("p",{class:"hint",text:`Contabilium leído ${S.leida.contabilium?fechaHora(S.leida.contabilium):"–"} · planilla modificada ${S.leida.cuentaCorriente?fechaHora(S.leida.cuentaCorriente):"–"}. Lo que compró cada uno en el año está en «Lo que abonó cada gran cuenta».`})));
+      el("details",{class:"mas39"}, el("summary",{text:"¿De dónde sale cada columna?"}),
+        el("p",{class:"hint",text:"Pidió = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre las cobranzas de Contabilium (también las «a cuenta») y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Hoy = lo abonado contra lo ya despachado (más lo que se debía de antes)."}),
+        el("p",{class:"hint",text:`Contabilium leído ${G.leida.contabilium?fechaHora(G.leida.contabilium):"–"} · planilla modificada ${G.leida.cuentaCorriente?fechaHora(G.leida.cuentaCorriente):"–"}.`}))));
   }
-  // 7b2 · Cuentas corrientes de grandes cuentas (solo María): saldo real, temporada SS27 y cruces
-  if (D.maria && (R.cuentasCorrientes || R.ctaCteError)){ const CC = R.cuentasCorrientes;
-    const card = el("div",{class:"card cc39"}, el("h2",{text:"📒 Planilla de cuentas corrientes (referencia, a revisar)"}), el("span",{class:"pill",text:"🔒 Solo lo ves vos"}),
-      el("p",{class:"notice warn",text:"Esta planilla todavía no está al día: los números del panel salen de Contabilium. Acá se muestra solo para detectar diferencias."}));
-    if (!CC) card.append(el("p",{class:"notice warn",text:"No se pudo leer la planilla de cuentas corrientes: "+R.ctaCteError}));
+  if (R.cobranzas){ const Kc = R.cobranzas;
+    out.push(el("div",{class:"card"}, el("h3",{text:"💰 Lo que nos deben (todos los clientes)"}),
+      el("div",{class:"hkpis"}, hk("Pendiente", moneyK(Kc.total), `${Kc.clientes} clientes`), hk("Vencido", moneyK(Kc.vencido), "", Kc.vencido?"neg":""), hk("Por vencer", moneyK(Kc.total-Kc.vencido))),
+      el("ol",{class:"top5"}, Kc.top.slice(0,5).map(c=>el("li",{}, el("b",{text:c.cliente+(c.franquicia?" ("+c.franquicia+")":"")}), ` · ${moneyK(c.saldo)}`, c.vencido?el("span",{class:"pill bad",text:`vencido ${moneyK(c.vencido)}`}):null))),
+      el("p",{class:"hint",text:"Saldo de los comprobantes del último año en Contabilium. La lista completa está en «Descargar Excel» (pestaña Control)."})));
+  }
+  if (R.anticipos && R.anticipos.clientes.length){ const A = R.anticipos;
+    out.push(el("details",{class:"card mas39"}, el("summary",{text:`💳 Anticipos cargados en el Templete · ${moneyK(A.total)}`}),
+      el("div",{class:"ant38-lista"}, A.clientes.map(c=>el("div",{class:"ant38-cli"},
+        el("div",{class:"row"}, el("b",{text:c.cliente}), el("span",{class:"spacer"}), el("span",{class:"hint",text:`${moneyK(c.anticipado)}${c.pedido?` de ${moneyK(c.pedido)} (${c.pct} %)`:""}`})),
+        c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null)))));
+  }
+  if (R.cuentasCorrientes || R.ctaCteError){ const CC = R.cuentasCorrientes;
+    const det = el("details",{class:"card mas39"}, el("summary",{text:"📒 Planilla de cuentas corrientes (referencia, todavía no está al día)"}));
+    if (!CC) det.append(el("p",{class:"notice warn",text:"No se pudo leer la planilla: "+R.ctaCteError}));
     else {
-      card.append(el("p",{class:"lead",text:"Saldo negativo = a favor del cliente: pagó por adelantado y todavía no se le despachó (o facturó) esa mercadería. SS27 = temporada nueva: lo que pagó, lo que ya se le facturó/despachó y lo que pidió en «Control ingreso»."}),
-        el("div",{class:"hkpis"}, hk("A favor de los clientes", moneyK(CC.aFavor), "mercadería ya pagada, por entregar"), hk("Deben", moneyK(CC.deben), "", CC.deben?"neg":""),
-          hk("SS27 cobrado", moneyK(CC.ss27.pagado), CC.ss27.pedido?`de ${moneyK(CC.ss27.pedido)} pedidos`:""), hk("SS27 facturado", moneyK(CC.ss27.facturado), "ya despachado")));
-      CC.cuentas.forEach(c=>{ const T = c.ss27;
-        card.append(el("details",{class:"ctl39"}, el("summary",{}, el("b",{text:c.granCuenta}), el("span",{text:` · ${c.estado==="a favor"?"a favor "+moneyK(-c.saldo):c.estado==="debe"?"debe "+moneyK(c.saldo):"saldado"} · `}),
-            c.avisos.length ? el("span",{class:"pill bad",text:`${c.avisos.length} para revisar`}) : el("span",{class:"pill ok",text:"✅ en orden"})),
-          el("p",{class:"hint",text:`${c.cliente} · ${c.movimientos} movimientos · último ${c.ultimo?fmtF(c.ultimo):"–"}`}),
-          c.saldoConFaltantes!=null ? el("p",{class:"notice warn",text:`Si se suman las facturas de Contabilium que faltan en esta cuenta corriente, el saldo real sería ${c.saldoConFaltantes<0?"a favor "+moneyK(-c.saldoConFaltantes):"una deuda de "+moneyK(c.saldoConFaltantes)}.`}) : null,
-          T ? el("p",{text:`SS27 (desde ${T.desde?fmtF(T.desde):"–"}): pagó ${moneyK(T.pagado)} en ${T.pagos} pagos · facturado/despachado ${moneyK(T.facturado)}`+(T.pedido?` · pedido ${moneyK(T.pedido)} (${T.pctCobrado} % cobrado, falta cobrar ${moneyK(T.faltaCobrar)}, falta facturar/despachar ${moneyK(T.faltaFacturar)})`:"")+(T.saldoAntes?` · antes de SS27 ${T.saldoAntes>0?"debía":"tenía a favor"} ${moneyK(Math.abs(T.saldoAntes))}`:"")+"."}) : el("p",{class:"hint",text:"Sin movimientos de SS27 todavía."}),
-          c.avisos.length ? el("ul",{class:"ant38-av"}, c.avisos.map(t=>el("li",{text:"🟡 "+t}))) : null)); });
-      if ((R.dobleConteo||[]).length) card.append(el("p",{class:"notice warn",text:`Posible doble conteo: ${R.dobleConteo.map(x=>`factura ${x.factura} de ${x.granCuenta} (${moneyK(x.monto)}, ${mesLargo(x.mes)}, fila ${x.fila} del Templete)`).join("; ")}. Según la planilla se pagó con anticipos que ya están cargados como cobro: revisalo (no se descontó nada).`}));
-      card.append(el("p",{class:"hint",text:`Fuente: «${CC.archivo}» (solo lectura, modificada ${fechaHora(CC.modificado)}). Cada factura se cruza con Contabilium y cada pago con el Templete. El detalle movimiento por movimiento está en la descarga → hojas «Cuentas corrientes» y «Grandes cuentas SS27».`}));
+      CC.cuentas.forEach(c=>det.append(el("p",{}, el("b",{text:c.granCuenta}), ` · ${c.estado==="a favor"?"a favor "+moneyK(-c.saldo):c.estado==="debe"?"debe "+moneyK(c.saldo):"saldado"} · último movimiento ${c.ultimo?fmtF(c.ultimo):"–"}`,
+        c.avisos.length ? el("span",{class:"pill bad",text:` ${c.avisos.length} para revisar`}) : null)));
+      if ((R.dobleConteo||[]).length) det.append(el("p",{class:"notice warn",text:`Posible doble conteo: ${R.dobleConteo.map(x=>`factura ${x.factura} de ${x.granCuenta} (${moneyK(x.monto)})`).join("; ")}. No se descontó nada: revisalo.`}));
+      det.append(el("p",{class:"hint",text:`«${CC.archivo}», modificada ${fechaHora(CC.modificado)}. El detalle está en la descarga (hojas «Cuentas corrientes» y «Grandes cuentas SS27»).`}));
     }
-    body.append(card);
+    out.push(det);
   }
-  // 7c · Ventas facturadas: Contabilium ↔ Templete
-  const K = R.contabilium || {};
-  { const card = el("div",{class:"card"}, el("h2",{text:"🧾 Ventas facturadas: Contabilium y Templete"}));
-    if (D.maria && (!K.configurado || !K.ok)) card.append(formContabilium(recargar));
-    if (!K.configurado) card.append(el("p",{class:"lead",text:"Cuando se conecte Contabilium, acá vas a ver lo facturado (COT) en Palermo 0001, Lima 0005 y Janette 0007, ya descontadas las notas de crédito. Lo que todavía no esté en el Templete se suma solo al mes, y cuando lo cargues se concilia por número de factura, sin duplicar."}));
-    else if (!K.ok) card.append(el("p",{class:"notice warn",text:"No se pudo leer Contabilium: "+(K.error||"error")+". El panel sigue con los datos del Templete."}));
-    else K.conciliacion.forEach(c=>{
-      card.append(el("h3",{text:capi(mesLargo(c.mes))}),
-        el("div",{class:"hkpis"}, hk("Facturado", moneyK(c.informe?c.informe.conIva:c.ctbNeto), c.informe?`igual al informe de Contabilium · ${c.informe.comprobantes} comprobantes`:c.ctbNc?`ya descontadas notas de crédito por ${moneyK(c.ctbNc)}`:`${c.facturas} facturas`),
-          hk("Ya está en el Templete", moneyK(c.montoConciliado), `${c.conciliadas} facturas conciliadas`, "pos"),
-          hk("Falta cargar", moneyK(c.montoFalta), c.faltaCargar.length?`${c.faltaCargar.length} facturas · ya sumadas al panel`:"nada pendiente", c.montoFalta?"neg":"")),
-        Object.keys(c.porLocal).length ? barrasH(Object.keys(c.porLocal).map(k=>({nombre:k,monto:c.porLocal[k]})).sort((a,b)=>b.monto-a.monto), "#0F766E") : null,
-        el("ul",{class:"ant38-av"},
-          c.franquicias.length?el("li",{text:`🟡 ${c.franquicias.length} facturas a grandes cuentas (${moneyK(c.franquicias.reduce((a,x)=>a+x.monto,0))}) no se suman: se aplican contra sus anticipos.`}):null,
-          (c.cobradaAntes||[]).length?el("li",{text:`🟢 ${c.cobradaAntes.length} facturas (${moneyK(c.cobradaAntes.reduce((a,x)=>a+x.monto,0))}) son de clientes que ya habían pagado sin número de factura: no se suman, para no contar dos veces.`}):null,
-          c.diferencias.length?el("li",{text:`🟡 ${c.diferencias.length} facturas con importe distinto entre Contabilium y el Templete.`}):null,
-          c.noEnCtb.length?el("li",{text:`🟡 ${c.noEnCtb.length} facturas están en el Templete pero no en Contabilium.`}):null,
-          c.anuladas.length?el("li",{text:`🟡 ${c.anuladas.length} facturas anuladas con nota de crédito total siguen cargadas como venta en el Templete.`}):null,
-          c.ncSueltas.length?el("li",{text:`🟡 ${c.ncSueltas.length} notas de crédito sin factura asociada.`}):null));
-    });
-    const Dd = R.duplicados || {duplicados:[],mismoNumero:[]};
-    card.append(el("h3",{text:"Control de facturas del Templete"}),
-      !Dd.duplicados.length && !Dd.mismoNumero.length ? el("p",{class:"hint",text:"✅ Sin facturas repetidas."}) :
-      el("ul",{class:"ant38-av"},
-        Dd.duplicados.length?el("li",{text:`🟡 ${Dd.duplicados.length} facturas cargadas dos veces (mismo número y cliente): ${moneyK(Dd.montoDeMas)} de más en ventas. Ej.: ${Dd.duplicados.slice(0,3).map(x=>x.factura+" ("+x.clientes[0]+")").join(", ")}.`}):null,
-        Dd.mismoNumero.length?el("li",{text:`🟡 ${Dd.mismoNumero.length} números de factura repetidos con clientes distintos (error de tipeo): ${Dd.mismoNumero.slice(0,4).map(x=>x.factura).join(", ")}…`}):null),
-      el("p",{class:"hint",text:"La lista completa, con las filas del Templete, está en «Descargar Excel» o «Descargar PDF» → hoja «Control de facturas»."}));
-    body.append(card);
+  return out;
+}
+/** Pestaña Control: Contabilium vs Templete, facturas repetidas, de dónde sale cada número, glosario y descargas. */
+function tabControl(D, R, K, recargar){
+  const out = [];
+  if (D.maria && (!K.configurado || !K.ok)) out.push(el("div",{class:"card"}, formContabilium(recargar)));
+  else if (K.configurado && !K.ok) out.push(el("p",{class:"card notice warn",text:"No se pudo leer Contabilium: "+(K.error||"error")+". El panel sigue con los datos del Templete."}));
+  // Resumen del control: un renglón por mes
+  if (R.controlMeses && R.controlMeses.meses && R.controlMeses.meses.length){ const CMx = R.controlMeses;
+    const MOT = {faltaCargar:"facturas que faltan cargar en el Templete", grandesCuentas:"facturas a grandes cuentas (se cobran con anticipos)", cobradaAntes:"facturas de clientes que ya habían pagado (no se cuenta dos veces)", pagadaConAnticipo:"facturas pagadas con anticipos ya cargados",
+      cargadaOtroMes:"facturas cargadas en el Templete en otro mes", deOtroMes:"cobros de facturas de otro mes", noEstaEnContabilium:"números del Templete que no existen en Contabilium (¿error de tipeo?)",
+      importeDistinto:"importes distintos", repetidaEnTemplete:"facturas cargadas dos veces en el Templete", notasCreditoOtroMes:"notas de crédito de facturas de otro mes",
+      sinNumeroFactura:"ventas del Templete sin número de factura", otroPuntoVenta:"ventas de otro punto de venta"};
+    const filas = CMx.meses.slice().reverse().slice(0,6).map(r=>{ const ok = Math.abs(r.diferencia) < Math.max(10000, r.informe.conIva*0.005);
+      const ks = Object.keys(r.motivos).filter(k=>Math.abs(r.motivos[k].monto)>=1000).sort((a,b)=>Math.abs(r.motivos[b].monto)-Math.abs(r.motivos[a].monto));
+      return el("details",{class:"ctl39"}, el("summary",{}, el("b",{text:capi(mesLargo(r.mes))}), el("span",{text:` · facturado ${moneyK(r.informe.conIva)} · `}),
+          el("span",{class:"pill "+(ok?"ok":""),text: ok?"✅ coincide":`${moneyK(Math.abs(r.diferencia))} explicados`})),
+        ks.length ? el("ul",{class:"ant38-av"}, ks.slice(0,5).map(k=>el("li",{text:`${r.motivos[k].monto>0?"➕":"➖"} ${moneyK(Math.abs(r.motivos[k].monto))} · ${r.motivos[k].n} ${MOT[k]||k}`}))) : null,
+        Math.abs(r.sinExplicar)>=1000 ? el("p",{class:"notice warn",text:`Quedan ${moneyK(Math.abs(r.sinExplicar))} sin explicar: revisalo en la descarga.`}) : null); });
+    out.push(el("div",{class:"card"}, el("h3",{text:"🔎 ¿Coincide el Templete con Contabilium?"}),
+      el("p",{class:"hint",text:"Tocá un mes para ver qué explica la diferencia, factura por factura."}), ...filas));
   }
-  // 8 · Qué hacer
-  if (R.recomendaciones.length || R.alertas.length) body.append(el("div",{class:"card"}, el("h2",{text:"✅ Qué conviene hacer"}),
-    el("ul",{class:"alertas-rrhh"},
-      R.recomendaciones.slice(0,4).map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))),
-      R.alertas.filter(a=>a.nivel!=="rojo").slice(0,3).map(a=>el("li",{class:"al-amarillo"}, el("span",{class:"sem",text:"🟡"}), el("div",{text:a.texto}))))));
-  // 9 · Palabras
-  body.append(el("details",{class:"card glos38"}, el("summary",{text:"📖 ¿Qué quiere decir cada cosa?"}),
-    el("dl",{}, ...[["Entró","Toda la plata que cobró Hey Blackk en el mes (ventas, grandes cuentas, mayoristas)."],
-      ["Salió","Toda la plata que se pagó: talleres, telas, sueldos, alquileres, publicidad, impuestos y retiros de socios."],
-      ["Quedó / Faltó","La diferencia entre lo que entró y lo que salió. Si «faltó», se pagó con plata de antes o quedó deuda."],
-      ["Facturado","Lo que se hizo factura en Contabilium, con IVA, menos notas de crédito. Igual al informe de Contabilium."],
-      ["Cobrado","La plata que entró según el Templete. Puede ser de facturas de otro mes o de anticipos."],
-      ["Con IVA / sin IVA","Con IVA es lo que paga el cliente. Sin IVA es lo que queda para la marca: el IVA (21 %) se le paga a ARCA."],
-      ["Retiros de socios","Plata que se llevan los dueños. No es un gasto del negocio, pero sale de la caja."],
-      ["Lo normal","El promedio de los 3 meses anteriores."],
-      ["Vender para no perder","La venta mínima por mes para cubrir todos los gastos sin poner plata."],
-      ["Mercadería guardada","Lo que vale la ropa que está en los locales y todavía no se vendió."]].flatMap(([t,d])=>[el("dt",{text:t}), el("dd",{text:d})]))));
-  body.append(el("div",{class:"card"}, botonesDescargaFin(), el("p",{class:"hint",text:`${R.filas} movimientos leídos de la planilla${R.fuera?` · ${R.fuera} quedaron afuera por fecha mal cargada`:""}. La app solo lee: no cambia nada de la planilla.`})));
+  // Facturas del mes en curso que faltan cargar + repetidas
+  const av = [];
+  if (K.ok) (K.conciliacion||[]).forEach(c=>{
+    if (c.montoFalta) av.push(`🧾 ${capi(mesLargo(c.mes))}: ${c.faltaCargar.length} facturas por ${moneyK(c.montoFalta)} todavía no están en el Templete (ya se suman al panel).`);
+    if (c.diferencias.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.diferencias.length} facturas con importe distinto.`);
+    if (c.noEnCtb.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.noEnCtb.length} facturas del Templete no están en Contabilium.`);
+    if (c.anuladas.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.anuladas.length} facturas anuladas siguen como venta en el Templete.`); });
+  const Dd = R.duplicados || {duplicados:[],mismoNumero:[]};
+  if (Dd.duplicados.length) av.push(`🟡 ${Dd.duplicados.length} facturas cargadas dos veces en el Templete (${moneyK(Dd.montoDeMas)} de más).`);
+  if (Dd.mismoNumero.length) av.push(`🟡 ${Dd.mismoNumero.length} números de factura repetidos con clientes distintos (error de tipeo).`);
+  out.push(el("div",{class:"card"}, el("h3",{text:"📋 Para corregir en el Templete"}),
+    av.length ? el("ul",{class:"ant38-av"}, av.map(t=>el("li",{text:t}))) : el("p",{class:"hint",text:"✅ Nada pendiente: sin facturas faltantes ni repetidas."})));
+  out.push(el("details",{class:"card fuentes39"}, el("summary",{text:"📌 ¿De dónde sale cada número?"}),
+    el("ul",{class:"fuentes39-l"},
+      el("li",{}, el("b",{text:"Facturado"}), ": Contabilium, con IVA y restadas las notas de crédito. Igual al informe «Ventas por punto de venta»."),
+      el("li",{}, el("b",{text:"Entró / cobrado"}), ": el Templete (Dropbox). Incluye los anticipos de temporada."),
+      el("li",{}, el("b",{text:"Nunca se suman"}), " facturado y cobrado: son la misma venta. Si alguien paga un mes y se factura al siguiente, la plata cuenta una sola vez."),
+      el("li",{}, el("b",{text:"Lima en Contabilium"}), " incluye la Web y las grandes cuentas (punto de venta 0005); acá van separadas."),
+      el("li",{}, el("b",{text:"Grandes cuentas"}), ": facturas y cobranzas de Contabilium; la planilla de cuentas corrientes solo avisa diferencias."),
+      el("li",{}, el("b",{text:"Caja Palermo"}), ": los cierres de caja que se cargan en la app."))));
+  out.push(el("details",{class:"card glos38"}, el("summary",{text:"📖 ¿Qué quiere decir cada palabra?"}),
+    el("dl",{}, ...[["Entró","Toda la plata que cobró Hey Blackk en el mes."],["Salió","Toda la plata que se pagó: talleres, telas, sueldos, alquileres, publicidad, impuestos y retiros."],
+      ["Quedó / Faltó","Lo que entró menos lo que salió."],["Con IVA / sin IVA","Con IVA es lo que paga el cliente; el 21 % se le paga a ARCA."],
+      ["Retiros de socios","Plata que se llevan los dueños: no es gasto del negocio, pero sale de la caja."],["Lo normal","El promedio de los 3 meses anteriores."],
+      ["Mercadería sin vender","Lo que vale la ropa que está en los locales."]].flatMap(([t,d])=>[el("dt",{text:t}), el("dd",{text:d})]))));
+  out.push(el("div",{class:"card"}, botonesDescargaFin(), el("p",{class:"hint",text:`${R.filas} movimientos leídos${R.fuera?` · ${R.fuera} afuera por fecha mal cargada`:""}. La app solo lee: no cambia nada de las planillas ni de Contabilium.`})));
+  return out;
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
    El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
@@ -3467,7 +3450,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9l";
+const APP_V = "3.9m";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}

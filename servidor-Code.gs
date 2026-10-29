@@ -20,7 +20,7 @@ const PROPS = PropertiesService.getScriptProperties();
 const CACHE = CacheService.getScriptCache();
 const TZ = 'America/Argentina/Buenos_Aires';
 const VERSION = 3;
-const REV = '3.9d';                        // revisión del servidor (para verificar despliegues)
+const REV = '3.9m';                        // revisión del servidor (para verificar despliegues)
 
 /* Sesiones (3.2): la de jefes/administración vence por INACTIVIDAD (se renueva con cada uso) y tiene un máximo absoluto;
    la del personal que ficha es corta y fija. La validación es siempre del servidor: cada llamada verifica token, usuario activo,
@@ -1264,7 +1264,11 @@ function audioFinanzas_(u, R) {
   if (S.destinoAnio && S.destinoAnio.length) { const d = S.destinoAnio.filter(x => x.cada100 != null).slice(0, 2);
     if (d.length) P.push('En el año, de cada cien pesos que entraron, ' + d.map(x => x.cada100 + ' se fueron en ' + x.nombre.split(' (')[0].toLowerCase()).join(' y ') + '.'); }
   if (C) P.push('En lo que va de ' + MES_NOM(C.mes).split(' ')[0] + ' entraron ' + millones_(C.ingresos) + ' y salieron ' + millones_(C.egresos) + '; faltan cargar cobros.');
-  if (R.franquicias.length) P.push('Lo que pagaron las grandes cuentas en el año: ' + lista37_(R.franquicias.slice(0, 4).map(f => f.franquicia + ', ' + millones_(f.cobradoAnio))) + '.');
+  // 3.9m · Productos (Contabilium, última semana) y, solo para María, la temporada SS27 de las grandes cuentas
+  const PR = R.productos, nom = x => String(x.nombre || x.codigo).toLowerCase();
+  if (PR && (PR.palermo || []).length) P.push('Lo más vendido en Palermo esta semana: ' + lista37_(PR.palermo.slice(0, 3).map(x => nom(x) + ', ' + x.unidades + ' unidades')) + '.');
+  if (PR && (PR.ss27 || []).length) P.push('De la temporada nueva, lo que mejor se vende es ' + lista37_(PR.ss27.slice(0, 3).map(nom)) + '.');
+  if (R.gcSS27 && R.gcSS27.pedido) P.push('Grandes cuentas, temporada SS27: pidieron ' + millones_(R.gcSS27.pedido) + ', abonaron ' + millones_(R.gcSS27.abono) + ' y falta que paguen ' + millones_(R.gcSS27.faltaPagar) + '.');
   const rec = R.recomendaciones.filter(t => !/^Vender más o bajar gastos/.test(t))[0];
   if (rec) P.push('Para revisar: ' + hablar_(rec.charAt(0).toLowerCase() + rec.slice(1).replace(/\$ ?([\d.,]+) M/g, (m, n) => millones_(Number(n.replace(',', '.')) * 1e6)).replace(/\$ ?[\d.]+/g, m => millones_(Number(m.replace(/[^\d]/g, ''))))));
   return P.join(' ').replace(/\s+/g, ' ').trim();
@@ -1276,7 +1280,7 @@ function finanzasPanel(token, forzar) {
   if (!dbxConfigurado_()) return { conectado: false };
   if (forzar && ctbConfigurado_()) { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (!P || Date.now() - new Date(P.leida).getTime() > 2 * 3600000) try { ctbActualizarResumenes_(); } catch (e) {} }
   const R = Object.assign({}, finanzas_(!!forzar)), maria = esMaria_(s.user);
-  if (!maria) { delete R.anticipos; delete R.cuentasCorrientes; delete R.grandesCuentasCtb; (R.dobleConteo || []).forEach(x => { delete x.granCuenta; }); delete R.ctaCteFalta; R.recomendaciones = R.recomendaciones.filter(t => !/cuenta corriente/.test(t)); }   // cobranzas pendientes y anticipos: solo el usuario MARIA
+  if (!maria) { delete R.anticipos; delete R.gcSS27; delete R.cuentasCorrientes; delete R.grandesCuentasCtb; (R.dobleConteo || []).forEach(x => { delete x.granCuenta; }); delete R.ctaCteFalta; R.recomendaciones = R.recomendaciones.filter(t => !/cuenta corriente/.test(t)); }   // cobranzas pendientes y anticipos: solo el usuario MARIA
   try { R.productos = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); } catch (e) {}
   if (maria) try { R.cobranzas = JSON.parse(PROPS.getProperty('CTB_COB') || 'null'); } catch (e) {}
   return { conectado: true, resumen: R, maria: maria, audio: audioFinanzas_(s.user, R), sync: JSON.parse(PROPS.getProperty('FIN_SYNC') || 'null') };
@@ -1484,9 +1488,11 @@ function ctbProductos_(dias) {
   let leidos = 0;
   L.forEach(c => { if (leidos >= 400) return; leidos++; const loc = FIN_PV[c.pv], sg = CTB_ES_NC(c.tipo) ? -1 : 1;
     ctbItems_(c.id).forEach(it => { add(loc, it, sg); add('Todos', it, sg); }); });
-  const top = (loc, n) => Object.keys(ag).map(k => ag[k]).filter(a => a.local === loc && a.unidades > 0).sort((a, b) => b.unidades - a.unidades || b.monto - a.monto).slice(0, n)
-    .map(a => ({ codigo: a.codigo, nombre: a.nombre, unidades: Math.round(a.unidades), monto: Math.round(a.monto), temporada: /SS27$/i.test(a.codigo) ? 'SS27' : 'fuera' }));
-  return { desde: desde, hasta: hasta, comprobantes: leidos, palermo: top('Palermo', 15), lima: top('Lima', 10), janette: top('Janette', 10), todos: top('Todos', 10), leida: new Date().toISOString() };
+  const esSS27 = a => /SS27$/i.test(a.codigo || '');
+  const top = (loc, n, f) => Object.keys(ag).map(k => ag[k]).filter(a => a.local === loc && a.unidades > 0 && (!f || f(a))).sort((a, b) => b.unidades - a.unidades || b.monto - a.monto).slice(0, n)
+    .map(a => ({ codigo: a.codigo, nombre: String(a.nombre || '').slice(0, 48), unidades: Math.round(a.unidades), monto: Math.round(a.monto), temporada: esSS27(a) ? 'SS27' : 'fuera' }));
+  // 3.9m · Además del top general: lo que mejor se vende de la temporada nueva (SS27) y lo de fuera de temporada (para liquidar)
+  return { desde: desde, hasta: hasta, comprobantes: leidos, palermo: top('Palermo', 10), todos: top('Todos', 10), ss27: top('Todos', 10, esSS27), fuera: top('Todos', 10, a => !esSS27(a)), leida: new Date().toISOString() };
 }
 /** Cobranzas pendientes: comprobantes del último año con saldo, agrupados por cliente (vencido / por vencer). */
 function ctbCobranzas_() {
@@ -1517,12 +1523,12 @@ function ctbFueraTemporada_() {
     [['palermo', /hb palermo/i], ['lima', /hb lima/i]].forEach(([k, re]) => { const x = D.find(y => re.test(y.Nombre)); if (!x) return; const m = dep[k] = {};
       for (let p = 1; p <= 80; p++) { const j = ctbGet_('/api/inventarios/getStockByDeposito', { id: x.Id, page: p }); const S = Array.isArray(j) ? j : (j.Items || []);
         S.forEach(s => { m[String(s.Codigo || '').trim()] = ctbNum_(s.StockActual); }); if (!S.length || Array.isArray(j) || Object.keys(m).length >= (j.TotalItems || 0)) break; } }); } catch (e) {}
-  let vend = {}; try { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (P) P.todos.forEach(x => { vend[x.codigo] = x.unidades; }); } catch (e) {}
+  let vend = {}; try { const P = JSON.parse(PROPS.getProperty('CTB_PROD') || 'null'); if (P) [].concat(P.todos || [], P.fuera || [], P.ss27 || [], P.palermo || []).forEach(x => { vend[x.codigo] = Math.max(vend[x.codigo] || 0, x.unidades); }); } catch (e) {}
   return C.map(x => ({ codigo: String(x.Codigo || '').trim(), nombre: String(x.Nombre || '').trim(), stock: ctbNum_(x.Stock), precio: ctbNum_(x.PrecioFinal || x.Precio), costo: ctbNum_(x.CostoInterno), estado: String(x.Estado || '') }))
     .filter(x => !ctbNoProducto_(x) && !/SS27$/i.test(x.codigo) && x.stock > 0 && !/inactiv|baja/i.test(x.estado))
     .map(x => Object.assign(x, { palermo: dep.palermo ? (dep.palermo[x.codigo] || 0) : null, lima: dep.lima ? (dep.lima[x.codigo] || 0) : null, temporada: (x.codigo.match(/(SS|AW|FW|OI|PV)\d{2}$/i) || ['Anteriores'])[0].replace(/^[a-z]+\d+$/i, t => t.toUpperCase()),
-      valorStock: Math.round(x.stock * x.precio) }))
-    .sort((a, b) => b.stock - a.stock);
+      valorStock: Math.round(x.stock * x.precio), vendidas: vend[String(x.codigo)] || 0 }))
+    .sort((a, b) => b.vendidas - a.vendidas || b.stock - a.stock);
 }
 /** 3.9h · Cobranzas (recibos) de Contabilium de las grandes cuentas desde una fecha: incluye las «cobranzas a cuenta» que
     María carga antes de que exista la factura. La búsqueda de Contabilium pagina desde 0 (page=0, 1, …). SOLO LECTURA. */
@@ -1539,7 +1545,7 @@ function ctbRecibosGC_(desde, hasta, GN) {
 function ctbActualizarResumenes_() {
   if (!ctbConfigurado_()) return null;
   const out = {};
-  try { const P = ctbProductos_(7); PROPS.setProperty('CTB_PROD', JSON.stringify(P).slice(0, 8500)); out.productos = P.comprobantes; } catch (e) { out.productosError = String(e.message || e).slice(0, 150); }
+  try { const P = ctbProductos_(7); let J = JSON.stringify(P); ['todos', 'fuera', 'ss27', 'palermo'].forEach(k => { while (J.length > 8800 && P[k].length > 5) { P[k].pop(); J = JSON.stringify(P); } }); PROPS.setProperty('CTB_PROD', J); out.productos = P.comprobantes; } catch (e) { out.productosError = String(e.message || e).slice(0, 150); }
   try { const K = ctbCobranzas_(); PROPS.setProperty('CTB_COB', JSON.stringify(K).slice(0, 8500)); out.cobranzas = K.clientes; } catch (e) { out.cobranzasError = String(e.message || e).slice(0, 150); }
   return out;
 }
@@ -1551,7 +1557,7 @@ function descargaCyber(token) {
   const L = ctbFueraTemporada_();
   return { actualizado: new Date().toISOString(), generado: new Date().toISOString(), por: s.user.nombre, titulo: 'Fuera de temporada · Cyber Monday', archivo: 'Cyber-Monday-fuera-de-temporada',
     hojas: [{ nombre: 'Fuera de temporada', columnas: ['Código', 'Producto', 'Temporada', 'Stock total', 'HB Palermo', 'HB Lima', 'Precio', 'Valor del stock', 'Vendidas última semana'], dinero: [6, 7],
-      filas: L.map(x => [x.codigo, x.nombre, x.temporada, x.stock, x.palermo == null ? '' : x.palermo, x.lima == null ? '' : x.lima, Math.round(x.precio), x.valorStock, (JSON.parse(PROPS.getProperty('CTB_PROD') || '{"todos":[]}').todos.find(t => t.codigo === x.codigo) || {}).unidades || 0]) },
+      filas: L.map(x => [x.codigo, x.nombre, x.temporada, x.stock, x.palermo == null ? '' : x.palermo, x.lima == null ? '' : x.lima, Math.round(x.precio), x.valorStock, x.vendidas || 0]) },
       { nombre: 'Resumen por temporada', columnas: ['Temporada', 'Productos', 'Unidades', 'Valor del stock'], dinero: [3],
         filas: Object.entries(L.reduce((o, x) => { const t = o[x.temporada] = o[x.temporada] || [0, 0, 0]; t[0]++; t[1] += x.stock; t[2] += x.valorStock; return o; }, {})).sort((a, b) => b[1][2] - a[1][2]).map(([k, v]) => [k, v[0], v[1], v[2]]) }] };
 }

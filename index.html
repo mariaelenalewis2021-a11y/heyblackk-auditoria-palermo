@@ -400,8 +400,8 @@ tr.clk{cursor:pointer} tr.clk:focus-visible{outline:2px solid #2563EB}
 .barra-partes i{display:block;height:100%}
 .leyenda{gap:10px;font-size:.82rem;color:var(--muted,#5f5f68)}
 .leyenda .dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px}
-.top5{margin:6px 0 0;padding-left:22px;display:grid;gap:4px}
-.top5 li{line-height:1.35}
+.top5,.lista39{margin:6px 0 0;padding-left:22px;display:grid;gap:4px}
+.top5 li,.lista39 li{line-height:1.35}
 .split{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:10px}
 .lista-cli{display:grid;gap:8px}
 .cli37{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;text-align:left;padding:10px 12px;border:1px solid var(--line,#e5e5ea);border-radius:12px;background:var(--card,#fff);color:inherit;font:inherit;cursor:pointer;min-height:44px}
@@ -496,6 +496,20 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   .bar{font-size:15px} .dgrid > div{font-size:15px} .action li{font-size:16px}
 }
 @media (max-width:380px){ .score button .t{font-size:11px} .score{gap:4px} }
+
+/* 3.9m · pestañas compactas (Finanzas y Producción) */
+.tabs39-wrap{display:grid;gap:12px}
+.tabs39{display:flex;gap:6px;overflow-x:auto;position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 2px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.tabs39::-webkit-scrollbar{display:none}
+.tab39{flex:0 0 auto;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:9px 15px;font:inherit;font-weight:600;font-size:14px;cursor:pointer;white-space:nowrap}
+.tab39[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:transparent}
+.tab39:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.act39m{padding:0 2px}
+.prod39-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:6px}
+.prod39 h3{margin:0 0 6px}
+details.mas39>summary{cursor:pointer;font-weight:600;padding:4px 0}
+details.mas39[open]>summary{margin-bottom:8px}
+@media (max-width:640px){.tab39{font-size:15px;padding:10px 16px}.prod39-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
