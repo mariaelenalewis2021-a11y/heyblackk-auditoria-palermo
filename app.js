@@ -2820,6 +2820,15 @@ function pintarFinanzas(body, D, recargar){
     el("span",{class:"hint",text:`Datos al ${fechaHora(R.leida)}${S.ultimaCarga?" · último movimiento cargado "+fmtF(S.ultimaCarga):""}`}), el("span",{class:"spacer"}), bAct));
   const ba = barraSeccion(D.audio, "Administración y Finanzas"); if (ba) body.append(ba);
 
+  // ===== 0 · 3.9s · Pantallazo del mes que cerró (se muestra los primeros 10 días del mes siguiente)
+  if (R.resumenMes){ const RM = R.resumenMes, hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date());
+    const ant = (()=>{ const d=new Date(hoyAR.slice(0,7)+"-15T12:00:00Z"); d.setUTCMonth(d.getUTCMonth()-1); return d.toISOString().slice(0,7); })();
+    if (RM.mes === ant && Number(hoyAR.slice(8,10)) <= 10){ const PV = RM.privado || {};
+      body.append(el("div",{class:"card cierre-mes39"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"📆 Así cerró "+mesLargo(RM.mes)}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"Pantallazo del 1° · "+fechaHora(RM.generado)})),
+        el("div",{class:"hkpis",style:"margin-top:10px"}, hk("💵 Entró", moneyK(RM.ingresos), "", "pos"), hk("💸 Salió", moneyK(RM.egresos), "", "neg"), hk(RM.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(RM.neto)), RM.retiros?`con ${moneyK(RM.retiros)} de retiros`:"", RM.neto<0?"neg":"pos"),
+          RM.facturado!=null ? hk("🧾 Facturado", moneyK(RM.facturado), "Contabilium, con IVA") : null),
+        el("ul",{class:"sem38-lista"}, RM.puntos.map(t=>el("li",{text:t}))),
+        (PV.gc||PV.cobranzas||PV.cierre) ? el("p",{class:"hint",text:"🔒 "+[PV.gc?`Grandes cuentas SS27: abonaron ${moneyK(PV.gc.abono)} de ${moneyK(PV.gc.pedido)} (falta ${moneyK(PV.gc.faltaPagar)})`:"", PV.cobranzas?`cobranzas pendientes ${moneyK(PV.cobranzas.total)} (vencido ${moneyK(PV.cobranzas.vencido)})`:"", PV.cierre?`cierre del mes ${PV.cierre.listos} de ${PV.cierre.total} listos${PV.cierre.alertasPago?` · ${PV.cierre.alertasPago} pagos sin cargar`:""}`:""].filter(Boolean).join(" · ")+"."}) : null)); } }
   // ===== 1 · Cómo venimos (3.9o: el MES EN CURSO primero; el último mes cerrado queda como comparación) =====
   const E = S.equilibrio, FXc = R.sectores && R.sectores.facturado ? R.sectores.facturado.totalConIva[2] : 0;
   if (C){
@@ -3557,7 +3566,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9r";
+const APP_V = "3.9s";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
