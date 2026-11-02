@@ -42,7 +42,7 @@ const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
 const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["detalleControl","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
+const SENSIBLES = new Set(["detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -2972,6 +2972,7 @@ function pintarFinanzas(body, D, recargar){
     ["plata","💵 La plata", ()=>tabPlata(R, U, S)],
     D.maria && (R.gcSS27 || R.cobranzas || R.anticipos || R.cuentasCorrientes) ? ["gc","🤝 Grandes cuentas", ()=>tabGrandes(R)] : null,
     D.maria && R.cierre && R.cierre.checklists ? ["cierre","✅ Mi cierre", ()=>tabCierre(R)] : null,
+    D.maria ? ["cobval","💳 Cobranzas a validar", ()=>tabCobranzas39()] : null,
     ["control","🔎 Control", ()=>tabControl(D, R, K, recargar)]].filter(Boolean);
   body.append(pestanas39("fin", tabs));
 }
@@ -3266,6 +3267,91 @@ function cardPagos39(G){
     pend.length ? el("ul",{class:"alertas-rrhh"}, pend.map(item)) : null,
     pag.length ? el("details",{class:"mas39"}, el("summary",{text:`Ya pagados este mes (${pag.length})`}), el("ul",{class:"alertas-rrhh"}, pag.map(item))) : null,
     el("p",{class:"hint",text:"Se arma solo con lo que se repite en el Templete en los últimos meses (los sueldos van juntos, sin detalle por persona)."}));
+}
+
+/* 3.9zb · «Cobranzas a validar» (solo María, con PIN): cada COT con saldo de Palermo 0001 y Janette 0007, cruzada con los cobros del
+   Templete. La app NO carga nada en Contabilium: María registra el cobro allá y acá toca «Ya la cargué»; se confirma sola cuando
+   Contabilium muestra la factura en cero. */
+let COBVAL39 = null;
+const COB_GRUPOS39 = [
+  ["listo","✅ Listas para cargar","El Templete tiene el cobro: registralo en Contabilium y marcalo acá.","ok",true],
+  ["dudoso","🟡 Para revisar","Hay un cobro posible, pero no coincide del todo: confirmá antes de cargar.","warn",true],
+  ["sin_cobro","📞 Para gestionar con el cliente","No hay cobro en el Templete que las pague.","bad",true],
+  ["marcada","⏳ Ya cargadas, esperando a Contabilium","Las marcaste; se confirman solas cuando Contabilium las muestre en cero.","",false]];
+const fCob39 = d => d ? String(d).slice(8,10)+"/"+String(d).slice(5,7)+"/"+String(d).slice(2,4) : "—";
+function tabCobranzas39(){
+  const box = el("div",{class:"stack"});
+  const intro = el("div",{class:"card"}, el("h2",{text:"💳 Cobranzas a validar · Palermo y Janette"}),
+    el("p",{class:"lead",text:"Cada factura (COT) con saldo en Contabilium de Palermo (0001) y Janette (0007), cruzada con los cobros del Templete. La app no carga nada en Contabilium: vos registrás el cobro allá y acá tocás «Ya la cargué». Cuando Contabilium la muestre en cero, se confirma sola."}));
+  const b = el("button",{class:"btn primary",type:"button",text:"🔒 Ver mis cobranzas (con tu PIN)"});
+  const cont = el("div",{class:"stack"});
+  const cargar = async (forzar, btn) => { spinBtn(btn, forzar ? "Leyendo Contabilium y el Templete (1 a 3 min)…" : "Buscando…");
+    try{ COBVAL39 = await apiS("cobranzasValidar", !!forzar); b.remove(); pintarCob39(cont, recargar); }catch(e){ toast(msgErr(e)); unspin(btn); } };
+  const recargar = btn => cargar(true, btn);
+  b.onclick = () => cargar(false, b);
+  intro.append(COBVAL39 ? el("span") : b); box.append(intro, cont);
+  if (COBVAL39) pintarCob39(cont, recargar);
+  return box;
+}
+function pintarCob39(cont, recargar){
+  const R = COBVAL39; cont.textContent = "";
+  const tot = e => { const L = R.lista.filter(x=>x.estado===e); return { n:L.length, monto:L.reduce((a,x)=>a+x.saldo,0) }; };
+  const T = { listo:tot("listo"), dudoso:tot("dudoso"), sin_cobro:tot("sin_cobro"), marcada:tot("marcada") };
+  const bA = el("button",{class:"btn sm",type:"button",text:"🔄 Leer de nuevo"}); bA.onclick = ()=>recargar(bA);
+  cont.append(el("div",{class:"kpis"},
+    kpi("Listas para cargar", moneyK(T.listo.monto), `${T.listo.n} ${T.listo.n===1?"factura":"facturas"}`, "ok"),
+    kpi("Para revisar", moneyK(T.dudoso.monto), `${T.dudoso.n} ${T.dudoso.n===1?"factura":"facturas"}`, T.dudoso.n?"warn":""),
+    kpi("Para gestionar", moneyK(T.sin_cobro.monto), `${T.sin_cobro.n} ${T.sin_cobro.n===1?"factura":"facturas"} sin cobro`, T.sin_cobro.n?"bad":""),
+    kpi("Ya cargadas", String(T.marcada.n), T.marcada.n ? "esperando que Contabilium las lea en cero" : "todavía ninguna")));
+  const loc = {}; R.lista.forEach(x=>{ const z = loc[x.local] = loc[x.local] || { n:0, saldo:0, v60:0 }; z.n++; z.saldo+=x.saldo; if ((x.dias||0)>60 && x.estado!=="marcada") z.v60+=x.saldo; });
+  cont.append(el("p",{class:"hint"}, Object.keys(loc).map(k=>`${k}: ${loc[k].n} con saldo por ${moneyK(loc[k].saldo)}${loc[k].v60?` (${moneyK(loc[k].v60)} con más de 60 días)`:""}`).join(" · "),
+    ` · Leído de Contabilium el ${new Date(R.leida).toLocaleString("es-AR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}. `, bA));
+  // Filtros: local y búsqueda
+  let fLoc = "", fTxt = "";
+  const sel = el("select",{"aria-label":"Local"}, el("option",{value:"",text:"Palermo y Janette"}), el("option",{value:"Palermo",text:"Solo Palermo (0001)"}), el("option",{value:"Janette",text:"Solo Janette (0007)"}));
+  const q = el("input",{type:"search",placeholder:"Buscar cliente o número…",autocomplete:"off"});
+  const grupos = el("div",{class:"stack"});
+  const pinta = () => { grupos.textContent = "";
+    const ver = x => (!fLoc || x.local===fLoc) && (!fTxt || (x.cliente+" "+x.cot).toLowerCase().includes(fTxt));
+    COB_GRUPOS39.forEach(([k,tit,ayuda,c,abierto])=>{ const L = R.lista.filter(x=>x.estado===k && ver(x)); if (!L.length) return;
+      const lst = el("div",{class:"cobl39"}); L.slice(0,300).forEach(x=>lst.append(filaCob39(x, ()=>{ pintarCob39(cont, recargar); })));
+      grupos.append(el("details",{class:"card det39",open:abierto&&k!=="sin_cobro"?"":null},
+        el("summary",{}, el("b",{text:`${tit} · ${L.length}`}), ` · ${moneyK(L.reduce((a,x)=>a+x.saldo,0))}`),
+        el("p",{class:"hint",text:ayuda}), lst,
+        L.length>300 ? el("p",{class:"hint",text:`Se muestran 300 de ${L.length}: el resto está en el Excel.`}) : null)); });
+    if (!grupos.children.length) grupos.append(el("p",{class:"card hint",text:"No hay facturas con esos filtros."})); };
+  sel.onchange = ()=>{ fLoc = sel.value; pinta(); }; q.oninput = ()=>{ fTxt = q.value.trim().toLowerCase(); pinta(); };
+  cont.append(el("div",{class:"row cobfil39"}, sel, q), grupos); pinta();
+  if (R.confirmadas && R.confirmadas.length) cont.append(el("details",{class:"card det39"},
+    el("summary",{}, el("b",{text:`✔️ Confirmadas por Contabilium · ${R.confirmadas.length}`}), " · últimos 30 días"),
+    el("ul",{class:"lista39"}, R.confirmadas.slice(0,100).map(c=>el("li",{}, el("span",{class:"mono",text:c.cot}), ` · la marcaste el ${fCob39(String(c.ts).slice(0,10))}`, c.confirmada?` · Contabilium la mostró en cero el ${fCob39(String(c.confirmada).slice(0,10))}`:"")))));
+  // Descargas
+  const col = ["Estado","Local","Factura","Cliente","Fecha","Días","Total","Saldo","Cobro: fecha","Cobro: medio","Cobro: importe","Fila Templete","Qué hacer"];
+  const est = Object.fromEntries(COB_GRUPOS39.map(g=>[g[0],g[1].replace(/^\S+\s/,"")]));
+  const filas = L => L.map(x=>[est[x.estado], x.local, x.cot, x.cliente, fCob39(x.fecha), x.dias, x.total, x.saldo, x.cobro?fCob39(x.cobro.fecha):"", x.cobro?x.cobro.medio:"", x.cobro?x.cobro.monto:"", x.cobro?x.cobro.fila:"", x.motivo]);
+  const D = { titulo:"Cobranzas a validar · Palermo 0001 y Janette 0007", archivo:`Cobranzas_a_validar_${new Date().toISOString().slice(0,10)}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"",
+    hojas: COB_GRUPOS39.map(([k,t])=>({ nombre:t.replace(/^\S+\s/,"").slice(0,31), columnas:col, dinero:[6,7,10], totales:[7], filas:filas(R.lista.filter(x=>x.estado===k)) })).filter(h=>h.filas.length) };
+  const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
+  bx.onclick = async ()=>{ spinBtn(bx,"Armando…"); try{ await exportarXLSX37(D); }catch(e){ toast(msgErr(e)); } unspin(bx); };
+  bp.onclick = async ()=>{ spinBtn(bp,"Armando…"); try{ await exportarPDF37(D); }catch(e){ toast(msgErr(e)); } unspin(bp); };
+  if (D.hojas.length) cont.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Toda la lista:"}), bx, bp));
+}
+function filaCob39(x, repintar){
+  const c = x.cobro;
+  const bt = el("button",{class:"btn sm"+(x.estado==="marcada"?"":" primary"),type:"button",text:x.estado==="marcada"?"↩️ Desmarcar":"✅ Ya la cargué"});
+  bt.onclick = async ()=>{ const marcar = x.estado!=="marcada";
+    if (marcar && x.estado!=="listo" && !(await confirmar(`¿Ya registraste en Contabilium el cobro de ${x.cot} (${x.cliente}, saldo ${money(x.saldo)})?`,"Sí, ya la cargué"))) return;
+    spinBtn(bt, marcar?"Guardando…":"Quitando…");
+    try{ const r = await apiS("cobranzaMarcar", x.cot, marcar);
+      if (marcar){ x.estadoCruce = x.estado; x.estado = "marcada"; x.marca = { ts:r.ts }; x.motivo = "La marcaste como cargada en Contabilium. Se confirma sola cuando Contabilium la muestre en cero."; toast(`${x.cot} marcada como cargada.`); }
+      else { x.estado = x.estadoCruce || "sin_cobro"; delete x.marca; toast(`${x.cot} desmarcada.`); }
+      repintar(); }
+    catch(e){ toast(msgErr(e)); unspin(bt); } };
+  return el("div",{class:"cobi39 cob39-"+x.estado},
+    el("div",{class:"cobh39"}, el("span",{class:"mono",text:x.cot}), el("b",{class:"cobm39",text:money(x.saldo)})),
+    el("div",{class:"cobc39"}, el("strong",{text:x.cliente||"—"}), ` · ${fCob39(x.fecha)} · `, el("span",{class:(x.dias||0)>60?"bad-t":null,text:`${x.dias==null?"—":x.dias} días`}), x.total!==x.saldo?` · factura de ${money(x.total)}`:""),
+    c ? el("div",{class:"hint"}, `Templete: ${fCob39(c.fecha)} · ${money(c.monto)}`, [c.medio, "fila "+c.fila].filter(Boolean).map(t=>" · "+t).join("")) : null,
+    el("p",{class:"cobq39",text:x.motivo}), bt);
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
    El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
@@ -3746,7 +3832,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9za";
+const APP_V = "3.9zb";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
