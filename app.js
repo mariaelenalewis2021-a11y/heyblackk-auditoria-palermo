@@ -3599,6 +3599,15 @@ async function vConfig(main){
       el("label",{class:"f"},"Mínimo de días con cierre para comparar",a3), el("label",{class:"f"},"Concentración en un día que alerta (%)",a4), el("label",{class:"f"},"Mes bajo: % por debajo del mes anterior o del año",a5)), bO));
   // 3.3 · Feriados y excepciones
   body.append(cardFeriadosConfig(c.feriados, nuevo=>{ c.feriados=nuevo; main.textContent=""; route(); }));
+  // 3.9y · Templete (Dropbox) por link compartido: se pega una vez; la app lo lee en vivo en cada actualización (solo lectura).
+  const tl = el("input",{type:"url",placeholder:c.templeteLinkOk?"Link guardado (…"+c.templeteLinkFin+"). Pegá otro para cambiarlo":"https://www.dropbox.com/scl/fi/…",maxlength:"400",autocomplete:"off"});
+  const bT = el("button",{class:"btn primary",type:"button",text:"Guardar link"});
+  bT.onclick = ()=>{ const v = tl.value.trim(); if (!v) return toast("Pegá el link del Templete."); guardar({templeteLink:v}, bT); };
+  const bTq = c.templeteLinkOk ? el("button",{class:"btn",type:"button",text:"Quitar link",onclick:async()=>{ if (await confirmar("¿Quitar el link del Templete? La app vuelve a leer la copia de la conexión de Dropbox.","Quitar")) guardar({templeteLink:""}, bTq); }}) : null;
+  body.append(el("div",{class:"card"}, el("h2",{text:"📗 Templete (Dropbox)"}),
+    el("p",{class:"lead",text:"Pegá el link compartido del Templete (el que te mandaron por mail). La app descarga el archivo para leerlo en cada actualización: no lo modifica. El link queda guardado solo en el servidor."}),
+    el("p",{class:"hint",text: c.templeteLinkOk ? "✅ Link configurado: se lee el Templete en vivo." : "Sin link: se usa la copia de la conexión de Dropbox."}),
+    el("label",{class:"f"},"Link del Templete",tl), el("div",{class:"row"}, bT, bTq)));
   // Integración Drive
   const fid = el("input",{type:"text",value:c.cierreFileId,maxlength:"100"}), bD = el("button",{class:"btn primary",type:"button",text:"Guardar"});
   bD.onclick = ()=>guardar({cierreFileId:fid.value.trim()}, bD);
@@ -3645,7 +3654,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9w";
+const APP_V = "3.9y";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
