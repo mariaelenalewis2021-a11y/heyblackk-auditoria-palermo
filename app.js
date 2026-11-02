@@ -1393,12 +1393,12 @@ async function vHorasJefes(body){
   };
   const bx = el("button",{class:"btn primary",type:"button",text:"⬆️ Exportar a la planilla (hoja «Horas»)"});
   bx.onclick = async ()=>{ spinBtn(bx,"Exportando…"); try{ const r = await apiS("exportarHoras", {desde:de.value, hasta:ha.value, sucursal:su.value||null, uid:em.value||null});
-      modal(el("div",{class:"grid"}, el("h2",{text:"✅ Exportado a la hoja «Horas»"}), el("p",{class:"lead",text:`${r.empleados} persona(s) · ${r.filas} filas. La hoja se reemplaza en cada exportación (queda registrado en el historial).`}),
-        /^https:\/\/docs\.google\.com\//.test(r.url) ? el("a",{class:"btn primary",href:r.url,target:"_blank",rel:"noopener",text:"Abrir la planilla"}) : null));
+      modal(el("div",{class:"grid"}, el("h2",{text:"✅ Exportado a la hoja «Horas»"}), el("p",{class:"lead",text:`${r.empleados} persona(s) · ${r.filas} filas. La hoja se reemplaza en cada exportación (queda registrado en el historial). Para tener el archivo en tu computadora, descargalo acá:`}),
+        el("div",{class:"row"}, botonHoras39(R,"xlsx"), botonHoras39(R,"pdf"))));
     }catch(e){ toast(msgErr(e)); } finally{ unspin(bx); } };
   [de,ha,su,em].forEach(x=>x.onchange=cargar);
   body.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Sucursal",su), el("label",{class:"f"},"Empleado",em)),
-    el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}), bx)), res);
+    el("div",{class:"row"}, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}), botonHoras39(()=>R,"xlsx"), botonHoras39(()=>R,"pdf"), bx)), res);
   cargar();
 }
 async function vSucursales(body){
@@ -1425,6 +1425,31 @@ async function vSucursales(body){
     s.incompleta.length ? el("div",{class:"notice bad",text:"Falta: "+s.incompleta.join(", ")+". Hasta completarlo, nadie de esta sucursal puede fichar con ubicación."}) : null,
     ...s.avisos.map(a=>el("p",{class:"hint",text:"ℹ️ "+a})), form(s))));
   body.append(el("details",{class:"card"}, el("summary",{}, el("b",{text:"➕ Agregar una sucursal"})), form(null)));
+}
+
+/* 3.9w · Horas: Excel y PDF directos (resumen, detalle por día y por semana), armados con lo que se ve en pantalla. Sin Drive ni permisos. */
+const h2d39 = m => m==null ? null : Math.round(m/60*100)/100;
+function hojasHoras39(R){
+  const E = R.empleados || [];
+  return [
+    { nombre:"Resumen", columnas:["Persona","Sucursal","Días trabajados","Total (h)","Promedio por día (h)","Pactado (h)","Diferencia (h)","Días incompletos","Días sin fichaje","Para revisar"],
+      filas: E.map(x=>[x.nombre, x.sucursal, x.diasTrabajados, h2d39(x.total), h2d39(x.promedio), h2d39(x.esperado), h2d39(x.diferencia), x.incompletos||0, x.sinFichaje||0, x.revisar||0]),
+      totales:[2,3,5,6,7,8,9], formatos:{3:"0.00",4:"0.00",5:"0.00",6:"+0.00;-0.00;0.00"} },
+    { nombre:"Detalle por día", columnas:["Persona","Fecha","Día","Estado","Entradas y salidas","Horas (h)"],
+      filas: E.flatMap(x=>(x.dias||[]).map(d=>[x.nombre, fmtF(d.fecha), d.dia||"", (estadoDiaTxt[d.estado]||d.estado)+(d.manual?" · manual":"")+(d.revisar?" · revisar":""), d.estado==="feriado" ? (d.feriado||"Feriado") : paresTxt(d.pares||[]), h2d39(d.minutos)])),
+      totales:[5], formatos:{5:"0.00"} },
+    { nombre:"Por semana", columnas:["Persona","Semana del","Horas (h)","Pactado (h)","Diferencia (h)"],
+      filas: E.flatMap(x=>(x.semanas||[]).map(w=>[x.nombre, fmtF(w.semana), h2d39(w.minutos), h2d39(w.esperado), w.esperado==null?null:h2d39(w.minutos-w.esperado)])),
+      totales:[2,3,4], formatos:{2:"0.00",3:"0.00",4:"+0.00;-0.00;0.00"} } ];
+}
+function botonHoras39(getR, fmt){
+  const b = el("button",{class:"btn "+(fmt==="pdf"?"pdf":"xl"),type:"button",text:fmt==="pdf"?"⬇️ PDF":"⬇️ Excel"});
+  b.onclick = async ()=>{ const R = typeof getR==="function" ? getR() : getR; if (!R || !(R.empleados||[]).length) return toast("No hay horas para descargar con estos filtros.");
+    spinBtn(b, fmt==="pdf"?"Armando el PDF…":"Armando el Excel…");
+    try{ const D = { titulo:`Horas del ${fmtF(R.desde)} al ${fmtF(R.hasta)}`, archivo:`HeyBlackk_Horas_${R.desde}_a_${R.hasta}`, actualizado:new Date().toISOString(), generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"", hojas:hojasHoras39(R) };
+      await (fmt==="pdf" ? exportarPDF37(D) : exportarXLSX37(D)); }
+    catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); } finally{ unspin(b); } };
+  return b;
 }
 /* ===================== Auditoría (se conserva el flujo existente; fotos por punto y acciones correctivas) ===================== */
 const MAX_FOTOS = 12;
@@ -1613,7 +1638,6 @@ async function vRegistroAud(body){
   filtros.addEventListener("input",()=>pintarReg()); filtros.addEventListener("change",()=>pintarReg());
   body.append(el("div",{class:"card"}, el("h2",{text:"Registro de auditorías"}), lead, filtros,
       el("div",{class:"row",style:"margin-top:10px"}, el("button",{class:"btn xl",type:"button",text:"⬇️ Excel",onclick:exportXLSX}), el("button",{class:"btn pdf",type:"button",text:"⬇️ PDF",onclick:exportPDF}),
-        el("button",{class:"btn",type:"button",text:"📄 Abrir planilla",onclick:async()=>{ try{ const u=await apiS("hojaUrl"); if (/^https:\/\/docs\.google\.com\//.test(u)) window.open(u,"_blank","noopener"); }catch(e){ toast(msgErr(e)); } }}),
         el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:async()=>{ await asegurarRegistro(true); pintarReg(); toast("Registro actualizado"); }}),
         el("span",{class:"mono",id:"exp-status",style:"font-size:12px;color:var(--muted)"})),
       el("div",{class:"tablewrap",style:"margin-top:12px"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Auditor","Prom.","Resultado","Infr.","Checklist","Días ped.","📷"].map((x,i)=>el("th",{class:[2,4,6].includes(i)?"n":null,text:x})))), tb))),
@@ -1683,11 +1707,13 @@ function nuevaAccion(a){
 }
 function vaciarCard(){
   const box = el("div",{class:"card"}, el("h3",{text:"🧹 Vaciar registro de auditorías"}),
-    el("p",{class:"lead",text:"Antes de vaciar se crea una copia de respaldo en Drive. Las fotos se conservan y la acción queda en el historial. Requiere confirmar tu PIN."}));
+    el("p",{class:"lead",text:"Antes de vaciar se descargan a tu computadora el Excel y el PDF completos del registro (y queda además una copia de respaldo interna). Las fotos se conservan y la acción queda en el historial. Requiere confirmar tu PIN."}));
   box.append(el("button",{class:"btn danger",type:"button",text:"Vaciar con respaldo",onclick:async()=>{
     if (!await confirmar(`¿Vaciar ${S.lista.length} auditorías? Se guarda un respaldo antes.`,"Vaciar",true)) return;
-    try{ const r = await apiS("vaciarRegistro"); S.lista=[]; pintarReg(); const ok=el("div",{class:"notice ok"},`Se vaciaron ${r.borradas} auditorías. `);
-      if (r.respaldo && /^https:\/\/docs\.google\.com\//.test(r.respaldo)) ok.append(el("a",{href:r.respaldo,target:"_blank",rel:"noopener",text:"Abrir el respaldo"})); box.append(ok); }
+    try{ const todo = S.lista.slice();   // 3.9w · copia local (Excel + PDF) antes de vaciar: sin links de Drive
+      if (todo.length){ await loadLibs("xlsx"); guardar(`HeyBlackk_Auditorias_Palermo_respaldo_${hoy()}.xlsx`, new Blob([await buildXLSX(todo)],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+        await loadLibs("pdf"); guardar(`HeyBlackk_Auditorias_Palermo_respaldo_${hoy()}.pdf`, buildPDF(todo)); }
+      const r = await apiS("vaciarRegistro"); S.lista=[]; pintarReg(); box.append(el("div",{class:"notice ok"},`Se vaciaron ${r.borradas} auditorías. El Excel y el PDF de respaldo se descargaron en tu computadora.`)); }
     catch(e){ toast(msgErr(e)); } }}));
   return box;
 }
@@ -2483,20 +2509,45 @@ function botonesDescarga(tipo, etiqueta, extra){
 }
 const sello37 = () => { const d = new Date(), p = n => String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
 const pieAct37 = D => `Planilla actualizada: ${D.actualizado?fechaHora(D.actualizado):"—"}${D.modificado?" · última edición de la planilla: "+fechaHora(D.modificado):""} · generado ${fechaHora(D.generado||new Date().toISOString())} por ${D.por||""}`;
+/* 3.9w · Descargas directas (Excel y PDF) armadas en el navegador: no usan Drive, no piden permisos y se abren en cualquier computadora.
+   Excel: encabezados fijos, filtros, formato de dinero/decimales, fila TOTAL con fórmulas SUBTOTAL (respetan el filtro) e impresión ajustada al ancho.
+   PDF: A4 horizontal, título y fecha en cada página, tabla ajustada al ancho (letra según cantidad de columnas; si son muchas, se parten
+   en páginas repitiendo la primera columna), fila de totales y «Página X de Y». */
+const RE_SUMA37 = /CANT|UNID|TOTAL|PEDID|PENDIENT|STOCK|MONTO|IMPORTE|LLEV|SEPAR|INGRES|FALTA|SALDO|VALOR|VENT|FACTUR|COBR|PAG|DEB|HORAS|DIAS|DÍAS|INCOMPL|SIN FICHAJE|^\$|\(\$\)|\(U\)|\(H\)/i;
+const RE_NOSUMA37 = /PRECIO|%|PROMEDIO|TALLE|FECHA|CÓDIGO|CODIGO|SKU|OT\b|N°|NRO|AÑO|MES\b|SEMANA|DNI|CUIT|TEL/i;
+function totales37(h){
+  if (Array.isArray(h.totales)) return h.totales;
+  if (h.totales === false || h.filas.length < 2) return [];
+  return h.columnas.map((c,j)=>j).filter(j=>{ if (!j) return false; const c=String(h.columnas[j]||"");
+    if (RE_NOSUMA37.test(c) || !( (h.dinero||[]).includes(j) || RE_SUMA37.test(c) )) return false;
+    let n=0; for (const f of h.filas){ const v=f[j]; if (v==null || v==="") continue; if (typeof v!=="number") return false; n++; } return n>0; });
+}
+const colL37 = n => { let s=""; n++; while(n){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; };
 async function exportarXLSX37(D){
   await loadLibs("xlsx");
-  const wb = new ExcelJS.Workbook(); wb.creator="Hey Blackk"; wb.created=new Date();
+  const wb = new ExcelJS.Workbook(); wb.creator="Hey Blackk"; wb.created=new Date(); wb.title = D.titulo;
   D.hojas.forEach(h=>{
-    const ws = wb.addWorksheet(h.nombre.slice(0,31), {views:[{state:"frozen", ySplit:4}], pageSetup:{orientation:"landscape", fitToPage:true, fitToWidth:1, fitToHeight:0}});
+    const nc = Math.max(1, h.columnas.length), tots = totales37(h), fr = 5, lr = 4 + h.filas.length;
+    const ws = wb.addWorksheet(String(h.nombre).replace(/[\\\/\?\*\[\]:]/g," ").slice(0,31), {views:[{state:"frozen", ySplit:4}],
+      pageSetup:{orientation: nc>6 ? "landscape" : "portrait", paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0, printTitlesRow:"4:4", margins:{left:0.4,right:0.4,top:0.5,bottom:0.5,header:0.2,footer:0.2}},
+      headerFooter:{oddFooter:"&L&8Hey Blackk · "+String(D.titulo).replace(/&/g,"y")+"&R&8Página &P de &N"}});
     ws.getCell("A1").value = "Hey Blackk · "+D.titulo+" · "+h.nombre; ws.getCell("A1").font={bold:true,size:14};
     ws.getCell("A2").value = pieAct37(D); ws.getCell("A2").font={size:10,color:{argb:"FF5F5F68"}};
     const hr = ws.getRow(4); hr.values = h.columnas; hr.height = 32;
     hr.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"},size:10}; c.fill=fill("FF111113"); c.alignment={vertical:"middle",horizontal:"center",wrapText:true}; });
-    h.filas.forEach((f,i)=>{ const r = ws.getRow(5+i); r.values = f;
+    h.filas.forEach((f,i)=>{ const r = ws.getRow(fr+i); r.values = f;
       (h.dinero||[]).forEach(j=>{ const c=r.getCell(j+1); if (typeof c.value==="number") c.numFmt='"$" #,##0'; });
-      for (let k=1;k<=h.columnas.length;k++) r.getCell(k).border={bottom:{style:"thin",color:{argb:"FFE0E0E6"}}}; });
-    h.columnas.forEach((c,i)=>{ const largo = Math.max(c.length, ...h.filas.slice(0,200).map(f=>String(f[i]??"").length)); ws.getColumn(i+1).width = Math.min(44, Math.max(9, largo+2)); });
-    if (h.filas.length) ws.autoFilter = {from:{row:4,column:1}, to:{row:4+h.filas.length, column:h.columnas.length}};
+      Object.keys(h.formatos||{}).forEach(j=>{ const c=r.getCell(Number(j)+1); if (typeof c.value==="number") c.numFmt=h.formatos[j]; });
+      for (let k=1;k<=nc;k++) r.getCell(k).border={bottom:{style:"thin",color:{argb:"FFE0E0E6"}}}; });
+    if (tots.length){ const r = ws.getRow(lr+1); r.getCell(1).value = "TOTAL";
+      tots.forEach(j=>{ const L=colL37(j), res=h.filas.reduce((a,f)=>a+(typeof f[j]==="number"?f[j]:0),0), c=r.getCell(j+1);
+        c.value = {formula:`SUBTOTAL(9,${L}${fr}:${L}${lr})`, result: Math.round(res*100)/100};
+        c.numFmt = (h.dinero||[]).includes(j) ? '"$" #,##0' : ((h.formatos||{})[j] || "#,##0.##"); });
+      for (let k=1;k<=nc;k++){ const c=r.getCell(k); c.font={bold:true}; c.fill=fill("FFF1F1F4"); c.border={top:{style:"medium",color:{argb:"FF111113"}}}; } }
+    h.columnas.forEach((c,i)=>{ const largo = Math.max(String(c).length, ...h.filas.slice(0,300).map(f=>String(f[i]??"").length)); ws.getColumn(i+1).width = Math.min(48, Math.max(9, largo+2));
+      if (largo > 46) ws.getColumn(i+1).alignment = {wrapText:true, vertical:"top"}; });
+    if (h.filas.length) ws.autoFilter = {from:{row:4,column:1}, to:{row:lr, column:nc}};
+    if (!h.filas.length) ws.getCell("A5").value = "Sin datos para este período.";
   });
   const buf = await wb.xlsx.writeBuffer();
   guardar(`${D.archivo}_${sello37()}.xlsx`, new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
@@ -2504,15 +2555,29 @@ async function exportarXLSX37(D){
 async function exportarPDF37(D){
   await loadLibs("pdf");
   const { jsPDF } = window.jspdf, doc = new jsPDF({orientation:"landscape", unit:"pt", format:"a4"});
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
   const plata = v => typeof v==="number" ? "$ "+Math.round(v).toLocaleString("es-AR") : v;
+  const num = (v,j,h) => (h.dinero||[]).includes(j) ? plata(v) : typeof v==="number" ? (Number.isInteger(v) ? v.toLocaleString("es-AR") : v.toLocaleString("es-AR",{maximumFractionDigits:2})) : (v==null?"":String(v));
+  let titulo = "";
   D.hojas.forEach((h,n)=>{
     if (n) doc.addPage();
-    doc.setFontSize(14); doc.text("Hey Blackk · "+D.titulo+" · "+h.nombre, 40, 40);
-    doc.setFontSize(8.5); doc.setTextColor(95); doc.text(pieAct37(D), 40, 56); doc.setTextColor(0);
-    doc.autoTable({ startY: 66, head:[h.columnas], body: h.filas.map(f=>f.map((v,j)=>(h.dinero||[]).includes(j) ? plata(v) : (v==null?"":String(v)))),
-      styles:{fontSize:7.5, cellPadding:3}, headStyles:{fillColor:[17,17,19]}, alternateRowStyles:{fillColor:[246,246,248]}, margin:{left:30,right:30} });
+    titulo = "Hey Blackk · "+D.titulo+" · "+h.nombre;
+    const nc = Math.max(1,h.columnas.length), fs = nc>18 ? 6.5 : nc>14 ? 6.8 : nc>10 ? 7.2 : nc>6 ? 8 : 9, tots = totales37(h);
+    const foot = tots.length ? [h.columnas.map((c,j)=> !j ? "TOTAL" : tots.includes(j) ? num(h.filas.reduce((a,f)=>a+(typeof f[j]==="number"?f[j]:0),0), j, h) : "")] : undefined;
+    const body = h.filas.length ? h.filas.map(f=>h.columnas.map((c,j)=>num(f[j],j,h))) : [[{content:"Sin datos para este período.", colSpan:nc, styles:{halign:"center",textColor:120}}]];
+    doc.autoTable({ startY: 70, head:[h.columnas], body, foot, showFoot:"lastPage",
+      theme:"grid", tableWidth:"auto", horizontalPageBreak: nc>22, horizontalPageBreakRepeat: 0,
+      styles:{fontSize:fs, cellPadding:2.6, overflow:"linebreak", lineColor:[224,224,230], lineWidth:0.4, textColor:[20,20,22], valign:"middle"},
+      headStyles:{fillColor:[17,17,19], textColor:255, fontStyle:"bold", halign:"center"}, footStyles:{fillColor:[241,241,244], textColor:[17,17,19], fontStyle:"bold"},
+      alternateRowStyles:{fillColor:[248,248,250]},
+      columnStyles: Object.fromEntries(h.columnas.map((c,j)=>[j, ((h.dinero||[]).includes(j) || h.filas.some(f=>typeof f[j]==="number")) ? {halign:"right"} : {}])),
+      didParseCell:d=>{ if (d.section==="foot" && d.column.index>0) d.cell.styles.halign="right"; },
+      margin:{left:28,right:28,top:70,bottom:34},
+      didDrawPage:()=>{ doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(20,20,22); doc.text(titulo, 28, 34, {maxWidth: W-56});
+        doc.setFont("helvetica","normal"); doc.setFontSize(8.3); doc.setTextColor(95,95,104); doc.text(doc.splitTextToSize(pieAct37(D), W-56)[0], 28, 50);
+        doc.setDrawColor(124,58,237); doc.setLineWidth(1.2); doc.line(28, 58, W-28, 58); doc.setTextColor(0); } });
   });
-  const total = doc.getNumberOfPages(); for (let i=1;i<=total;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(120); doc.text(`Página ${i} de ${total}`, doc.internal.pageSize.getWidth()-90, doc.internal.pageSize.getHeight()-16); }
+  const total = doc.getNumberOfPages(); for (let i=1;i<=total;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(120); doc.text(`Hey Blackk · ${D.titulo}`, 28, H-16); doc.text(`Página ${i} de ${total}`, W-28, H-16, {align:"right"}); }
   guardar(`${D.archivo}_${sello37()}.pdf`, doc.output("blob"));
 }
 /** Barra de avance simple (partes con color y leyenda). */
@@ -2621,11 +2686,12 @@ function tabDistribucion(X){
   if (X.ingresos.length) out.push(el("div",{class:"card"}, el("h3",{text:"📥 Últimos ingresos · SS27"}),
     el("ol",{class:"lista39"}, X.ingresos.slice(0,8).map(i=>el("li",{}, el("b",{text:i.producto}), ` · ingresaron ${u36(i.cantidad)} el ${fmtF(i.fecha).slice(0,5)}`,
       el("span",{class:"hint",text: i.comprometido==null ? " · ⚠️ sin cruce con «STOCK vs Pedidos»: validar" : ` · comprometido ${u36(i.comprometido)} · separar hoy ${u36(i.separar)} · quedaría en Lima ${i.quedaLima==null?"sin dato":u36(i.quedaLima)}${i.validar?" · validar":""}`})))) ));
-  const bx1 = (t, c) => { const b = el("button",{class:"btn sm",type:"button",text:t}); b.onclick = async ()=>{ spinBtn(b,"Armando el Excel…");
-      try{ const D = await apiS("descargaControl","separacion",c||""); await exportarXLSX37(D); }catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); }; return b; };
-  out.push(el("div",{class:"card"}, el("h3",{text:"📋 Planillas de separación (Excel)"}),
+  const bx1 = (t, c, fmt) => { const b = el("button",{class:"btn sm",type:"button",text:t+(fmt==="pdf"?" · PDF":" · Excel")}); b.onclick = async ()=>{ spinBtn(b, fmt==="pdf"?"Armando el PDF…":"Armando el Excel…");
+      try{ const D = await apiS("descargaControl","separacion",c||""); await (fmt==="pdf" ? exportarPDF37(D) : exportarXLSX37(D)); }catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); }; return b; };
+  out.push(el("div",{class:"card"}, el("h3",{text:"📋 Planillas de separación (Excel y PDF)"}),
     el("p",{class:"hint",text:"Solo lo que realmente falta separar: pendiente de «STOCK vs Pedidos» menos lo que se llevó, lo separado y lo ya confirmado. Cada archivo trae las hojas «Falta separar», «Movimientos» e «Inconsistencias», con la fuente de cada cantidad. Miami no lleva mercadería hasta confirmar el pago."}),
-    el("div",{class:"row descargas37"}, bx1("⬇️ Consolidado (todas)",""), ...X.clientes.filter(c=>!c.bloqueado).map(c=>bx1("⬇️ "+c.cliente, c.cliente)))));
+    el("div",{class:"row descargas37"}, bx1("⬇️ Consolidado (todas)","","xlsx"), bx1("⬇️ Consolidado (todas)","","pdf")),
+    X.clientes.filter(c=>!c.bloqueado).map(c=>el("div",{class:"row descargas37"}, bx1("⬇️ "+c.cliente, c.cliente, "xlsx"), bx1("⬇️ "+c.cliente, c.cliente, "pdf")))));
   if ((X.confirmados||[]).length) out.push(el("div",{class:"card"}, el("h3",{text:"✅ Separaciones ya confirmadas (no se vuelven a pedir)"}),
     el("ul",{class:"ant38-av"}, X.confirmados.map(m=>el("li",{text:`${m.cliente} · ${m.producto} · ${u36(m.u)} — falta reflejarlo en la planilla del cliente`})))));
   if (X.clientes.length) out.push(el("div",{class:"card"}, el("h3",{text:"🤝 Por gran cuenta"}),
@@ -3579,7 +3645,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9t";
+const APP_V = "3.9w";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
