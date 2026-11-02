@@ -18,7 +18,7 @@
 <meta name="apple-mobile-web-app-title" content="Hey Blackk">
 <link rel="preconnect" href="https://script.google.com">
 <link rel="preconnect" href="https://script.googleusercontent.com">
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- La tipografía se carga desde app.js sin bloquear el primer dibujo (display=swap). -->
 <style>
@@ -522,6 +522,47 @@ details.mas39[open]>summary{margin-bottom:8px}
 @media (max-width:640px){.chk39 input{width:26px;height:26px}}
 
 .bloq39{border-color:var(--bad)!important;background:var(--bad-bg,#FEF2F2)!important}
+
+/* ===== 3.9t · Estética renovada (misma estructura, más aire, profundidad y color) ===== */
+:root{--f-body:"Plus Jakarta Sans","IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--r:18px;--glow:#7C3AED;--glow2:#F97316;
+  --sh1:0 1px 2px rgba(20,16,30,.05),0 6px 20px rgba(20,16,30,.07);--sh2:0 2px 4px rgba(20,16,30,.06),0 14px 34px rgba(20,16,30,.12)}
+body{font-family:var(--f-body);background:
+  radial-gradient(900px 520px at -8% -10%,rgba(124,58,237,.10),transparent 60%),
+  radial-gradient(800px 480px at 108% 0%,rgba(249,115,22,.09),transparent 58%),
+  radial-gradient(700px 500px at 50% 120%,rgba(16,185,129,.07),transparent 60%),var(--bg);background-attachment:fixed;-webkit-font-smoothing:antialiased}
+.band{background:linear-gradient(120deg,#0B0B0F 0%,#1B1430 55%,#2B1A3F 100%);box-shadow:0 8px 30px rgba(20,10,40,.25)}
+.card{border:1px solid color-mix(in srgb,var(--line) 70%,transparent);border-radius:var(--r);box-shadow:var(--sh1);animation:sube39 .35s ease both}
+.card:hover{box-shadow:var(--sh2)}
+h1,h2{font-weight:800;letter-spacing:-.02em}
+h3{font-weight:700;letter-spacing:-.01em}
+.btn{border-radius:12px;transition:transform .12s ease,box-shadow .2s ease,background .2s ease}
+.btn:hover{transform:translateY(-1px);box-shadow:var(--sh1)}
+.btn:active{transform:translateY(0) scale(.98)}
+.btn.primary{background:linear-gradient(135deg,#141416 0%,#3A2A5C 100%);border-color:transparent;color:#fff;box-shadow:0 6px 18px rgba(58,42,92,.28)}
+.hk{border:none;border-radius:16px;padding:12px 14px;background:linear-gradient(160deg,color-mix(in srgb,var(--surface) 92%,var(--glow)) 0%,var(--surface) 70%);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--line) 75%,transparent)}
+.hk b{font-size:23px;font-weight:800;letter-spacing:-.02em}
+.hk.pos b{color:#059669}.hk.neg b{color:#DC2626}
+.pill{border-radius:999px;box-shadow:inset 0 0 0 1px color-mix(in srgb,currentColor 18%,transparent)}
+.pill.sect39{background:color-mix(in srgb,var(--glow) 12%,var(--surface));color:color-mix(in srgb,var(--glow) 80%,var(--ink))}
+.mod{border-radius:20px;transition:transform .15s ease,box-shadow .2s ease;box-shadow:var(--sh1)}
+.mod:hover{transform:translateY(-3px);box-shadow:var(--sh2)}
+.mod .ico{box-shadow:0 6px 16px color-mix(in srgb,var(--mc) 30%,transparent)}
+.tab39{border-radius:999px;transition:all .18s ease}
+.tab39[aria-selected="true"]{background:linear-gradient(135deg,#141416,#3A2A5C);color:#fff;box-shadow:0 6px 16px rgba(58,42,92,.3)}
+.sem38{border-width:0!important;box-shadow:var(--sh2);position:relative;overflow:hidden}
+.sem38::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:linear-gradient(90deg,var(--glow),var(--glow2))}
+.sem38.sem-verde::before{background:linear-gradient(90deg,#10B981,#34D399)}.sem38.sem-rojo::before{background:linear-gradient(90deg,#DC2626,#F97316)}
+.med-barra{border-radius:999px;overflow:hidden}.med-barra i{border-radius:999px;background-image:linear-gradient(90deg,rgba(255,255,255,.0),rgba(255,255,255,.25))}
+.cierre-mes39{background:linear-gradient(135deg,color-mix(in srgb,var(--glow) 10%,var(--surface)),var(--surface) 60%)}
+.chk39 li{border-radius:14px;transition:background .2s}
+.tabs39{backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px);background:color-mix(in srgb,var(--bg) 78%,transparent)}
+input,select,textarea{border-radius:12px!important}
+input:focus-visible,select:focus-visible,.btn:focus-visible{outline:2px solid var(--glow);outline-offset:2px}
+@keyframes sube39{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.card,.btn,.mod,.tab39{animation:none!important;transition:none!important}}
+@media (prefers-color-scheme:dark){body{background:radial-gradient(900px 520px at -8% -10%,rgba(124,58,237,.18),transparent 60%),radial-gradient(800px 480px at 108% 0%,rgba(249,115,22,.10),transparent 58%),var(--bg)}
+  :root{--sh1:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);--sh2:0 2px 6px rgba(0,0,0,.5),0 16px 36px rgba(0,0,0,.45)}
+  .btn.primary,.tab39[aria-selected="true"]{background:linear-gradient(135deg,#7C3AED,#C026D3);color:#fff}}
 </style>
 </head>
 <body>

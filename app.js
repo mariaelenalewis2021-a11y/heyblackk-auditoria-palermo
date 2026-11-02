@@ -755,6 +755,7 @@ function fichaPersona(x, body, L){
           else toast("✅ PIN actualizado"); recargar({bloqueado:false}); }catch(e){ unspin(ok); toast(msgErr(e)); } };
     }}));
     acc.append(el("button",{class:"btn sm",type:"button",text:"🕑 Contratación",onclick:()=>editarSucHoras(x, recargar)}));
+    if (esAdmin) acc.append(el("button",{class:"btn sm",type:"button",text:"🏷️ Sectores",onclick:()=>editarSectores(x, recargar)}));
     acc.append(el("button",{class:"btn sm",type:"button",text:x.registraIngreso?"⏸ No ficha":"▶ Ficha",title:"Habilitar o no la fichada",onclick:async e=>{ const bt=e.currentTarget; spinBtn(bt); try{ recargar(await apiS("editarEmpleado",x.id,{registraIngreso:!x.registraIngreso})); }catch(err){ unspin(bt); toast(msgErr(err)); } }}));
     if (!yo) acc.append(el("button",{class:"btn sm danger",type:"button",text:"⛔ Dar de baja",onclick:async()=>{
       const f = el("input",{type:"date",value:hoy()}), mo = el("input",{type:"text",maxlength:"200",placeholder:"Motivo (opcional)"}), ok = el("button",{class:"btn danger",type:"button",text:"Confirmar baja"});
@@ -773,9 +774,10 @@ function fichaPersona(x, body, L){
   return el("div",{class:"persona"+(x.estado!=="activo"?" off":"")},
     el("div",{class:"pinfo"}, el("b",{text:x.nombre}), el("span",{class:"mono",text:"usuario: "+x.legajo.toLowerCase()}),
       el("span",{text:[rolTxt, "🏬 "+(x.sucursal||"Palermo"), x.sector, x.fechaIngreso?"desde "+fmtF(x.fechaIngreso):"", x.contrato ? "" : x.horasEsperadas?`${x.horasEsperadas.horas} h por ${x.horasEsperadas.tipo==="semana"?"semana":"día"}`:""].filter(Boolean).join(" · ")}),
-      x.contrato ? el("span",{class:"hint",text:contratoTxt(x.contrato)}) : (x.estado==="activo" && x.registraIngreso ? el("span",{class:"pill warn",text:"Sin contratación cargada"}) : null),
+      x.dueno ? el("span",{class:"pill",text:"👑 Dueño · no ficha"}) : x.contrato ? el("span",{class:"hint",text:"⏱️ Pactado: "+contratoTxt(x.contrato)}) : (x.estado==="activo" && x.registraIngreso ? el("span",{class:"pill warn",text:"Sin contratación cargada"}) : null),
+      (x.sectores||[]).length ? el("span",{class:"row",style:"gap:4px;flex-wrap:wrap"}, x.sectores.map(k=>el("span",{class:"pill sect39",text:"🏷️ "+(SECTORES39[k]||k)}))) : null,
       x.estado!=="activo" ? el("span",{class:"pill bad",text:`Baja ${fmtF(x.fechaBaja)}${x.bajaPor?" · por "+x.bajaPor:""}${x.motivoBaja?" · "+x.motivoBaja:""}`}) :
-        el("span",{class:"row",style:"gap:6px"}, el("span",{class:"pill ok",text:"Activo"}), x.registraIngreso?el("span",{class:"pill",text:"Ficha"}):null, x.bloqueado?el("span",{class:"pill bad",text:"Bloqueado: asignar PIN"}):null)),
+        el("span",{class:"row",style:"gap:6px"}, el("span",{class:"pill ok",text:"Activo"}), x.registraIngreso&&!x.dueno?el("span",{class:"pill",text:"Ficha"}):null, x.bloqueado?el("span",{class:"pill bad",text:"Bloqueado: asignar PIN"}):null)),
     acc);
 }
 /* 3.4: sucursal de la persona y horas esperadas (informativas, para comparar con lo trabajado). */
@@ -797,6 +799,17 @@ function editarSucHoras(x, recargar){
     const hor = ctr.valor(); if (hor && !ctr.completo()) return toast("Revisá la contratación: días, entrada y salida.");
     spinBtn(ok,"Guardando…");
     try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horario: hor, horasEsperadas: hor ? null : (Number(hs.value)>0 ? {tipo:"semana", horas:Number(hs.value)} : null), vacacionesAnuales: Number(va.value)>0 ? Number(va.value) : null})); m.cerrar(); toast("✅ Contratación guardada"); }
+    catch(e){ unspin(ok); toast(msgErr(e)); } };
+}
+/* 3.9t · Sectores de cada persona (los mismos del módulo «Jefes»). Es información de a qué sectores pertenece: no cambia permisos. */
+const SECTORES39 = {finanzas:"Administración y Finanzas", clientes:"Clientes y pedidos", produccion:"Producción", ingresos:"Fichaje y horas / RRHH", vacaciones:"Vacaciones", rrhh:"Novedades RR. HH.", kpi:"KPIs comerciales", cierre:"Cierre diario", auditar:"Auditar", auditoria:"Registro de auditorías", acciones:"Acciones correctivas", historial:"Historial", personal:"Personal", config:"Configuración", otros:"Otros"};
+function editarSectores(x, recargar){
+  const checks = Object.keys(SECTORES39).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:(x.sectores||[]).includes(k)||null}); return el("label",{class:"chk"},c," "+SECTORES39[k]); });
+  const ok = el("button",{class:"btn primary",type:"button",text:"Guardar"});
+  const m = modal(el("div",{class:"grid"}, el("h2",{text:"Sectores · "+x.nombre}), el("p",{class:"lead",text:"Marcá uno o varios sectores. Podés cambiarlos o quitarlos cuando quieras; queda registrado en el Historial. No cambia sus permisos de acceso."}),
+    el("div",{class:"chkgrid"},checks), el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
+  ok.onclick = async ()=>{ spinBtn(ok,"Guardando…");
+    try{ recargar(await apiS("editarEmpleado", x.id, {sectores: checks.map(l=>l.querySelector("input")).filter(c=>c.checked).map(c=>c.value)})); m.cerrar(); toast("✅ Sectores guardados"); }
     catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
 function editarPermisos(x, recargar){
@@ -3566,7 +3579,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9s";
+const APP_V = "3.9t";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
