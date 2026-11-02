@@ -42,7 +42,7 @@ const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
 const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
+const SENSIBLES = new Set(["detalleControl","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -3144,7 +3144,8 @@ function tabControl(D, R, K, recargar){
       return el("details",{class:"ctl39"}, el("summary",{}, el("b",{text:capi(mesLargo(r.mes))}), el("span",{text:` · facturado ${moneyK(r.informe.conIva)} · `}),
           el("span",{class:"pill "+(ok?"ok":""),text: ok?"✅ coincide":`${moneyK(Math.abs(r.diferencia))} explicados`})),
         ks.length ? el("ul",{class:"ant38-av"}, ks.slice(0,5).map(k=>el("li",{text:`${r.motivos[k].monto>0?"➕":"➖"} ${moneyK(Math.abs(r.motivos[k].monto))} · ${r.motivos[k].n} ${MOT[k]||k}`}))) : null,
-        Math.abs(r.sinExplicar)>=1000 ? el("p",{class:"notice warn",text:`Quedan ${moneyK(Math.abs(r.sinExplicar))} sin explicar: revisalo en la descarga.`}) : null); });
+        Math.abs(r.sinExplicar)>=1000 ? el("p",{class:"notice warn",text:`Quedan ${moneyK(Math.abs(r.sinExplicar))} sin explicar: revisalo en la descarga.`}) : null,
+        (D.maria && !ok) ? detalleControl39(r.mes) : null); });
     out.push(el("div",{class:"card"}, el("h3",{text:"🔎 ¿Coincide el Templete con Contabilium?"}),
       el("p",{class:"hint",text:"Tocá un mes para ver qué explica la diferencia, factura por factura."}), ...filas));
   }
@@ -3174,6 +3175,33 @@ function tabControl(D, R, K, recargar){
       ["Mercadería sin vender","Lo que vale la ropa que está en los locales."]].flatMap(([t,d])=>[el("dt",{text:t}), el("dd",{text:d})]))));
   out.push(el("div",{class:"card"}, botonesDescargaFin(), el("p",{class:"hint",text:`${R.filas} movimientos leídos${R.fuera?` · ${R.fuera} afuera por fecha mal cargada`:""}. La app solo lee: no cambia nada de las planillas ni de Contabilium.`})));
   return out;
+}
+
+/* 3.9z · «Ver las facturas»: el detalle de cada motivo de la diferencia, factura por factura. Solo María y con su PIN (el servidor lo exige). */
+const DETCTL39 = {};
+function detalleControl39(mes){
+  const box = el("div",{class:"detctl39"}), b = el("button",{class:"btn sm",type:"button",text:"🔒 Ver las facturas (con tu PIN)"});
+  const pintar = R => { box.textContent = "";
+    if (!R.motivos.length) return box.append(el("p",{class:"hint",text:"No hay diferencias para detallar en este mes."}));
+    const hojas = [];
+    R.motivos.forEach(m => { if (!m.items.length && Math.abs(m.monto) < 1000) return;
+      const tb = el("tbody"); m.items.forEach(i => tb.append(el("tr",{}, el("td",{class:"mono",text:i.factura}), el("td",{text:i.cliente||"—"}), el("td",{class:"n",text:money(i.importe)}), el("td",{text:i.extra===""?"":(typeof i.extra==="number"?money(i.extra):i.extra)}))));
+      if (!m.items.length) tb.append(el("tr",{}, el("td",{colspan:"4",class:"empty",text:"Sin detalle por factura para este motivo."})));
+      box.append(el("details",{class:"card det39"}, el("summary",{}, el("b",{text:`${m.monto>0?"➕":"➖"} ${moneyK(Math.abs(m.monto))}`}), ` · ${m.n} · ${m.titulo}`),
+        el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Factura","Cliente","Importe","Dato extra"].map((x,j)=>el("th",{class:j===2?"n":null,text:x})))), tb)),
+        m.items.length < m.n ? el("p",{class:"hint",text:`Se muestran ${m.items.length} de ${m.n}.`}) : null));
+      hojas.push({ nombre: m.titulo.slice(0,31), columnas:["Factura","Cliente","Importe","Dato extra"], dinero:[2], totales:[2], filas: m.items.map(i=>[i.factura, i.cliente, i.importe, i.extra]) }); });
+    if (Math.abs(R.sinExplicar)>=1000) box.append(el("p",{class:"notice warn",text:`Quedan ${moneyK(Math.abs(R.sinExplicar))} sin explicar.`}));
+    const D = { titulo:`Diferencias Templete vs Contabilium · ${mesLargo(R.mes)}`, archivo:`Diferencias_${R.mes}`, actualizado:new Date().toISOString(), generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"", hojas };
+    const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
+    bx.onclick = async ()=>{ spinBtn(bx,"Armando…"); try{ await exportarXLSX37(D); }catch(e){ toast(msgErr(e)); } unspin(bx); };
+    bp.onclick = async ()=>{ spinBtn(bp,"Armando…"); try{ await exportarPDF37(D); }catch(e){ toast(msgErr(e)); } unspin(bp); };
+    if (hojas.length) box.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Este detalle:"}), bx, bp));
+  };
+  b.onclick = async ()=>{ spinBtn(b,"Buscando las facturas…");
+    try{ const R = DETCTL39[mes] || (DETCTL39[mes] = await apiS("detalleControl", mes)); b.remove(); pintar(R); }
+    catch(e){ toast(msgErr(e)); unspin(b); } };
+  box.append(b); return box;
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
    El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
@@ -3654,7 +3682,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9y";
+const APP_V = "3.9z";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
