@@ -2010,6 +2010,7 @@ async function vKPI(main){
   { const cx = cardContexto(K.contexto); if (cx) body.append(cx); }   // 3.7: dólar y noticias que pueden impactar
   // 3.9 · Ventas de todos los canales (Contabilium), grandes cuentas (Control ingreso) y experiencia en Google
   { const recargar = ()=>{ main.textContent=""; route(); };
+    const cq = cardQuienVendio(K); if (cq) body.append(cq);   // 3.9za
     const cc = cardCanales(K); if (cc) body.append(cc);
     const cg = cardGrandes(K); if (cg) body.append(cg);
     body.append(cardGoogle(K, recargar)); }
@@ -2272,6 +2273,23 @@ function formGoogle(recargar){
   det.append(el("div",{class:"stack",style:"margin-top:10px"}, el("label",{class:"f"},"🏬 Local",segL), segF, nums, el("div",{class:"grid2"}, el("label",{class:"f"},"📅 Fecha",fec), el("label",{class:"f"},"📝 Observaciones",obs)), el("div",{class:"row"}, ok)));
   pintar();
   return det;
+}
+
+/* 3.9za · ¿Quién vendió más? Palermo, Lima y Janette: ranking del mes, comparaciones e hitos (mejor mes, piso de comisión). */
+function cardQuienVendio(K){
+  const Q = K && K.canales && K.canales.quien; if (!Q || !Q.lista.length) return null;
+  const med = ["🥇","🥈","🥉"], mesN = capi(mesLargo(Q.mes).split(" ")[0]);
+  const card = el("div",{class:"card quien39"}, el("h2",{text:`🏆 ¿Quién vendió más en ${mesN.toLowerCase()}${Q.cerrado?"":" (en curso)"}?`}),
+    el("p",{class:"lead",text:`${ICO_CANAL[Q.lista[0].canal]||""} ${Q.lista[0].canal} fue el local que más vendió: ${moneyK(Q.lista[0].v)}${Q.lista[0].part!=null?` (${Q.lista[0].part} % de lo que vendieron los locales)`:""}.`}));
+  card.append(el("ol",{class:"podio39"}, Q.lista.map((f,i)=>el("li",{},
+    el("div",{class:"row",style:"gap:8px;flex-wrap:wrap;align-items:baseline"}, el("span",{text:med[i]||"•"}), el("b",{text:f.canal}), el("span",{class:"v39",text:moneyK(f.v)}),
+      f.part!=null ? el("span",{class:"pill",text:f.part+" %"}) : null,
+      f.vsMesAnt!=null ? el("span",{class:"pill "+pctCls39(f.vsMesAnt),text:pctTxt39(f.vsMesAnt)+" vs mes anterior"}) : null,
+      f.vsAnioAnt!=null ? el("span",{class:"pill "+pctCls39(f.vsAnioAnt),text:pctTxt39(f.vsAnioAnt)+" vs año pasado"}) : null),
+    f.hitos.length ? el("ul",{class:"ant38-av"}, f.hitos.map(h=>el("li",{text:(/comisión/.test(h)&&f.superaPiso?"💰 ":/piso/.test(h)?"📉 ":"⭐ ")+h}))) : null))));
+  if (Q.enCurso && Q.enCurso.length) card.append(el("p",{class:"hint",text:`${capi(mesLargo(Q.mesHoy).split(" ")[0])} en curso: `+Q.enCurso.map(f=>`${f.canal} ${moneyK(f.v)}${f.piso?` (piso de comisión ${moneyK(f.piso)}: ${f.v>=f.piso?"ya lo superó":"faltan "+moneyK(f.piso-f.v)})`:""}`).join(" · ")+"."}));
+  card.append(el("p",{class:"hint",text:"Facturado en Contabilium, con IVA y neto de notas de crédito."}));
+  return card;
 }
 /* ===================== 3.5 · Días flojos, fechas especiales, Panorama RRHH y borrado de fichajes =====================
    Regla del resumen: solo se muestra lo que tiene datos. Si una sección queda vacía, no aparece (ni título ni aviso).
@@ -2939,6 +2957,8 @@ function pintarFinanzas(body, D, recargar){
   if (D.maria && R.cierre && R.cierre.checklists){ const Lc = R.cierre.checklists[R.cierre.checklists.length-1];
     if (Lc && Lc.alertasPago) body.append(el("div",{class:"card notice warn row"}, el("span",{text:`🔔 En ${MESL(Lc.mes)} hay ${Lc.alertasPago} pagos que cargás todos los meses y todavía no están en el Templete (sueldos y gastos fijos).`}), el("span",{class:"spacer"}),
       el("button",{class:"btn sm",type:"button",text:"Ver mi cierre",onclick:()=>{ const b=document.querySelector('.tab39[data-k="cierre"]'); if(b){ b.click(); b.scrollIntoView({block:"start",behavior:"smooth"}); } }}))); }
+  // 3.9za · Panorama claro: ventas (Contabilium ↔ Templete), a dónde se fue la plata por sector y pagos del mes
+  if (R.panorama && !R.panorama.error){ const cp = cardPanorama39(R.panorama); if (cp) body.append(cp); const cq = cardPagos39(R.panorama.pagos); if (cq) body.append(cq); }
   // Qué hacer (máx. 3, siempre a la vista)
   const recs = R.recomendaciones.slice(0,2), pal = t => new Set((String(t).toLowerCase().match(/[a-záéíóúñ]{7,}/g)||[]));
   const yaDicho = t => { const w = pal(t); return recs.some(r=>[...pal(r)].some(x=>w.has(x) && !/septiembre|octubre|noviembre|diciembre|necesario/.test(x))); };
@@ -3202,6 +3222,50 @@ function detalleControl39(mes){
     try{ const R = DETCTL39[mes] || (DETCTL39[mes] = await apiS("detalleControl", mes)); b.remove(); pintar(R); }
     catch(e){ toast(msgErr(e)); unspin(b); } };
   box.append(b); return box;
+}
+
+/* ===== 3.9za · Panorama para los dueños: claro y sin agobiar ===== */
+const ICO_SECT = {"Talleres":"🧵","Telas e insumos":"🧶","Otros gastos de producción":"🏭","Logística y envíos":"🚚","Sueldos":"👥","Alquileres y locales":"🏠","Publicidad y comercial":"📣","Impuestos":"🏛️","Bancos, servicios y administración":"🏦","Otros":"📦"};
+function cardPanorama39(P){
+  const SE = (P.sectores||[]).filter(x=>x.total>0 || (P.ventas||[]).some(v=>v.mes===x.mes)); if (!SE.length) return null;
+  const hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date()), dia = Number(hoyAR.slice(8,10));
+  const card = el("div",{class:"card pan39"}, el("h2",{text:"🧾 Ventas y gastos, en claro"})), segs = el("div",{class:"row seg38"}), caja = el("div",{});
+  const EST = {conciliado:["✅","Coincide con el Templete","ok"], explicado:["🟡","Diferencias explicadas (ver Control)",""], revisar:["🟠","Hay diferencias para revisar (ver Control)","warn"], sin_cargar:["⏳","Todavía no se cargó en el Templete",""]};
+  const ver = S => { caja.textContent = ""; [...segs.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.k===S.mes));
+    const V = (P.ventas||[]).find(v=>v.mes===S.mes), mx = Math.max(1, ...S.lista.map(x=>x.monto));
+    caja.append(el("div",{class:"hkpis"},
+      V ? hk("🛍️ Vendido (facturado)", moneyK(V.facturado), "Contabilium, con IVA") : null,
+      hk("💸 Gastos", moneyK(S.total), S.enCurso ? "cargados hasta hoy" : "del mes", "neg"),
+      S.retiros ? hk("👤 Retiros de socios", moneyK(S.retiros), "aparte de los gastos") : null));
+    if (V){ const e = EST[V.estado] || EST.revisar; caja.append(el("p",{class:"hint",style:"margin:6px 0 10px"}, el("span",{class:"pill "+e[2],text:e[0]+" "+e[1]}),
+      V.estado!=="sin_cargar" ? ` · En el Templete: ${moneyK(V.templete)}${Math.abs(V.diferencia)>=10000?` (diferencia ${moneyK(Math.abs(V.diferencia))})`:""}` : " · Apenas se cargue, la app lo concilia sola.")); }
+    if (!S.lista.length) caja.append(el("p",{class:"hint",text:"Todavía no hay gastos cargados en este mes."}));
+    else caja.append(el("h3",{text:"¿A dónde se fue la plata?"}), el("div",{class:"sect39"}, S.lista.map(x=>el("details",{class:"sect39-f"},
+      el("summary",{}, el("span",{class:"sect39-n",text:(ICO_SECT[x.sector]||"•")+" "+x.sector}), el("b",{text:moneyK(x.monto)}),
+        x.vs!=null && Math.abs(x.vs)>=10 && !S.enCurso ? el("span",{class:"pill "+(x.vs>=25?"bad":x.vs<=-15?"ok":""),text:(x.vs>0?"+":"")+x.vs+" % vs. lo normal"}) : null,
+        el("i",{class:"sect39-b",style:`width:${Math.max(3,Math.round(x.monto/mx*100))}%`})),
+      el("ul",{class:"ant38-av"}, x.cuentas.map(c=>el("li",{text:`${c.cuenta}: ${moneyK(c.monto)}`})),
+        x.prom3 ? el("li",{class:"hint",text:`Lo normal (promedio de los 3 meses anteriores): ${moneyK(x.prom3)}.`}) : null)))));
+    caja.append(el("p",{class:"hint",text:"Gastos según el Templete, agrupados por sector. Tocá un sector para ver en qué cuentas se fue."}));
+  };
+  SE.forEach(S=>{ const b = el("button",{class:"btn sm",type:"button","data-k":S.mes,text:capi(MESL(S.mes))+(S.enCurso?" (en curso)":"")}); b.onclick=()=>ver(S); segs.append(b); });
+  card.append(segs, caja);
+  const def = SE.find(x=>x.enCurso && dia>10) || SE.find(x=>!x.enCurso) || SE[0]; ver(def);
+  return card;
+}
+function cardPagos39(G){
+  if (!G || !(G.lista||[]).length) return null;
+  const pend = G.lista.filter(p=>p.estado!=="pagado"), pag = G.lista.filter(p=>p.estado==="pagado");
+  const item = p => el("li",{class:p.ultimo?"ult39":""}, el("span",{class:"sem",text:p.ultimo?"🏁":p.estado==="pagado"?"✅":p.estado==="parcial"?"🟡":"⏳"}),
+    el("div",{}, el("b",{text:p.nombre}), ` · ${p.estado==="pagado"?"pagado "+moneyK(p.pagado):"lo normal: "+moneyK(p.promedio)}`,
+      p.estado==="parcial" ? el("span",{class:"hint",text:` (cargado ${moneyK(p.pagado)})`}) : null,
+      p.dia && p.estado!=="pagado" ? el("span",{class:"hint",text:` · suele pagarse alrededor del día ${p.dia}`}) : null,
+      p.nota ? el("div",{class:"pill ok",style:"margin-top:4px",text:"🏁 "+p.nota}) : null));
+  return el("div",{class:"card pag39"}, el("h2",{text:`🗓️ Pagos que se hacen todos los meses · ${capi(MESL(G.mes))}`}),
+    el("p",{class:"lead",text: pend.length ? `Faltan ${pend.length} ${pend.length===1?"pago":"pagos"} por unos ${moneyK(G.pendiente)}.` : "Ya están todos cargados en el Templete."}),
+    pend.length ? el("ul",{class:"alertas-rrhh"}, pend.map(item)) : null,
+    pag.length ? el("details",{class:"mas39"}, el("summary",{text:`Ya pagados este mes (${pag.length})`}), el("ul",{class:"alertas-rrhh"}, pag.map(item))) : null,
+    el("p",{class:"hint",text:"Se arma solo con lo que se repite en el Templete en los últimos meses (los sueldos van juntos, sin detalle por persona)."}));
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
    El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
@@ -3682,7 +3746,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9z";
+const APP_V = "3.9za";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
