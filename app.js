@@ -2175,7 +2175,7 @@ function cardCanales(K){
     el("p",{class:"lead",text:`${mesN} hasta hoy, comparado con ${maN} a esta altura y con el mismo período del año pasado.`}));
   // Total de la marca + participación de cada canal
   card.append(el("div",{class:"hkpis"},
-    hk("💰 Marca · "+mesN, moneyK(T.mes), T.vsMesAnt!=null?`${pctTxt39(T.vsMesAnt)} vs ${maN}`:""),
+    hk("💰 Marca · "+mesN, moneyK(T.mes), T.inicio?"🗓️ el mes recién empieza":(T.vsMesAnt!=null?`${pctTxt39(T.vsMesAnt)} vs ${maN}`:"")),
     T.vsAnioAnt!=null ? hk("📅 vs "+X.anioAnt, pctTxt39(T.vsAnioAnt), `${mesN.toLowerCase()} ${X.anioAnt}, mismo período`, pctCls39(T.vsAnioAnt)) : null,
     hk("🗓️ Acumulado "+X.mes.slice(0,4), moneyK(T.anio), T.vsAnioAntAcum!=null?`${pctTxt39(T.vsAnioAntAcum)} vs ${X.anioAnt}`:""),
     T.hoy ? hk("☀️ Hoy", moneyK(T.hoy), "facturado hasta ahora") : null));
@@ -2189,7 +2189,7 @@ function cardCanales(K){
   const g = el("div",{class:"canales39"});
   X.canales.forEach(c=>{ const fila = (k,v,cl)=>el("div",{class:"f39"}, el("span",{text:k}), el("b",{class:cl||"",text:v}));
     g.append(el("div",{class:"canal39"}, el("div",{class:"row",style:"gap:6px"}, el("span",{text:ICO_CANAL[c.canal]||""}), el("b",{text:c.canal}), el("span",{class:"spacer"}), c.partMes!=null?el("span",{class:"pill",text:String(c.partMes).replace(".",",")+" %"}):null),
-      el("div",{class:"v39",text:moneyK(c.mes.v)}), el("div",{class:"hint",text:mesN+" hasta hoy"}),
+      el("div",{class:"v39",text:moneyK(c.mes.v)}), c.inicio ? el("div",{class:"notice",style:"padding:6px 8px;font-size:12.5px",text:"🗓️ "+c.inicio.texto}) : el("div",{class:"hint",text:mesN+" hasta hoy"}),
       c.ultimo ? fila("Último día facturado · "+fmtF(c.ultimo.fecha).slice(0,5), moneyK(c.ultimo.v)) : null, c.vsMesAnt!=null?fila("vs "+maN, pctTxt39(c.vsMesAnt), pctCls39(c.vsMesAnt)):null,
       c.vsAnioAnt!=null?fila("vs "+mesN.toLowerCase()+" "+X.anioAnt, pctTxt39(c.vsAnioAnt), pctCls39(c.vsAnioAnt)):null,
       fila("Año "+X.mes.slice(0,4), moneyK(c.anio.v)), c.vsAnioAntAcum!=null?fila("Año vs "+X.anioAnt, pctTxt39(c.vsAnioAntAcum), pctCls39(c.vsAnioAntAcum)):null,
@@ -3917,7 +3917,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9ze";
+const APP_V = "3.9zf";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
