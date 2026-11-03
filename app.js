@@ -2316,6 +2316,7 @@ function pintarPlan39(box, cargar){
     kpi("Pedido inicial", moneyK(T.pedido), `se llevaron ${moneyK(T.seLlevo)} · falta enviar ${moneyK(T.faltaEnviar)}`),
     kpi("Abonaron", moneyK(T.abono), `debían ${moneyK(T.debiaAbonar)} a hoy`, "ok"),
     kpi("Falta abonar hoy", moneyK(T.faltaAbonar), T.faltaAbonar ? "según la regla de pagos" : "están al día", T.faltaAbonar?"bad":"ok")),
+    el("h3",{text:"📋 Resumen general"}), tablaResumen39(R),
     el("p",{class:"hint"}, `Leído el ${new Date(R.leida).toLocaleString("es-AR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}. Temporada SS27 desde ${R.desde.split("-").reverse().join("/")}. `, bA));
   const fd = f => f.split("-").reverse().join("/");
   R.cuentas.forEach(c=>{
@@ -2334,20 +2335,159 @@ function pintarPlan39(box, cargar){
         el("div",{}, el("small",{text:"Hoy debe"}), el("b",{class:c.faltaAbonar?"bad-t":"ok-t",text:c.faltaAbonar?money(c.faltaAbonar):"$ 0"}))),
       c.pedido ? el("div",{class:"plan39"}, el("span",{style:`width:${Math.min(100,Math.round(c.abono/c.pedido*100))}%`})) : null,
       ult,
+      el("h3",{text:"Estado de cuenta"}), tablaCuenta39(c),
+      el("h3",{text:"Pagos y entregas, por fecha"}),
       c.movimientos.length ? el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Fecha","Movimiento","Importe","Queda por pagar"].map((h,i)=>el("th",{class:i>=2?"n":null,text:h})))), tb)) : el("p",{class:"hint",text:"Sin pagos ni facturas todavía."}),
-      el("p",{class:"hint",text:c.regla})));
+      el("p",{class:"hint",text:c.regla}),
+      (()=>{ const x = el("button",{class:"btn sm",type:"button",text:`⬇️ Excel de ${c.granCuenta}`}), p = el("button",{class:"btn sm",type:"button",text:`⬇️ PDF de ${c.granCuenta}`});
+        x.onclick = ()=>bajarPlan39(x,"xlsx",[c],false); p.onclick = ()=>bajarPlan39(p,"pdf",[c],false); return el("div",{class:"row descargas37"}, x, p); })()));
   });
-  const D = { titulo:"Grandes cuentas · plan de pagos SS27", archivo:`Grandes_cuentas_pagos_${new Date().toISOString().slice(0,10)}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"",
-    hojas:[{ nombre:"Resumen", columnas:["Gran cuenta","Pedido inicial","Se llevó","Falta enviar","Seña (50 %)","Abonó","Debía abonar a hoy","Falta abonar","A favor","Última factura","Falta de la última","Regla"], dinero:[1,2,3,4,5,6,7,8,10], totales:[1,2,3,5,6,7],
-      filas:R.cuentas.map(c=>[c.granCuenta,c.pedido,c.seLlevo,c.faltaEnviar,c.sena,c.abono,c.debiaAbonar,c.faltaAbonar,c.aFavor,c.ultima?c.ultima.factura:"",c.ultima?c.ultima.falta:"",c.regla]) },
-      { nombre:"Pagos y entregas", columnas:["Gran cuenta","Fecha","Movimiento","Importe","Queda por pagar del pedido"], dinero:[3,4],
-      filas:[].concat(...R.cuentas.map(c=>c.movimientos.map(m=>[c.granCuenta,m.fecha.split("-").reverse().join("/"),m.detalle,(m.tipo==="pago"?-1:1)*m.monto,m.tipo==="pago"?m.queda:""]))) },
-      { nombre:"Facturas", columnas:["Gran cuenta","Factura","Fecha","Se llevó (SS27)","A abonar","Cubierto","Falta","Estado"], dinero:[3,4,5,6], totales:[3,4,6],
-      filas:[].concat(...R.cuentas.map(c=>c.facturas.map(f=>[c.granCuenta,f.factura,f.fecha.split("-").reverse().join("/"),f.ss27,f.aPagar,f.cubierto,f.falta,(EST_FAC39[f.estado]||f.estado).replace(/^\S+\s/,"")]))) }] };
-  const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
-  bx.onclick = async ()=>{ spinBtn(bx,"Armando…"); try{ await exportarXLSX37(D); }catch(e){ toast(msgErr(e)); } unspin(bx); };
-  bp.onclick = async ()=>{ spinBtn(bp,"Armando…"); try{ await exportarPDF37(D); }catch(e){ toast(msgErr(e)); } unspin(bp); };
-  box.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Para enviar:"}), bx, bp));
+  // 3.9zg · descargas: general (resumen + cada cliente) o de un cliente solo
+  const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel general"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF general"});
+  bx.onclick = ()=>bajarPlan39(bx, "xlsx", R.cuentas, true); bp.onclick = ()=>bajarPlan39(bp, "pdf", R.cuentas, true);
+  box.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Resumen general y una hoja por cliente:"}), bx, bp));
+}
+/* ---------- 3.9zg · Resumen general (como la planilla) + descargas Excel/PDF general o por cliente ---------- */
+const fdd39 = f => f ? f.split("-").reverse().join("/") : "";
+const EST39 = { "pagada":["Pagada","ok"], "parcial":["Pago parcial","par"], "sin pago":["Pendiente","pen"] };
+function ultTxt39(c){ if (!c.ultima) return "—"; const f = (c.facturas||[]).find(x=>x.factura===c.ultima.factura); const e = f ? f.estado : (c.ultima.falta>0?"sin pago":"pagada");
+  return (EST39[e]||EST39["sin pago"])[0] + ": " + c.ultima.factura; }
+function filaRes39(c){ return [c.granCuenta, c.pedido, c.sena||null, c.sena ? (c.senaCubierta||0) : null, c.seLlevo, c.abono, c.faltaAbonar, c.faltaEnviar, ultTxt39(c)]; }
+const COLS_RES39 = ["Cliente","Pedido inicial","Anticipo requerido","Anticipo abonado","Entregado (SS27)","Abonado total","Debe hoy","Falta entregar","Última factura"];
+/** Filas del estado de cuenta: el anticipo (azul) y cada factura en orden de fecha. */
+function filasPlan39(c){
+  const F = [];
+  if (c.sena){ const ab = c.senaCubierta||0; F.push({ anticipo:true, fecha:"", factura:"Anticipo 50 % del pedido", lleva:null, aPagar:c.sena, pagos:ab, falta:Math.max(0,c.sena-ab), estado: ab>=c.sena-1?"pagada":ab>0?"parcial":"sin pago" }); }
+  (c.facturas||[]).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.factura.localeCompare(b.factura))
+    .forEach(f=>F.push({ fecha:f.fecha, factura:f.factura, lleva:f.ss27, aPagar:f.aPagar, pagos:f.cubierto, falta:f.falta, estado:f.estado }));
+  return F;
+}
+function tablaResumen39(R){
+  const T = R.cuentas.reduce((t,c)=>{ const f = filaRes39(c); for (let i=1;i<8;i++) t[i] += (f[i]||0); return t; }, [0,0,0,0,0,0,0,0]);
+  const td = (v,i,cls) => el("td",{class:(i>0&&i<8?"n":"")+(cls?" "+cls:""), text: i>0&&i<8 ? (v==null?"–":money(v)) : (v||"")});
+  return el("div",{class:"tablewrap res39"}, el("table",{class:"compact"},
+    el("thead",{}, el("tr",{}, ...COLS_RES39.map((h,i)=>el("th",{class:i>0&&i<8?"n":null,text:h})))),
+    el("tbody",{}, ...R.cuentas.map(c=>{ const f = filaRes39(c), e = /^Pendiente/.test(f[8]) ? "bad-t" : /^Pago parcial/.test(f[8]) ? "warn-t" : "ok-t";
+      return el("tr",{}, ...f.map((v,i)=>td(v,i, i===0 ? "b" : i===6 ? (v ? "bad-t" : "b ok-t") : i===8 ? e : ""))); })),
+    el("tfoot",{}, el("tr",{}, el("td",{class:"b",text:"Total"}), ...T.slice(1).map((v,i)=>td(v,i+1,"b")), el("td",{})))));
+}
+function tablaCuenta39(c){
+  const tb = el("tbody"); filasPlan39(c).forEach(f=>{ const e = EST39[f.estado]||EST39["sin pago"];
+    tb.append(el("tr",{class:f.anticipo?"fila-ant39":"fila-"+e[1]+"39"}, el("td",{text:fdd39(f.fecha)||"—"}), el("td",{text:f.factura}),
+      el("td",{class:"n",text:f.lleva==null?"":money(f.lleva)}), el("td",{class:"n",text:money(f.aPagar)}), el("td",{class:"n",text:money(f.pagos)}),
+      el("td",{class:"n b",text:money(f.falta)}), el("td",{text:e[0]}))); });
+  return el("div",{class:"tablewrap"}, el("table",{class:"compact estado39"}, el("thead",{}, el("tr",{}, ...["Fecha","Factura","Se llevó",c.sena?"50 % a abonar":"A abonar","Pagos recibidos","Saldo pendiente","Estado"].map((h,i)=>el("th",{class:i>=2&&i<=5?"n":null,text:h})))), tb));
+}
+async function bajarPlan39(btn, fmt, cuentas, general){
+  spinBtn(btn, fmt==="xlsx" ? "Armando el Excel…" : "Armando el PDF…");
+  try{ await (fmt==="xlsx" ? xlsxPlan39 : pdfPlan39)(PLANGC39, cuentas, general); }catch(e){ toast(msgErr(e)); }
+  unspin(btn);
+}
+const COL39 = { azul:"FF1F4E79", azulF:"FFDDEBF7", ok:"FFE2F5E9", par:"FFFFF2CC", pen:"FFFDE2E2", gris:"FFEDEDED", txt:"FF5F5F68" };
+async function xlsxPlan39(R, cuentas, general){
+  await loadLibs("xlsx");
+  const wb = new ExcelJS.Workbook(); wb.creator = "Hey Blackk"; wb.created = new Date();
+  const pie = `Datos leídos el ${new Date(R.leida).toLocaleString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})} · Solo temporada SS27 (desde ${fdd39(R.desde)}) · Fuentes: Control ingreso (pedidos), cuenta corriente de mayoristas y Contabilium (facturas y recibos).`;
+  const $f = '"$" #,##0', borde = {top:{style:"thin",color:{argb:"FFD0D0D8"}},bottom:{style:"thin",color:{argb:"FFD0D0D8"}},left:{style:"thin",color:{argb:"FFD0D0D8"}},right:{style:"thin",color:{argb:"FFD0D0D8"}}};
+  const titulo = (ws, txt, n) => { ws.mergeCells(1,1,1,n); const c = ws.getCell(1,1); c.value = txt; c.font = {bold:true,size:16,color:{argb:"FFFFFFFF"}}; c.fill = fill(COL39.azul); c.alignment = {vertical:"middle"}; ws.getRow(1).height = 30;
+    ws.mergeCells(2,1,2,n); const d = ws.getCell(2,1); d.value = pie; d.font = {italic:true,size:9,color:{argb:COL39.txt}}; d.alignment = {wrapText:true,vertical:"top"}; ws.getRow(2).height = 28; };
+  const cab = (ws, r, cols) => { const row = ws.getRow(r); row.values = cols; row.height = 30; row.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill=fill(COL39.azul); c.alignment={horizontal:"center",vertical:"middle",wrapText:true}; c.border=borde; }); };
+  const L = n => String.fromCharCode(64+n);
+  if (general){
+    const ws = wb.addWorksheet("Resumen", {views:[{state:"frozen",ySplit:4}], pageSetup:{orientation:"landscape",paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0}});
+    titulo(ws, "GRANDES CUENTAS SS27 · Resumen general", 9); cab(ws, 4, COLS_RES39);
+    cuentas.forEach((c,i)=>{ const r = ws.getRow(5+i); r.values = filaRes39(c);
+      r.eachCell({includeEmpty:true},(x,j)=>{ if (j>9) return; x.border = borde; if (j>=2&&j<=8){ x.numFmt = $f; if (x.value==null) x.value = "-", x.alignment={horizontal:"right"}; } });
+      r.getCell(1).font = {bold:true}; r.getCell(7).font = {bold:true, color:{argb: c.faltaAbonar ? "FFC00000" : "FF1E7B34"}};
+      const u = r.getCell(9); u.fill = fill(/^Pendiente/.test(u.value) ? COL39.pen : /^Pago parcial/.test(u.value) ? COL39.par : COL39.ok); });
+    const tr = ws.getRow(5+cuentas.length); tr.getCell(1).value = "TOTAL";
+    for (let j=2;j<=8;j++){ const res = cuentas.reduce((a,c)=>a+(Number(filaRes39(c)[j-1])||0),0); tr.getCell(j).value = {formula:`SUM(${L(j)}5:${L(j)}${4+cuentas.length})`, result:res}; tr.getCell(j).numFmt = $f; }
+    for (let j=1;j<=9;j++){ const x = tr.getCell(j); x.font = {bold:true}; x.fill = fill(COL39.azulF); x.border = borde; }
+    let r = 7+cuentas.length; const av = [].concat(...cuentas.map(c=>(c.avisos||[]).map(a=>[c.granCuenta,a])));
+    if (av.length){ ws.mergeCells(r,1,r,9); const h = ws.getCell(r,1); h.value = "AVISOS PARA REVISAR"; h.font = {bold:true,color:{argb:"FFFFFFFF"}}; h.fill = fill(COL39.azul); r++;
+      av.forEach(([k,a])=>{ ws.getCell(r,1).value = k; ws.getCell(r,1).font = {bold:true}; ws.mergeCells(r,2,r,9); const x = ws.getCell(r,2); x.value = a; x.alignment = {wrapText:true,vertical:"top"}; x.fill = fill(/Sin pagos|No hay pagos|no completó/i.test(a) ? COL39.pen : COL39.par); ws.getRow(r).height = Math.max(18, Math.ceil(a.length/110)*15); r++; }); r++; }
+    ws.mergeCells(r,1,r,9); ws.getCell(r,1).value = "Regla: Rosario, La Plata y Uruguay abonan un anticipo del 50 % del pedido inicial y el 50 % de cada entrega facturada (artículos SS27). Córdoba no tiene anticipo: abona lo que se lleva, a medida que se le entrega. «Debe hoy» = lo que ya tendría que haber abonado según esa regla menos lo abonado.";
+    ws.getCell(r,1).alignment = {wrapText:true}; ws.getCell(r,1).font = {italic:true,size:9,color:{argb:COL39.txt}}; ws.getRow(r).height = 30; r += 2;
+    [["Pagada / al día",COL39.ok],["Pago parcial",COL39.par],["Pendiente",COL39.pen],["Pedido y anticipo",COL39.azulF]].forEach(([t,c])=>{ ws.getCell(r,1).value = t; ws.getCell(r,1).fill = fill(c); ws.getCell(r,1).border = borde; r++; });
+    [20,16,18,17,17,16,16,16,30].forEach((w,i)=>ws.getColumn(i+1).width = w);
+  }
+  cuentas.forEach(c=>{
+    const ws = wb.addWorksheet(String(c.granCuenta).replace(/[\\\/\?\*\[\]:]/g," ").slice(0,31), {pageSetup:{orientation:"landscape",paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0}});
+    titulo(ws, `${String(c.granCuenta).toUpperCase()} · Estado de cuenta SS27`, 7);
+    const tiles = [["Pedido inicial",c.pedido,COL39.azulF],["Entregado (SS27)",c.seLlevo,COL39.gris],["Abonado total",c.abono,COL39.ok],["Debe hoy",c.faltaAbonar,c.faltaAbonar?COL39.pen:COL39.ok],["Falta entregar",c.faltaEnviar,COL39.gris],["Queda por pagar del pedido",c.saldoPedido,COL39.azulF]];
+    tiles.forEach(([t,v,col],i)=>{ const a = ws.getCell(4,i+1), b = ws.getCell(5,i+1); a.value = t; a.font = {bold:true,size:9,color:{argb:COL39.txt}}; b.value = v; b.numFmt = $f; b.font = {bold:true,size:13};
+      [a,b].forEach(x=>{ x.fill = fill(col); x.border = borde; x.alignment = {horizontal:"center",vertical:"middle",wrapText:true}; }); });
+    ws.getRow(5).height = 24; let r = 7;
+    if (c.ultima && c.ultima.sinPago){ ws.mergeCells(r,1,r,7); const x = ws.getCell(r,1); x.value = `⚠ Sin pagos desde la última factura (${c.ultima.factura}, ${fdd39(c.ultima.fecha)}): le falta abonar $ ${Math.round(c.ultima.falta).toLocaleString("es-AR")}.`; x.font = {bold:true,color:{argb:"FFC00000"}}; x.fill = fill(COL39.pen); r += 2; }
+    cab(ws, r, ["Fecha","Factura","Importe de lo que se llevó",c.sena?"50 % a abonar":"A abonar (100 %)","Pagos recibidos","Saldo pendiente","Estado"]); const r0 = ++r;
+    filasPlan39(c).forEach(f=>{ const e = EST39[f.estado]||EST39["sin pago"], row = ws.getRow(r); row.values = [f.anticipo ? "Pedido" : fdd39(f.fecha), f.factura, f.lleva==null ? c.pedido : f.lleva, f.aPagar, f.pagos, f.falta, e[0]];
+      for (let j=1;j<=7;j++){ const x = row.getCell(j); x.border = borde; x.fill = fill(f.anticipo ? COL39.azulF : COL39[e[1]]); if (j>=3&&j<=6) x.numFmt = $f; }
+      if (f.anticipo) row.getCell(2).value = "Anticipo 50 % (sobre el pedido inicial)"; row.getCell(6).font = {bold:true}; r++; });
+    const tr = ws.getRow(r); tr.getCell(1).value = "TOTAL";
+    [4,5,6].forEach(j=>{ const res = filasPlan39(c).reduce((a,f)=>a+[0,0,0,f.aPagar,f.pagos,f.falta][j-1],0); tr.getCell(j).value = {formula:`SUM(${L(j)}${r0}:${L(j)}${r-1})`, result:res}; tr.getCell(j).numFmt = $f; });
+    for (let j=1;j<=7;j++){ const x = tr.getCell(j); x.font = {bold:true}; x.fill = fill(COL39.azulF); x.border = borde; } r += 2;
+    const pagos = (c.movimientos||[]).filter(m=>m.tipo==="pago");
+    cab(ws, r, ["Fecha","Pago","Importe","Queda por pagar del pedido"]); r++;
+    if (!pagos.length){ ws.getCell(r,1).value = "Sin pagos registrados."; r++; }
+    pagos.forEach(m=>{ const row = ws.getRow(r); row.values = [fdd39(m.fecha), m.detalle, m.monto, m.queda]; [3,4].forEach(j=>row.getCell(j).numFmt = $f); for (let j=1;j<=4;j++){ row.getCell(j).border = borde; row.getCell(j).fill = fill(COL39.ok); } r++; });
+    r++; [c.regla].concat(c.avisos||[]).forEach(t=>{ ws.mergeCells(r,1,r,7); const x = ws.getCell(r,1); x.value = t; x.alignment = {wrapText:true}; x.font = {italic:true,size:9,color:{argb:COL39.txt}}; ws.getRow(r).height = Math.max(16, Math.ceil(t.length/120)*14); r++; });
+    [14,40,22,18,18,18,16].forEach((w,i)=>ws.getColumn(i+1).width = w);
+  });
+  const buf = await wb.xlsx.writeBuffer(), nom = general ? "Grandes_cuentas_SS27" : "Estado_de_cuenta_SS27_" + String(cuentas[0].granCuenta).replace(/\W+/g,"_");
+  guardar(`${nom}_${sello37()}.xlsx`, new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+}
+async function pdfPlan39(R, cuentas, general){
+  await loadLibs("pdf");
+  const { jsPDF } = window.jspdf, doc = new jsPDF({orientation:"landscape", unit:"pt", format:"a4"});
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 28;
+  const pl = v => v==null ? "–" : "$ " + Math.round(v).toLocaleString("es-AR");
+  const AZ = [31,78,121], CF = { ok:[226,245,233], par:[255,242,204], pen:[253,226,226], ant:[221,235,247] };
+  const pie = `Datos leídos el ${new Date(R.leida).toLocaleString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})} · Solo temporada SS27 · Fuentes: Control ingreso, cuenta corriente de mayoristas y Contabilium.`;
+  const cabeza = t => { doc.setFillColor(...AZ); doc.rect(M, 22, W-2*M, 26, "F"); doc.setFont("helvetica","bold"); doc.setFontSize(14); doc.setTextColor(255); doc.text(t, M+8, 40);
+    doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(95,95,104); doc.text(pie, M, 62, {maxWidth:W-2*M}); doc.setTextColor(0); };
+  const base = { theme:"grid", margin:{left:M,right:M,bottom:34}, styles:{fontSize:8.5,cellPadding:3.2,lineColor:[208,208,216],lineWidth:0.4,textColor:[20,20,22],valign:"middle"},
+    headStyles:{fillColor:AZ,textColor:255,fontStyle:"bold",halign:"center"}, footStyles:{fillColor:CF.ant,textColor:[20,20,22],fontStyle:"bold"} };
+  let primera = true; const nueva = () => { if (!primera) doc.addPage(); primera = false; };
+  if (general){
+    nueva(); cabeza("GRANDES CUENTAS SS27 · Resumen general");
+    const T = [1,2,3,4,5,6,7].map(j=>cuentas.reduce((a,c)=>a+(Number(filaRes39(c)[j])||0),0));
+    doc.autoTable(Object.assign({}, base, { startY:74, head:[COLS_RES39], body:cuentas.map(c=>filaRes39(c).map((v,j)=>j>0&&j<8?pl(v):v)), foot:[["TOTAL",...T.map(pl),""]],
+      columnStyles:Object.fromEntries([1,2,3,4,5,6,7].map(j=>[j,{halign:"right"}])),
+      didParseCell:d=>{ if (d.section==="foot" && d.column.index>0) d.cell.styles.halign = "right";
+        if (d.section==="body"){ const c = cuentas[d.row.index]; if (d.column.index===0) d.cell.styles.fontStyle = "bold";
+          if (d.column.index===6){ d.cell.styles.fontStyle = "bold"; d.cell.styles.textColor = c.faltaAbonar ? [192,0,0] : [30,123,52]; }
+          if (d.column.index===8){ const v = String(d.cell.raw); d.cell.styles.fillColor = /^Pendiente/.test(v) ? CF.pen : /^Pago parcial/.test(v) ? CF.par : CF.ok; } } } }));
+    let y = doc.lastAutoTable.finalY + 16; const av = [].concat(...cuentas.map(c=>(c.avisos||[]).map(a=>[c.granCuenta,a])));
+    if (av.length) doc.autoTable(Object.assign({}, base, { startY:y, head:[["Cliente","Avisos para revisar"]], body:av, columnStyles:{0:{fontStyle:"bold",cellWidth:90}},
+      didParseCell:d=>{ if (d.section==="body" && d.column.index===1) d.cell.styles.fillColor = /Sin pagos|No hay pagos|no completó/i.test(d.cell.raw) ? CF.pen : CF.par; } }));
+    y = (av.length ? doc.lastAutoTable.finalY : y) + 14; if (y > H-60){ doc.addPage(); y = 40; }
+    doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(95,95,104);
+    doc.text(doc.splitTextToSize("Regla: Rosario, La Plata y Uruguay abonan un anticipo del 50 % del pedido inicial y el 50 % de cada entrega facturada (artículos SS27). Córdoba no tiene anticipo: abona lo que se lleva, a medida que se le entrega. «Debe hoy» = lo que ya tendría que haber abonado según esa regla menos lo abonado.", W-2*M), M, y); doc.setTextColor(0);
+  }
+  cuentas.forEach(c=>{
+    nueva(); cabeza(`${String(c.granCuenta).toUpperCase()} · Estado de cuenta SS27`);
+    const tiles = [["Pedido inicial",c.pedido,CF.ant],["Entregado (SS27)",c.seLlevo,[237,237,237]],["Abonado total",c.abono,CF.ok],["Debe hoy",c.faltaAbonar,c.faltaAbonar?CF.pen:CF.ok],["Falta entregar",c.faltaEnviar,[237,237,237]],["Queda por pagar",c.saldoPedido,CF.ant]];
+    const tw = (W-2*M-5*6)/6; tiles.forEach(([t,v,col],i)=>{ const x = M+i*(tw+6); doc.setFillColor(...col); doc.roundedRect(x, 72, tw, 38, 4, 4, "F");
+      doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(95,95,104); doc.text(t, x+6, 84); doc.setFont("helvetica","bold"); doc.setFontSize(11.5); doc.setTextColor(20,20,22); doc.text(pl(v), x+6, 102); });
+    let y = 122;
+    if (c.ultima && c.ultima.sinPago){ doc.setFillColor(...CF.pen); doc.rect(M, y, W-2*M, 18, "F"); doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(192,0,0);
+      doc.text(`Sin pagos desde la última factura (${c.ultima.factura}, ${fdd39(c.ultima.fecha)}): le falta abonar ${pl(c.ultima.falta)}.`, M+6, y+12.5); doc.setTextColor(0); y += 26; }
+    const F = filasPlan39(c);
+    doc.autoTable(Object.assign({}, base, { startY:y, head:[["Fecha","Factura","Importe de lo que se llevó",c.sena?"50 % a abonar":"A abonar (100 %)","Pagos recibidos","Saldo pendiente","Estado"]],
+      body:F.map(f=>[f.anticipo?"Pedido":fdd39(f.fecha), f.anticipo?"Anticipo 50 % (sobre el pedido inicial)":f.factura, pl(f.lleva==null?c.pedido:f.lleva), pl(f.aPagar), pl(f.pagos), pl(f.falta), (EST39[f.estado]||EST39["sin pago"])[0]]),
+      foot:[["TOTAL","","",pl(F.reduce((a,f)=>a+f.aPagar,0)),pl(F.reduce((a,f)=>a+f.pagos,0)),pl(F.reduce((a,f)=>a+f.falta,0)),""]],
+      columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"},5:{halign:"right",fontStyle:"bold"}},
+      didParseCell:d=>{ if (d.section==="foot" && d.column.index>=2) d.cell.styles.halign = "right"; if (d.section!=="body") return; const f = F[d.row.index]; d.cell.styles.fillColor = f.anticipo ? CF.ant : CF[(EST39[f.estado]||EST39["sin pago"])[1]]; } }));
+    const P = (c.movimientos||[]).filter(m=>m.tipo==="pago");
+    doc.autoTable(Object.assign({}, base, { startY:doc.lastAutoTable.finalY+14, head:[["Fecha","Pago","Importe","Queda por pagar del pedido"]],
+      body:P.length ? P.map(m=>[fdd39(m.fecha), String(m.detalle).replace(/·/g,"-"), pl(m.monto), pl(m.queda)]) : [[{content:"Sin pagos registrados.",colSpan:4}]], columnStyles:{2:{halign:"right"},3:{halign:"right"}},
+      didParseCell:d=>{ if (d.section==="body" && P.length) d.cell.styles.fillColor = CF.ok; } }));
+    let yy = doc.lastAutoTable.finalY + 12; doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(95,95,104);
+    [c.regla].concat(c.avisos||[]).forEach(t=>{ const ln = doc.splitTextToSize(t, W-2*M); if (yy + ln.length*10 > H-30){ doc.addPage(); yy = 40; } doc.text(ln, M, yy); yy += ln.length*10 + 3; }); doc.setTextColor(0);
+  });
+  const n = doc.getNumberOfPages(); for (let i=1;i<=n;i++){ doc.setPage(i); doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(120); doc.text("Hey Blackk - Grandes cuentas SS27", M, H-16); doc.text(`Página ${i} de ${n}`, W-M, H-16, {align:"right"}); }
+  const nom = general ? "Grandes_cuentas_SS27" : "Estado_de_cuenta_SS27_" + String(cuentas[0].granCuenta).replace(/\W+/g,"_");
+  guardar(`${nom}_${sello37()}.pdf`, doc.output("blob"));
 }
 /* ===================== 3.5 · Días flojos, fechas especiales, Panorama RRHH y borrado de fichajes =====================
    Regla del resumen: solo se muestra lo que tiene datos. Si una sección queda vacía, no aparece (ni título ni aviso).
@@ -3917,7 +4057,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zf";
+const APP_V = "3.9zg";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
