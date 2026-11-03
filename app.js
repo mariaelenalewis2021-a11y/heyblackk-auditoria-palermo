@@ -42,7 +42,7 @@ const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
 const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["planPagosGrandes","detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
+const SENSIBLES = new Set(["detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -2302,10 +2302,11 @@ function cardPlanPagos39(){
   if (!puedePlanGC39()) return null;
   const box = el("div",{class:"stack"}), card = el("div",{class:"card"}, el("h2",{text:"🤝 Grandes cuentas: cuánto abonaron y cuánto falta"}),
     el("p",{class:"lead",text:"Del pedido inicial (lo que se llevaron + lo que falta enviar): seña del 50 % y, por cada factura con artículos SS27, el 50 % de lo que se llevan. Córdoba abona lo que se le entrega, a medida que se entrega."}), box);
-  const b = el("button",{class:"btn primary",type:"button",text:"🔒 Ver (con tu PIN)"});
+  // 3.9zg · se abre solo, sin PIN (para que Thomas entre directo)
+  const b = el("button",{class:"btn primary",type:"button",text:"Ver"});
   const cargar = async (f, btn) => { spinBtn(btn, f ? "Leyendo Contabilium…" : "Buscando…"); try{ PLANGC39 = await apiS("planPagosGrandes", !!f); pintarPlan39(box, cargar); }catch(e){ toast(msgErr(e)); unspin(btn); } };
   b.onclick = ()=>cargar(false, b);
-  if (PLANGC39) pintarPlan39(box, cargar); else box.append(b);
+  if (PLANGC39) pintarPlan39(box, cargar); else { box.append(b); cargar(false, b); }
   return card;
 }
 const EST_FAC39 = { "pagada":"✅ Pagada", "parcial":"🟡 Pago parcial", "sin pago":"🔴 Sin pago" };
@@ -4057,7 +4058,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zg";
+const APP_V = "3.9zh";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
