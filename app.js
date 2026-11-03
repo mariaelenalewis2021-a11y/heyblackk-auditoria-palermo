@@ -3279,12 +3279,7 @@ function tabGrandes(R){
         el("p",{class:"hint",text:"Pidió = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre las cobranzas de Contabilium (también las «a cuenta») y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Hoy = lo abonado contra lo ya despachado (más lo que se debía de antes)."}),
         el("p",{class:"hint",text:`Contabilium leído ${G.leida.contabilium?fechaHora(G.leida.contabilium):"–"} · planilla modificada ${G.leida.cuentaCorriente?fechaHora(G.leida.cuentaCorriente):"–"}.`}))));
   }
-  if (R.cobranzas){ const Kc = R.cobranzas;
-    out.push(el("div",{class:"card"}, el("h3",{text:"💰 Lo que nos deben (todos los clientes)"}),
-      el("div",{class:"hkpis"}, hk("Pendiente", moneyK(Kc.total), `${Kc.clientes} clientes`), hk("Vencido", moneyK(Kc.vencido), "", Kc.vencido?"neg":""), hk("Por vencer", moneyK(Kc.total-Kc.vencido))),
-      el("ol",{class:"top5"}, Kc.top.slice(0,5).map(c=>el("li",{}, el("b",{text:c.cliente+(c.franquicia?" ("+c.franquicia+")":"")}), ` · ${moneyK(c.saldo)}`, c.vencido?el("span",{class:"pill bad",text:`vencido ${moneyK(c.vencido)}`}):null))),
-      el("p",{class:"hint",text:"Saldo de los comprobantes del último año en Contabilium. La lista completa está en «Descargar Excel» (pestaña Control)."})));
-  }
+  // 3.9zi · «Lo que nos deben (todos los clientes)» se sacó: repetía lo de Cobranzas a validar y la descarga de Control.
   if (R.anticipos && R.anticipos.clientes.length){ const A = R.anticipos;
     out.push(el("details",{class:"card mas39"}, el("summary",{text:`💳 Anticipos cargados en el Templete · ${moneyK(A.total)}`}),
       el("div",{class:"ant38-lista"}, A.clientes.map(c=>el("div",{class:"ant38-cli"},
@@ -4058,7 +4053,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zh";
+const APP_V = "3.9zi";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
