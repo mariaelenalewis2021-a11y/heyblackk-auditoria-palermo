@@ -3304,6 +3304,8 @@ function pintarCob39(cont, recargar){
     kpi("Para gestionar", moneyK(T.sin_cobro.monto), `${T.sin_cobro.n} ${T.sin_cobro.n===1?"factura":"facturas"} sin cobro`, T.sin_cobro.n?"bad":""),
     kpi("Ya cargadas", String(T.marcada.n), T.marcada.n ? "esperando que Contabilium las lea en cero" : "todavía ninguna")));
   const loc = {}; R.lista.forEach(x=>{ const z = loc[x.local] = loc[x.local] || { n:0, saldo:0, v60:0 }; z.n++; z.saldo+=x.saldo; if ((x.dias||0)>60 && x.estado!=="marcada") z.v60+=x.saldo; });
+  const nMix = R.lista.filter(x=>x.mixto).length;
+  if (nMix) cont.append(el("p",{class:"notice ok",text:`🔀 ${nMix} ${nMix===1?"factura cobrada":"facturas cobradas"} en dos modalidades: una parte ya está en un recibo de Contabilium y falta cargar el saldo con el otro medio.`}));
   const pm = {}; let pmSin = 0; R.lista.filter(x=>x.estado==="listo").forEach(x=>{ if ((x.medios||[]).length){ x.medios.forEach(m=>{ pm[m.medio]=(pm[m.medio]||0)+m.monto; }); pmSin += x.medioSinDato||0; } else pmSin += x.saldo; });
   if (Object.keys(pm).length) cont.append(el("div",{class:"card"}, el("h3",{text:"💲 Listas para cargar, por medio de pago"}),
     el("div",{class:"medios39"}, Object.keys(pm).sort((a,b)=>pm[b]-pm[a]).map(k=>el("span",{class:"mchip39"}, `${ICO_MEDIO39[k]||"💲"} ${k} `, el("b",{text:moneyK(pm[k])}))),
@@ -3331,9 +3333,9 @@ function pintarCob39(cont, recargar){
     el("summary",{}, el("b",{text:`✔️ Confirmadas por Contabilium · ${R.confirmadas.length}`}), " · últimos 30 días"),
     el("ul",{class:"lista39"}, R.confirmadas.slice(0,100).map(c=>el("li",{}, el("span",{class:"mono",text:c.cot}), ` · la marcaste el ${fCob39(String(c.ts).slice(0,10))}`, c.confirmada?` · Contabilium la mostró en cero el ${fCob39(String(c.confirmada).slice(0,10))}`:"")))));
   // Descargas
-  const col = ["Estado","Local","Factura","Cliente","Fecha","Días","Total","Saldo","Cobro: fecha","Medio de pago","Cobro: importe","Fila Templete","Qué hacer"];
+  const col = ["Estado","Local","Factura","Cliente","Fecha","Días","Total","Saldo","Cobro: fecha","Medio de pago","Cobro: importe","Fila Templete","En Contabilium","Qué hacer"];
   const est = Object.fromEntries(COB_GRUPOS39.map(g=>[g[0],g[1].replace(/^\S+\s/,"")]));
-  const filas = L => L.map(x=>[est[x.estado], x.local, x.cot, x.cliente, fCob39(x.fecha), x.dias, x.total, x.saldo, x.cobro?fCob39(x.cobro.fecha):"", txtMedios39(x), x.cobro?x.cobro.monto:"", x.cobro?x.cobro.fila:"", x.motivo]);
+  const filas = L => L.map(x=>[est[x.estado], x.local, x.cot, x.cliente, fCob39(x.fecha), x.dias, x.total, x.saldo, x.cobro?fCob39(x.cobro.fecha):"", txtMedios39(x), x.cobro?x.cobro.monto:"", x.cobro?x.cobro.fila:"", [...(x.mixto?[`Dos modalidades: ${x.mixto.map(m=>m.medio+" "+m.monto+(m.estado==="falta"?" (falta cargar)":" (ya cargado)")).join(" + ")}`]:[]), x.reciboSuelto?`Recibo sin aplicar ${x.reciboSuelto.numero} por ${x.reciboSuelto.libre}: ${x.reciboSuelto.medios.map(m=>m.medio+" "+m.monto).join(" + ")}`:""].filter(Boolean).join(" · "), x.motivo]);
   const D = { titulo:"Cobranzas a validar · Palermo 0001 y Janette 0007", archivo:`Cobranzas_a_validar_${new Date().toISOString().slice(0,10)}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"",
     hojas: COB_GRUPOS39.map(([k,t])=>({ nombre:t.replace(/^\S+\s/,"").slice(0,31), columnas:col, dinero:[6,7,10], totales:[7], filas:filas(R.lista.filter(x=>x.estado===k)) })).filter(h=>h.filas.length) };
   const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
@@ -3370,7 +3372,11 @@ function filaCob39(x, repintar){
     el("div",{class:"cobh39"}, el("span",{class:"mono",text:x.cot}), el("b",{class:"cobm39",text:money(x.saldo)})),
     el("div",{class:"cobc39"}, el("strong",{text:x.cliente||"—"}), ` · ${fCob39(x.fecha)} · `, el("span",{class:(x.dias||0)>60?"bad-t":null,text:`${x.dias==null?"—":x.dias} días`}), x.total!==x.saldo?` · factura de ${money(x.total)}`:""),
     c ? el("div",{class:"hint"}, `Templete: ${fCob39(c.fecha)} · ${money(c.monto)} · fila ${c.fila}`) : null,
-    medios39(x),
+    x.mixto ? el("div",{class:"recibo39"}, el("b",{text:`🔀 Cobrada en ${x.mixto.length} modalidades`}),
+      el("div",{class:"medios39"}, x.mixto.map(m=>el("span",{class:"mchip39"+(m.estado==="falta"?" prob":"")}, `${ICO_MEDIO39[m.medio]||"💲"} ${m.medio} `, el("b",{text:money(m.monto)}), m.estado==="falta"?" · falta cargar":" · ya en Contabilium"))),
+      el("small",{class:"hint",text:(x.ctbPagos||[]).map(r=>`Recibo ${r.numero} del ${fCob39(r.fecha)}`).join(" · ")})) : medios39(x),
+    x.reciboSuelto ? el("div",{class:"recibo39 suelto"}, el("b",{text:`⚠️ Recibo sin aplicar en Contabilium: ${money(x.reciboSuelto.libre)}`}), ` · n.º ${x.reciboSuelto.numero} del ${fCob39(x.reciboSuelto.fecha)}`,
+      x.reciboSuelto.medios.length ? el("div",{class:"medios39"}, x.reciboSuelto.medios.map(m=>el("span",{class:"mchip39"}, `${ICO_MEDIO39[m.medio]||"💲"} ${m.medio} `, el("b",{text:money(m.monto)})))) : null) : null,
     el("p",{class:"cobq39",text:x.motivo}), bt);
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
@@ -3852,7 +3858,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zc";
+const APP_V = "3.9zd";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
