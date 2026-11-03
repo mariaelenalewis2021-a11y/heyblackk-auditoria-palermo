@@ -546,6 +546,7 @@ function renderHome(){
   const home = el("div",{class:"home"});
   home.append(el("header",{class:"saludo"}, el("h1",{tabindex:"-1",text: nombre ? `${saludoHora()}, ${nombre}` : saludoHora()}), el("p",{class:"fecha",text:fechaLarga()})));
   if (staff) home.append(filaSesion());
+  if (staff) home.append(el("div",{class:"cumple-slot"}, slotCumple(R)));   // 3.9zj
   if (staff && S.perms.length) home.append(tiraHoy(R));
   /* 3.3: banner de feriados (próximos 30 días en días de apertura + pendientes de confirmar) arriba del tablero, solo para quien ve cierre/KPIs. */
   if (staff && (tiene("cierre") || tiene("kpi"))) home.append(el("div",{class:"banner-slot"}, bannerFeriados(R && R.feriados, {confirmar: tiene("cierre")})));
@@ -569,7 +570,13 @@ function renderHome(){
     el("span",{class:"tx"}, el("b",{text:"Jefes y Administración"}), el("span",{text:"Panel de gestión y control"})),
     el("span",{class:"fl"}, icono("flecha",20))));
   main.append(home);
-  if (staff && S.perms.length) cargarResumen();
+  if (staff) cargarResumen();   // 3.9zj: también sin módulos, para los cumpleaños
+}
+/* 3.9zj · Cumpleaños en el panel (llega con el resumen del día). */
+function slotCumple(R){
+  if (!R || !R.cumple) return null;
+  return bloqueCumple(R.cumple, { llamar:(fn,...a)=>api(fn, S.token, ...a), nombre:S.user.nombre,
+    alCambiar:C=>{ if (S.resumen) S.resumen.cumple = C; const sl = document.querySelector(".home .cumple-slot"); if (sl){ sl.textContent=""; const b = slotCumple(S.resumen); if (b) sl.append(b); } } });
 }
 /* Fila de sesión del panel: quién está adentro, qué rol tiene, cuándo se cierra sola y el botón para cerrarla. */
 function filaSesion(){
@@ -621,6 +628,7 @@ function bannerFeriados(F, {confirmar=false, alConfirmar=null}={}){
 function aplicarResumen(R){
   if (S.view!=="home") return;
   const hoy = document.querySelector(".home .hoy"); if (hoy) hoy.replaceWith(tiraHoy(R));
+  const cs = document.querySelector(".home .cumple-slot"); if (cs){ const fo = cs.querySelector("form textarea"); if (!fo){ cs.textContent=""; const b = slotCumple(R); if (b) cs.append(b); } }
   const bs = document.querySelector(".home .badge-slot"); if (bs){ bs.textContent=""; const b=badgePendientes(R); if (b) bs.append(b); }
   const slot = document.querySelector(".home .banner-slot"); if (slot){ slot.textContent=""; slot.append(bannerFeriados(R && R.feriados, {confirmar: tiene("cierre")})); }
   if (R && R.vacaciones && R.vacaciones.pendientes && !aplicarResumen._avisado){ aplicarResumen._avisado=true; if (tiene("vacaciones")) toast(`📬 ${plural(R.vacaciones.pendientes, "1 solicitud de vacaciones pendiente", "% solicitudes de vacaciones pendientes")}`); }
@@ -849,6 +857,9 @@ async function jornada(body, j){
   body.textContent="";
   const card = el("div",{class:"card fichar"});
   card.append(el("h2",{text:`Hola, ${j.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:`Hoy, ${fmtF(j.fecha)} · Sucursal ${j.sucursal.nombre}`}));
+  // 3.9zj · cumpleaños: el cumpleañero ve su fiesta arriba; los cumples de la semana y el pedido de la fecha, abajo
+  const cumpleOpts = { llamar:(fn,...a)=>api(fn, F.token, ...a), alCambiar:C=>{ F.j.cumple = C; jornada(body, F.j); }, vigilar:()=>vigilarF(body), nombre:j.nombre };
+  if (j.cumple && j.cumple.mios) card.append(fiestaCumple(j.cumple.mios, j.nombre));
   // Estado actual, grande y claro
   card.append(el("div",{class:"estado-actual "+(j.estado.tipo==="entrada"?"adentro":j.estado.tipo==="salida"?"afuera":"")}, el("span",{class:"k",text:"Estado actual"}), el("b",{text:j.estado.texto})));
   if (j.pares && j.pares.length) card.append(el("div",{class:"pares"}, el("span",{class:"k",text:"Hoy"}),
@@ -880,6 +891,7 @@ async function jornada(body, j){
     if (p==="denied" || amb.webview || amb.iframe) bloqueAyudaGeo({error: amb.webview?"no_soportado":"sin_permiso", amb}, true, g=>{ if (g.error) return toast("La ubicación sigue sin responder: probá de nuevo."); toast("✅ Ubicación habilitada. Ya podés fichar."); jornada(body, F.j); }).then(b=>{ if (card.isConnected) card.insertBefore(b, card.querySelector(".fbtns")); });
     else if (p==="prompt" && !lsGet("hb36_geo_ok")) card.insertBefore(el("div",{class:"notice",text:"📍 La primera vez el teléfono te va a preguntar por la ubicación: elegí «Permitir» (o «Mientras se usa la app»). Si querés, probala antes con «Probar mi ubicación»."}), card.querySelector(".fbtns"));
   });
+  if (j.cumple) card.append(bloqueCumple(Object.assign({}, j.cumple, {mios:null}), cumpleOpts));
   card.append(el("div",{class:"row"},
     el("button",{class:"btn",type:"button",text:"⏱️ Mis horas",onclick:()=>misHoras(body)}),
     el("button",{class:"btn",type:"button",text:"🧾 Mis registros y correcciones",onclick:()=>misRegistros(body)}),
@@ -3848,6 +3860,97 @@ async function vVacaciones(main){
     el("p",{class:"hint",text:"Quién decidió, cuándo, qué y por qué. No se puede editar ni borrar; cada decisión queda además en el Historial protegido de la app."}),
     el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Persona","Fechas","Días","Estado","Decidió","Cuándo","Motivo / comentario"].map(x=>el("th",{text:x})))), th))));
 }
+/* ===================== 3.9zj · Cumpleaños del equipo =====================
+   Cada uno carga su cumple (solo día y mes: no se guarda el año ni se muestra la edad). Los compañeros ven quién cumple en la semana
+   y le dejan un saludo; el cumpleañero los ve recién el día de su cumple, al entrar a la app o al fichar. */
+const MESES_C = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const DIAS_C = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+const IDEAS_C = ["¡Feliz cumple! Que la pases bárbaro 🎉","¡Que se vengan muchas tortas! 🎂","Gracias por la buena onda de todos los días. ¡Feliz día! 💛",
+  "¡Hoy no se ficha tristeza! Feliz cumple 🥳","¡Que este año venga con todo lo que te propongas! ✨","¡Feliz cumple! Hoy invitás vos las facturas 🥐😄",
+  "Que tengas un día tan genial como vos 🌟","¡Salud por un año más de risas juntos! 🥂"];
+const fCumple = f => { const d = new Date(f+"T12:00:00"); return `${DIAS_C[d.getDay()]} ${d.getDate()} de ${MESES_C[d.getMonth()]}`; };
+const cuandoCumple = c => c.dias===0 ? "¡Hoy es su cumple!" : c.dias===1 ? "Mañana" : c.dias===-1 ? "Fue ayer" : c.dias<0 ? `Fue el ${fCumple(c.fecha)}` : `El ${fCumple(c.fecha)} · faltan ${c.dias} días`;
+const NO_PEDIR_C = "hb39zj_cumple_no";
+
+/** Bloque de cumpleaños. llamar(fn, ...args) hace la llamada con la sesión que corresponda (fichada o panel);
+    alCambiar(C) recibe los datos nuevos; vigilar() se llama mientras la persona escribe (la sesión de fichada se cierra sola). */
+function bloqueCumple(C, {llamar, alCambiar, vigilar, nombre}={}){
+  const box = el("div",{class:"cumple39"});
+  if (!C) return box;
+  if (C.mios) box.append(fiestaCumple(C.mios, nombre));
+  if (!C.miCumple){
+    let no = 0; try{ no = Number(localStorage.getItem(NO_PEDIR_C)||0); }catch(e){}
+    if (Date.now() - no > 30*86400000) box.append(pedirCumple(llamar, alCambiar, box));
+  }
+  if ((C.proximos||[]).length){
+    const lista = el("div",{class:"cumple-lista39"});
+    C.proximos.forEach(c=>lista.append(filaCumple(c, llamar, alCambiar, vigilar)));
+    box.append(el("section",{class:"cumple-prox39","aria-label":"Cumpleaños del equipo"},
+      el("h3",{text: C.proximos.some(c=>c.dias===0) ? "🎉 ¡Hoy hay cumple en el equipo!" : "🎂 Cumpleaños de esta semana"}), lista,
+      el("p",{class:"hint",text:"Tu saludo le aparece el día de su cumple, cuando entre a la app. Solo lo ve esa persona."})));
+  }
+  if (C.miCumple){
+    const [m,d] = C.miCumple.split("-").map(Number);
+    const cambiar = el("button",{class:"btn sm ghost",type:"button",text:"Cambiar"});
+    cambiar.onclick = ()=>{ const f = pedirCumple(llamar, alCambiar, box, C.miCumple); cambiar.parentElement.replaceWith(f); };
+    box.append(el("p",{class:"hint cumple-mio39"}, `🎂 Tu cumple: ${d} de ${MESES_C[m-1]}. `, cambiar));
+  }
+  return box;
+}
+/** Tarjeta del cumpleañero: confeti y los saludos que le dejaron. */
+function fiestaCumple(M, nombre){
+  const conf = el("div",{class:"confeti39","aria-hidden":"true"});
+  const cols = ["#ff5d8f","#ffc145","#5ec2ff","#7ee081","#b388ff","#ff8a5b"];
+  for (let i=0;i<36;i++) conf.append(el("i",{style:`left:${Math.random()*100}%;background:${cols[i%cols.length]};animation-delay:${(Math.random()*1.6).toFixed(2)}s;animation-duration:${(2.6+Math.random()*1.8).toFixed(2)}s;transform:rotate(${Math.round(Math.random()*360)}deg)`}));
+  const nom = nombre ? nombre.split(" ")[0] : "";
+  const notas = M.notas||[];
+  return el("section",{class:"fiesta39","aria-label":"Tu cumpleaños"}, conf,
+    el("div",{class:"fiesta-cab39"}, el("span",{class:"torta39","aria-hidden":"true",text:"🎂"}),
+      el("div",{}, el("h2",{text: M.hoy ? `¡Feliz cumple${nom?", "+nom:""}!` : `¡Feliz cumple atrasado${nom?", "+nom:""}!`}),
+        el("p",{text: notas.length ? (notas.length===1 ? "Te dejaron 1 saludo:" : `Te dejaron ${notas.length} saludos:`) : "Todo el equipo de Hey Blackk te desea un día genial. 💛"}))),
+    notas.length ? el("div",{class:"notas39"}, notas.map((n,i)=>el("figure",{class:"nota39",style:`--r:${[-2.5,1.8,-1.2,2.4,-1.8,1.1][i%6]}deg;--c:${["#fff3b0","#ffd6e0","#d4f1ff","#d9f7d6","#eadcff","#ffe2c9"][i%6]}`},
+      el("blockquote",{text:n.texto}), el("figcaption",{text:"— "+n.de})))) : null);
+}
+/** Pedido amable de la fecha (día y mes). */
+function pedirCumple(llamar, alCambiar, box, actual){
+  const [m0,d0] = (actual||"").split("-").map(Number);
+  const dia = el("select",{"aria-label":"Día"}, el("option",{value:"",text:"Día"}), ...Array.from({length:31},(_,i)=>el("option",{value:String(i+1).padStart(2,"0"),text:String(i+1),selected:d0===i+1?"":null})));
+  const mes = el("select",{"aria-label":"Mes"}, el("option",{value:"",text:"Mes"}), ...MESES_C.map((t,i)=>el("option",{value:String(i+1).padStart(2,"0"),text:t,selected:m0===i+1?"":null})));
+  const b = el("button",{class:"btn primary sm",type:"submit",text:"Guardar"});
+  const no = actual ? null : el("button",{class:"btn sm ghost",type:"button",text:"Ahora no"});
+  const f = el("form",{class:"pedir-cumple39",onsubmit:async e=>{ e.preventDefault();
+      if (!dia.value || !mes.value) return toast("Elegí el día y el mes.");
+      spinBtn(b,"Guardando…"); try{ const C = await llamar("miCumple", mes.value+"-"+dia.value); toast("🎂 ¡Listo! Tus compañeros se van a enterar el día de tu cumple."); alCambiar && alCambiar(C); }catch(x){ unspin(b); toast(msgErr(x)); } }},
+    el("b",{text: actual ? "Cambiar tu cumple" : "🎂 ¿Cuándo es tu cumple?"}),
+    actual ? null : el("span",{class:"hint",text:"Solo día y mes (sin el año). Así el equipo te puede saludar ese día."}),
+    el("div",{class:"row"}, dia, mes, b, no));
+  if (no) no.onclick = ()=>{ try{ localStorage.setItem(NO_PEDIR_C, String(Date.now())); }catch(e){} f.remove(); };
+  return f;
+}
+/** Una persona que cumple: cuándo, cuántos saludos tiene y el formulario para dejarle el tuyo. */
+function filaCumple(c, llamar, alCambiar, vigilar){
+  const fila = el("div",{class:"cumple-fila39"+(c.dias===0?" hoy":"")});
+  const btn = el("button",{class:"btn sm"+(c.miSaludo?"":" primary"),type:"button",text: c.miSaludo ? "✏️ Cambiar mi saludo" : "✍️ Dejale un saludo"});
+  fila.append(el("div",{class:"cumple-dato39"}, el("span",{class:"ico39","aria-hidden":"true",text:c.dias===0?"🥳":"🎈"}),
+      el("div",{}, el("b",{text:c.nombre}), el("small",{text:` · ${c.sucursal}`}), el("div",{class:"hint",text:cuandoCumple(c)+(c.saludos?` · ${c.saludos===1?"ya tiene 1 saludo":"ya tiene "+c.saludos+" saludos"}`:"")}))), btn);
+  if (c.miSaludo) fila.append(el("p",{class:"mi-saludo39",text:`Tu saludo: «${c.miSaludo}»`}));
+  btn.onclick = ()=>{
+    if (fila.querySelector("form")) return;
+    const ta = el("textarea",{maxlength:"280",rows:"3",placeholder:`Escribile algo lindo a ${c.nombre.split(" ")[0]}…`,"aria-label":`Saludo para ${c.nombre}`});
+    ta.value = c.miSaludo || "";
+    const cont = el("small",{class:"hint"}), upd = ()=>{ cont.textContent = `${ta.value.length}/280`; vigilar && vigilar(); };
+    ta.oninput = upd; upd();
+    const ideas = IDEAS_C.slice().sort(()=>Math.random()-0.5).slice(0,3);
+    const chips = el("div",{class:"ideas39"}, el("span",{class:"hint",text:"Ideas:"}), ideas.map(t=>el("button",{class:"chip39",type:"button",text:t,onclick:()=>{ ta.value=t; upd(); ta.focus(); }})));
+    const env = el("button",{class:"btn primary sm",type:"submit",text:"Enviar saludo 🎉"});
+    const f = el("form",{class:"form-saludo39",onsubmit:async e=>{ e.preventDefault();
+        if (!ta.value.trim()) return toast("Escribí tu saludo.");
+        spinBtn(env,"Enviando…"); try{ const C = await llamar("dejarSaludo", c.uid, ta.value.trim()); toast(c.dias>0 ? `🎉 ¡Listo! ${c.nombre.split(" ")[0]} lo va a ver el día de su cumple.` : `🎉 ¡Listo! ${c.nombre.split(" ")[0]} ya lo puede ver.`); alCambiar && alCambiar(C); }catch(x){ unspin(env); toast(msgErr(x)); } }},
+      ta, chips, el("div",{class:"row"}, env, cont, el("span",{class:"spacer"}), el("button",{class:"btn sm ghost",type:"button",text:"Cancelar",onclick:()=>f.remove()})));
+    fila.append(f); ta.focus();
+  };
+  return fila;
+}
 /* ===================== Cierre diario ===================== */
 const ALERTA_TXT = {cierre_pendiente:"Cierre pendiente", falta_ingreso:"Ventas sin ingreso registrado", ingresos_sin_cierre:"Ingresos sin cierre", ingreso_duplicado:"Ingreso duplicado", empleado_inactivo:"Ingreso posterior a una baja",
   feriado_confirmar:"Feriado: confirmar si abrió", cierre_en_cero:"Cargado en $ 0 (sin ventas)"};
@@ -4053,7 +4156,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zi";
+const APP_V = "3.9zj";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}

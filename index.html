@@ -620,6 +620,28 @@ body.is-home::after{opacity:.35}
 .warn-t{color:var(--warn,#b7791f);font-weight:700} td.b{font-weight:700} .res39 table{min-width:860px} .res39 th:first-child,.res39 td:first-child{position:sticky;left:0;background:var(--surface);z-index:1}
 .res39 thead th,.res39 thead th:first-child{background:#1f4e79;color:#fff} .res39 td,.res39 th,.estado39 td.n{white-space:nowrap} .res39 tfoot td:first-child{background:color-mix(in srgb,#1f4e79 14%,var(--surface))} .res39 tfoot td{background:color-mix(in srgb,#1f4e79 14%,var(--surface));border-top:2px solid #1f4e79}
 .estado39{min-width:640px} .estado39 tr.fila-ok39 td{background:color-mix(in srgb,#2e9e5b 13%,var(--surface))} .estado39 tr.fila-par39 td{background:color-mix(in srgb,#e0b400 18%,var(--surface))} .estado39 tr.fila-pen39 td{background:color-mix(in srgb,#d64545 14%,var(--surface))} .estado39 tr.fila-ant39 td{background:color-mix(in srgb,#2f6db5 14%,var(--surface))}
+/* 3.9zj · cumpleaños */
+.cumple39{display:grid;gap:12px;margin:10px 0} .cumple-slot:empty{display:none}
+.fiesta39{position:relative;overflow:hidden;border-radius:18px;padding:18px 16px 16px;background:linear-gradient(135deg,#ffe1ec,#fff4c7 55%,#dff3ff);color:#2a1630;box-shadow:0 6px 22px rgba(255,93,143,.22)}
+.fiesta-cab39{display:flex;gap:12px;align-items:center;position:relative;z-index:1} .fiesta-cab39 h2{margin:0;font-size:22px;color:#2a1630} .fiesta-cab39 p{margin:2px 0 0;color:#5a3d55}
+.torta39{font-size:44px;line-height:1;animation:salta39 1.4s ease-in-out 4}
+@keyframes salta39{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-6px) rotate(4deg)}}
+.confeti39{position:absolute;inset:0;pointer-events:none} .confeti39 i{position:absolute;top:-14px;width:8px;height:14px;border-radius:2px;opacity:.9;animation:cae39 3s ease-in forwards}
+@keyframes cae39{to{top:110%;transform:rotate(540deg) translateX(20px);opacity:.7}}
+.notas39{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px;position:relative;z-index:1}
+.nota39{margin:0;padding:12px 12px 10px;background:var(--c);border-radius:6px 6px 14px 6px;transform:rotate(var(--r));box-shadow:0 3px 10px rgba(0,0,0,.12);color:#2b2b2b}
+.nota39 blockquote{margin:0;font-size:15px;line-height:1.35;overflow-wrap:anywhere} .nota39 figcaption{margin-top:8px;font-weight:700;font-size:13px;color:#555}
+.cumple-prox39{border:1px solid var(--line);border-radius:14px;padding:12px;background:var(--surface)} .cumple-prox39 h3{margin:0 0 8px}
+.cumple-lista39{display:grid;gap:10px} .cumple-fila39{display:grid;gap:8px;padding:10px;border-radius:12px;background:color-mix(in srgb,var(--line) 22%,var(--surface))}
+.cumple-fila39.hoy{background:linear-gradient(135deg,color-mix(in srgb,#ff5d8f 16%,var(--surface)),color-mix(in srgb,#ffc145 18%,var(--surface)))}
+.cumple-dato39{display:flex;gap:10px;align-items:center} .cumple-dato39 .ico39{font-size:26px} .cumple-fila39>.btn{justify-self:start}
+.mi-saludo39{margin:0;font-size:13px;color:var(--muted);font-style:italic;overflow-wrap:anywhere}
+.form-saludo39{display:grid;gap:8px} .form-saludo39 textarea{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:inherit;resize:vertical}
+.ideas39{display:flex;flex-wrap:wrap;gap:6px;align-items:center} .chip39{font:inherit;font-size:12.5px;padding:5px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:inherit;cursor:pointer;text-align:left}
+.pedir-cumple39{display:grid;gap:6px;padding:12px;border-radius:14px;border:1px dashed color-mix(in srgb,#ff5d8f 55%,var(--line));background:color-mix(in srgb,#ff5d8f 6%,var(--surface))}
+.pedir-cumple39 .row select{flex:1 1 100px;width:auto;min-width:0} .pedir-cumple39 select{font:inherit;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:inherit}
+.cumple-mio39{margin:0}
+@media (prefers-reduced-motion:reduce){.confeti39{display:none}.torta39{animation:none}}
 .ok-t{color:var(--ok)} tr.mov-pago39 td{background:color-mix(in srgb,var(--ok) 6%,transparent)}
 </style>
 </head>
