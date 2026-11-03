@@ -3304,6 +3304,11 @@ function pintarCob39(cont, recargar){
     kpi("Para gestionar", moneyK(T.sin_cobro.monto), `${T.sin_cobro.n} ${T.sin_cobro.n===1?"factura":"facturas"} sin cobro`, T.sin_cobro.n?"bad":""),
     kpi("Ya cargadas", String(T.marcada.n), T.marcada.n ? "esperando que Contabilium las lea en cero" : "todavía ninguna")));
   const loc = {}; R.lista.forEach(x=>{ const z = loc[x.local] = loc[x.local] || { n:0, saldo:0, v60:0 }; z.n++; z.saldo+=x.saldo; if ((x.dias||0)>60 && x.estado!=="marcada") z.v60+=x.saldo; });
+  const pm = {}; let pmSin = 0; R.lista.filter(x=>x.estado==="listo").forEach(x=>{ if ((x.medios||[]).length){ x.medios.forEach(m=>{ pm[m.medio]=(pm[m.medio]||0)+m.monto; }); pmSin += x.medioSinDato||0; } else pmSin += x.saldo; });
+  if (Object.keys(pm).length) cont.append(el("div",{class:"card"}, el("h3",{text:"💲 Listas para cargar, por medio de pago"}),
+    el("div",{class:"medios39"}, Object.keys(pm).sort((a,b)=>pm[b]-pm[a]).map(k=>el("span",{class:"mchip39"}, `${ICO_MEDIO39[k]||"💲"} ${k} `, el("b",{text:moneyK(pm[k])}))),
+      pmSin>0 ? el("span",{class:"mchip39 sin"}, "❔ Sin medio cargado ", el("b",{text:moneyK(pmSin)})) : null),
+    pmSin>0 ? el("p",{class:"hint",text:"«Sin medio cargado»: en el Templete esos cobros no tienen el medio de pago (columna «Medio Pago» ni las cajas). Si lo completan allá, la app lo muestra sola."}) : null));
   cont.append(el("p",{class:"hint"}, Object.keys(loc).map(k=>`${k}: ${loc[k].n} con saldo por ${moneyK(loc[k].saldo)}${loc[k].v60?` (${moneyK(loc[k].v60)} con más de 60 días)`:""}`).join(" · "),
     ` · Leído de Contabilium el ${new Date(R.leida).toLocaleString("es-AR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}. `, bA));
   // Filtros: local y búsqueda
@@ -3326,15 +3331,29 @@ function pintarCob39(cont, recargar){
     el("summary",{}, el("b",{text:`✔️ Confirmadas por Contabilium · ${R.confirmadas.length}`}), " · últimos 30 días"),
     el("ul",{class:"lista39"}, R.confirmadas.slice(0,100).map(c=>el("li",{}, el("span",{class:"mono",text:c.cot}), ` · la marcaste el ${fCob39(String(c.ts).slice(0,10))}`, c.confirmada?` · Contabilium la mostró en cero el ${fCob39(String(c.confirmada).slice(0,10))}`:"")))));
   // Descargas
-  const col = ["Estado","Local","Factura","Cliente","Fecha","Días","Total","Saldo","Cobro: fecha","Cobro: medio","Cobro: importe","Fila Templete","Qué hacer"];
+  const col = ["Estado","Local","Factura","Cliente","Fecha","Días","Total","Saldo","Cobro: fecha","Medio de pago","Cobro: importe","Fila Templete","Qué hacer"];
   const est = Object.fromEntries(COB_GRUPOS39.map(g=>[g[0],g[1].replace(/^\S+\s/,"")]));
-  const filas = L => L.map(x=>[est[x.estado], x.local, x.cot, x.cliente, fCob39(x.fecha), x.dias, x.total, x.saldo, x.cobro?fCob39(x.cobro.fecha):"", x.cobro?x.cobro.medio:"", x.cobro?x.cobro.monto:"", x.cobro?x.cobro.fila:"", x.motivo]);
+  const filas = L => L.map(x=>[est[x.estado], x.local, x.cot, x.cliente, fCob39(x.fecha), x.dias, x.total, x.saldo, x.cobro?fCob39(x.cobro.fecha):"", txtMedios39(x), x.cobro?x.cobro.monto:"", x.cobro?x.cobro.fila:"", x.motivo]);
   const D = { titulo:"Cobranzas a validar · Palermo 0001 y Janette 0007", archivo:`Cobranzas_a_validar_${new Date().toISOString().slice(0,10)}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"",
     hojas: COB_GRUPOS39.map(([k,t])=>({ nombre:t.replace(/^\S+\s/,"").slice(0,31), columnas:col, dinero:[6,7,10], totales:[7], filas:filas(R.lista.filter(x=>x.estado===k)) })).filter(h=>h.filas.length) };
   const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
   bx.onclick = async ()=>{ spinBtn(bx,"Armando…"); try{ await exportarXLSX37(D); }catch(e){ toast(msgErr(e)); } unspin(bx); };
   bp.onclick = async ()=>{ spinBtn(bp,"Armando…"); try{ await exportarPDF37(D); }catch(e){ toast(msgErr(e)); } unspin(bp); };
   if (D.hojas.length) cont.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Toda la lista:"}), bx, bp));
+}
+/* 3.9zc · Con qué se cobró: chips por medio (cobros mixtos incluidos) o la pista de la caja del día. */
+const ICO_MEDIO39 = { "Efectivo":"💵", "Efectivo (dólares)":"💵", "Transferencia":"🏦", "Mercado Pago":"📱", "Tarjeta":"💳" };
+const txtMedios39 = x => (x.medios||[]).length ? x.medios.map(m=>`${m.medio} ${money(m.monto)}`).join(" + ") + (x.medioSinDato>0?` + sin medio ${money(x.medioSinDato)}`:"") : (x.medioProbable ? `Probable ${x.medioProbable.medio} (${x.medioProbable.motivo})` : "Sin dato");
+function medios39(x){
+  const L = x.medios || [];
+  if (L.length) return el("div",{class:"medios39"}, L.map(m=>el("span",{class:"mchip39",title:"Dato: "+m.fuente}, `${ICO_MEDIO39[m.medio]||"💲"} ${m.medio}`, L.length>1||x.medioSinDato>0?el("b",{text:" "+money(m.monto)}):null)),
+    x.medioSinDato>0 ? el("span",{class:"mchip39 sin",text:`❔ Sin medio ${money(x.medioSinDato)}`}) : null,
+    L.some(m=>m.fuente==="Contabilium") ? el("small",{class:"hint",text:"según Contabilium"}) : null);
+  if (x.medioProbable) return el("div",{class:"medios39"}, el("span",{class:"mchip39 prob"}, `${ICO_MEDIO39[x.medioProbable.medio]||"💲"} Probable: ${x.medioProbable.medio}`), el("small",{class:"hint",text:" "+x.medioProbable.motivo}));
+  if (!x.cobro) return null;
+  const d = x.cajaDia;
+  return el("div",{class:"medios39"}, el("span",{class:"mchip39 sin",text:"❔ Medio sin cargar en el Templete"}),
+    d ? el("small",{class:"hint",text:` Caja de ese día: tarjetas ${moneyK(d.tarjetas)} · transferencia ${moneyK(d.transferencia)} · efectivo ${moneyK(d.efectivo)}`}) : null);
 }
 function filaCob39(x, repintar){
   const c = x.cobro;
@@ -3350,7 +3369,8 @@ function filaCob39(x, repintar){
   return el("div",{class:"cobi39 cob39-"+x.estado},
     el("div",{class:"cobh39"}, el("span",{class:"mono",text:x.cot}), el("b",{class:"cobm39",text:money(x.saldo)})),
     el("div",{class:"cobc39"}, el("strong",{text:x.cliente||"—"}), ` · ${fCob39(x.fecha)} · `, el("span",{class:(x.dias||0)>60?"bad-t":null,text:`${x.dias==null?"—":x.dias} días`}), x.total!==x.saldo?` · factura de ${money(x.total)}`:""),
-    c ? el("div",{class:"hint"}, `Templete: ${fCob39(c.fecha)} · ${money(c.monto)}`, [c.medio, "fila "+c.fila].filter(Boolean).map(t=>" · "+t).join("")) : null,
+    c ? el("div",{class:"hint"}, `Templete: ${fCob39(c.fecha)} · ${money(c.monto)} · fila ${c.fila}`) : null,
+    medios39(x),
     el("p",{class:"cobq39",text:x.motivo}), bt);
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
@@ -3832,7 +3852,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zb";
+const APP_V = "3.9zc";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
