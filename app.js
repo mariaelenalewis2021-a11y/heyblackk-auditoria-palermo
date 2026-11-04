@@ -3165,8 +3165,8 @@ function pintarFinanzas(body, D, recargar){
   if (C && U){ const sem = S.semaforo || {};
     body.append(el("p",{class:"hint",style:"margin:-4px 2px 0",text:`${capi(mesLargo(U.mes))}: entraron ${moneyK(U.ingresos)} y salieron ${moneyK(U.egresos)}${U.retiros?` (con ${moneyK(U.retiros)} de retiros de socios)`:""}. ${sem.titulo||""}`})); }
   // 3.9p · Aviso para María: pagos que todos los meses se cargan y este mes todavía no
-  if (D.maria && R.cierre && R.cierre.checklists){ const Lc = R.cierre.checklists[R.cierre.checklists.length-1];
-    if (Lc && Lc.alertasPago) body.append(el("div",{class:"card notice warn row"}, el("span",{text:`🔔 En ${MESL(Lc.mes)} hay ${Lc.alertasPago} pagos que cargás todos los meses y todavía no están en el Templete (sueldos y gastos fijos).`}), el("span",{class:"spacer"}),
+  if (D.maria && R.cierre && R.cierre.checklists){ const Lc = R.cierre.checklists.find(x=>!x.enCurso && x.alertasPago);   // 3.9zl · solo un mes cerrado al que le falta algo
+    if (Lc && Lc.alertasPago) body.append(el("div",{class:"card notice warn row"}, el("span",{text:`🔔 En ${MESL(Lc.mes)} faltan cargar ${Lc.alertasPago} pagos que cargás todos los meses (sueldos y gastos fijos), con Mes «${Lc.mes.slice(2)}».`}), el("span",{class:"spacer"}),
       el("button",{class:"btn sm",type:"button",text:"Ver mi cierre",onclick:()=>{ const b=document.querySelector('.tab39[data-k="cierre"]'); if(b){ b.click(); b.scrollIntoView({block:"start",behavior:"smooth"}); } }}))); }
   // 3.9za · Panorama claro: ventas (Contabilium ↔ Templete), a dónde se fue la plata por sector y pagos del mes
   if (R.panorama && !R.panorama.error){ const cp = cardPanorama39(R.panorama); if (cp) body.append(cp); const cq = cardPagos39(R.panorama.pagos); if (cq) body.append(cq); }
@@ -3324,7 +3324,7 @@ function avisosCorregir39(R){ const K = R.contabilium || {}, av = [];
   if (Dd.duplicados.length) av.push(`🟡 ${Dd.duplicados.length} facturas cargadas dos veces en el Templete (${moneyK(Dd.montoDeMas)} de más).`);
   if (Dd.mismoNumero.length) av.push(`🟡 ${Dd.mismoNumero.length} números de factura repetidos con clientes distintos (error de tipeo).`);
   return av; }
-const CIERRE_GR = {sueldos:["👥","Sueldos"], templete:["📒","Cargas del Templete"], cobranzas:["💰","Cobranzas pendientes"]};
+const CIERRE_GR = {sueldos:["👥","Sueldos"], pagos:["💸","Pagos fijos del mes (el importe puede variar)"], templete:["📒","Templete: qué cargar o corregir"], cobranzas:["💰","Cobranzas pendientes"]};
 const CIERRE_EST = {validado:["✅","Validado por la app","ok"], marcado:["☑️","Marcado por vos","ok"], revisar:["🟡","Marcado, pero la app todavía ve algo pendiente","warn"], pendiente:["⬜","Pendiente",""]};
 /** 3.9p · Mi cierre de mes (solo María): checklist que se valida sola con los datos y con lo que vas marcando. */
 function tabCierre(R){
@@ -3337,8 +3337,8 @@ function tabCierre(R){
       el("div",{class:"row"}, el("h2",{style:"margin:0",text:`Cierre de ${mesLargo(L.mes)}${L.enCurso?" (en curso)":""}`}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"🔒 Solo vos"})),
       el("div",{class:"med-barra",style:"margin-top:10px",role:"img","aria-label":`${pct} % listo`}, el("i",{class:pct>=100?"ok":"bad",style:`width:${pct}%`})),
       el("p",{class:"hint",text:`${listos} de ${L.total} listos (${pct} %)${L.revisar?` · ${L.revisar} marcados con algo pendiente`:""} · sueldos cargados ${moneyK(L.totalSueldos)}${L.totalSueldosAnt?` (mes anterior ${moneyK(L.totalSueldosAnt)})`:""}.`}),
-      L.alertasPago ? el("p",{class:"notice warn",text:`🔔 ${L.alertasPago} pagos que cargás todos los meses todavía no están en el Templete de ${MESL(L.mes)}.`}) : null,
-      el("p",{class:"hint",text:"✅ lo valida la app con los datos (Templete, Contabilium, cajas). ☑️ lo marcás vos. Si marcás algo que la app todavía ve pendiente, queda en 🟡 para revisar."})));
+      L.alertasPago ? el("p",{class:"notice warn",text:`🔔 Faltan cargar ${L.alertasPago} pagos que cargás todos los meses, con Mes «${L.mes.slice(2)}». Están marcados abajo.`}) : null,
+      el("p",{class:"hint",text:"✅ lo valida la app con los datos (Templete, Contabilium, cajas). ☑️ lo marcás vos. Si marcás algo que la app todavía ve pendiente, queda en 🟡 para revisar. Cada carga cuenta en el mes que dice su columna «Mes», no el día en que se cargó. Los pagos fijos pueden variar de importe: si están cargados, están bien."})));
     Object.keys(CIERRE_GR).forEach(g=>{ const I = L.items.filter(x=>x.grupo===g); if (!I.length) return;
       const ok = I.filter(x=>x.estado==="validado"||x.estado==="marcado").length;
       caja.append(el("details",{class:"card mas39 cierre39",open:ok<I.length||null}, el("summary",{}, el("b",{text:`${CIERRE_GR[g][0]} ${CIERRE_GR[g][1]}`}), el("span",{class:"hint",text:` · ${ok} de ${I.length}`})),
@@ -3351,7 +3351,7 @@ function tabCierre(R){
           return el("li",{class:"chk39-"+x.estado}, el("label",{}, cb, el("span",{class:"chk39-t"}, el("b",{text:x.texto}), x.detalle?el("span",{class:"hint",text:" · "+x.detalle}):null)),
             el("span",{class:"pill "+cls,title:tt,text:ic})); }))));
     });
-    const av = avisosCorregir39(R); if (av.length) caja.append(cardCorregir39(av));
+    // 3.9zl · lo que hay que corregir ya está, caso por caso, en «Cargas del Templete» (no se repite abajo)
   };
   LS.forEach(L=>{ const b = el("button",{class:"btn sm",type:"button","data-k":L.mes,text:capi(mesLargo(L.mes))+(L.enCurso?" (en curso)":"")}); b.onclick=()=>{ actual=L.mes; pintar(); }; segs.append(b); });
   wrap.append(segs, caja); pintar(); return [wrap];
@@ -4156,7 +4156,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zj";
+const APP_V = "3.9zl";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
