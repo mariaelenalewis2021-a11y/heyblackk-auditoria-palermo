@@ -3652,15 +3652,18 @@ function tabLiquidez39(R){
       card.append(el("p",{class:"k",style:"margin-top:12px",text:"Dónde está la plata"}), apilada39(B.disp.filter(x=>x.monto>0).map((x,i)=>({nombre:x.nombre, monto:x.monto, color:pal[i%pal.length]})))); }
     if (!B) card.append(el("p",{class:"notice warn",text:`El saldo de cajas y bancos de ${MESL(mes)} todavía no está en la hoja «cierre» del Templete${ult?` (el último cargado es ${MESL(ult.mes)} ${ult.mes.slice(0,4)})`:""}. Cuando se cargue, aparece acá solo.`}));
     if (!M && !B) card.append(el("p",{class:"hint",text:"Sin movimientos cargados en este mes."}));
+    // 3.9zm4 · gráficos que siguen al mes elegido: semanas del mes (si hay) y el año con el mes marcado
+    const sem = (R.semanas||[]).filter(w=>{ const fin = new Date(w.semana+"T12:00:00Z"); fin.setUTCDate(fin.getUTCDate()+6); return w.semana.slice(0,7)===mes || fin.toISOString().slice(0,7)===mes; });
+    if (sem.length) card.append(el("p",{class:"k",style:"margin-top:14px",text:`Semana a semana · ${MESL(mes)}`}), barrasIE(sem, w=>"sem. "+fmtF(w.semana).slice(0,5)));
+    const delAnio = (R.meses||[]).filter(x=>x.mes.slice(0,4)===mes.slice(0,4));
+    if (delAnio.length > 1){ const g = barrasIE(delAnio, x=>mesTxt(x.mes).slice(0,3)), i = delAnio.findIndex(x=>x.mes===mes);
+      if (i>=0 && g.children[i]) g.children[i].classList.add("sel39");
+      card.append(el("p",{class:"k",style:"margin-top:14px",text:`Mes a mes · ${mes.slice(0,4)} (marcado: ${MESL(mes)})`}), g,
+        el("div",{class:"row leyenda"}, el("span",{}, el("i",{class:"dot",style:"background:#16A34A"})," Entró"), el("span",{}, el("i",{class:"dot",style:"background:#DC2626"})," Salió"), el("span",{class:"hint",text:"Abajo: lo que quedó."}))); }
     cuerpo.append(card);
   };
   pintarSel(); pintarMes();
   if (anios.length>1) wrap.append(selA); wrap.append(selM, cuerpo); out.push(wrap);
-  // Evolución (solo meses con saldo cargado)
-  if (BAL.length > 1){ const S = BAL.slice(-6);
-    out.push(el("details",{class:"card mas39"}, el("summary",{text:"📈 Cajas y bancos, mes a mes"}),
-      lineas39(S.map(s=>mesTxt(s.mes)), [{nombre:"Cajas y bancos",color:CZM39.disp,vals:S.map(s=>s.dispTotal)}].concat(S.some(s=>s.pasivoTotal)?[{nombre:"Debemos",color:CZM39.pas,vals:S.map(s=>s.pasivoTotal)}]:[])),
-      el("p",{class:"hint",text:"Saldos de la hoja «cierre» del Templete (solo los meses que tienen saldo cargado)."}))); }
   // 3 · Pagos que faltan: simple (día, qué, cuánto). Sin saldo corrido.
   if (L.proximos.length){
     const nom = p => { const [a,b] = String(p.nombre).split(" · "); return b ? [b, capi(a)] : [a, ""]; };
@@ -4497,7 +4500,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zm3";
+const APP_V = "3.9zm4";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
