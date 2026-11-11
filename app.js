@@ -40,7 +40,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber"]);
+const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber","verCertificado"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -860,6 +860,8 @@ async function jornada(body, j){
   // 3.9zj · cumpleaños: el cumpleañero ve su fiesta arriba; los cumples de la semana y el pedido de la fecha, abajo
   const cumpleOpts = { llamar:(fn,...a)=>api(fn, F.token, ...a), alCambiar:C=>{ F.j.cumple = C; jornada(body, F.j); }, vigilar:()=>vigilarF(body), nombre:j.nombre };
   if (j.cumple && j.cumple.mios) card.append(fiestaCumple(j.cumple.mios, j.nombre));
+  // 3.9zm · llegadas tarde: explicar el motivo (y el certificado) o ver lo que resolvió RR. HH.
+  { const bt = bloqueTardanzas39(j.tardanzas, { llamar:(fn,...a)=>api(fn, F.token, ...a), vigilar:()=>vigilarF(body), alListo:()=>{} }); if (bt) card.append(bt); }
   // Estado actual, grande y claro
   card.append(el("div",{class:"estado-actual "+(j.estado.tipo==="entrada"?"adentro":j.estado.tipo==="salida"?"afuera":"")}, el("span",{class:"k",text:"Estado actual"}), el("b",{text:j.estado.texto})));
   if (j.pares && j.pares.length) card.append(el("div",{class:"pares"}, el("span",{class:"k",text:"Hoy"}),
@@ -1083,8 +1085,11 @@ async function enviarFichada(body, tipo, geo, foto, boton){
       el("div",{class:"big mono",text:r.hora.slice(0,5)}), el("p",{class:"lead",text:fmtF(r.fecha)+" · hora del servidor · "+r.sucursal}),
       r.precisionBaja ? el("p",{class:"notice warn",text:"El GPS tenía poca precisión: el registro queda «para revisar» por un jefe."}) : el("p",{class:"lead",text:"📍 Ubicación validada en tu sucursal"+(r.fotoGuardada?" · 📷 foto guardada":"")}),
       tipo==="salida" || r.minutosHoy ? el("p",{class:"lead",text:"⏱️ Hoy llevás "+horas(r.minutosHoy||0)}) : null,
+      r.tardanza ? el("div",{class:"tard39-c"}, el("h3",{text:`⏰ Llegaste ${r.tardanza.minutos} min tarde`}), el("p",{class:"hint",text:`Tu horario es ${r.tardanza.horario}. Contanos qué pasó: va directo a RR. HH.`}),
+        formTardanza39(Object.assign({ respuesta:"pendiente" }, r.tardanza), { llamar:(fn,...a)=>api(fn, F.token, ...a), vigilar:()=>vigilarF(body), alListo:()=>{} })) : null,
       el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
-    setTimeout(()=>{ if (F.token && body.querySelector(".fichar.done")){ finFichada(); body.textContent=""; vFichar(body); } }, 20000);
+    if (r.tardanza) vigilarF(body);   // 3.9zm · con llegada tarde no se cierra a los 20 s: tiene que poder contestar
+    else setTimeout(()=>{ if (F.token && body.querySelector(".fichar.done")){ finFichada(); body.textContent=""; vFichar(body); } }, 20000);
   }catch(e){ if (boton) unspin(boton); errorFichada(body, tipo, e, geo); }
 }
 function errorFichada(body, tipo, e, geo){
@@ -3179,11 +3184,12 @@ function pintarFinanzas(body, D, recargar){
 
   // ===== 2 · Pestañas =====
   const tabs = [
+    D.maria && R.cierre && R.cierre.checklists ? ["cierre","✅ Mi cierre", ()=>tabCierre(R)] : null,   // 3.9zm · primero: la guía de trabajo
+    D.maria && R.liquidez ? ["liq","💧 Liquidez y pagos", ()=>tabLiquidez39(R)] : null,
     ["ventas","🛍️ Ventas y productos", ()=>tabVentas(R, PR, K)],
     ["plata","💵 La plata", ()=>tabPlata(R, U, S)],
     D.maria && (R.gcSS27 || R.cobranzas || R.anticipos || R.cuentasCorrientes) ? ["gc","🤝 Grandes cuentas", ()=>tabGrandes(R)] : null,
-    D.maria && R.cierre && R.cierre.checklists ? ["cierre","✅ Mi cierre", ()=>tabCierre(R)] : null,
-    D.maria ? ["cobval","💳 Cobranzas a validar", ()=>tabCobranzas39()] : null,
+    // 3.9zm · «Cobranzas a validar» pasó adentro de Mi cierre, ordenada por pasos
     ["control","🔎 Control", ()=>tabControl(D, R, K, recargar)]].filter(Boolean);
   body.append(pestanas39("fin", tabs));
 }
@@ -3333,15 +3339,14 @@ function tabCierre(R){
   let actual = Number(hoyAR.slice(8,10)) <= 10 ? LS[0].mes : LS[LS.length-1].mes;   // hasta el día 10 se muestra el cierre del mes anterior
   const pintar = ()=>{ caja.textContent=""; const L = LS.find(x=>x.mes===actual); [...segs.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.k===actual));
     const listos = L.items.filter(x=>x.estado==="validado"||x.estado==="marcado").length, pct = L.total ? Math.round(listos/L.total*100) : 0;
-    caja.append(el("div",{class:"card"},
-      el("div",{class:"row"}, el("h2",{style:"margin:0",text:`Cierre de ${mesLargo(L.mes)}${L.enCurso?" (en curso)":""}`}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"🔒 Solo vos"})),
-      el("div",{class:"med-barra",style:"margin-top:10px",role:"img","aria-label":`${pct} % listo`}, el("i",{class:pct>=100?"ok":"bad",style:`width:${pct}%`})),
+    caja.append(guiaCierre39(L, R), el("details",{class:"card mas39"}, el("summary",{text:"¿Cómo funciona Mi cierre?"}),
       el("p",{class:"hint",text:`${listos} de ${L.total} listos (${pct} %)${L.revisar?` · ${L.revisar} marcados con algo pendiente`:""} · sueldos cargados ${moneyK(L.totalSueldos)}${L.totalSueldosAnt?` (mes anterior ${moneyK(L.totalSueldosAnt)})`:""}.`}),
       L.alertasPago ? el("p",{class:"notice warn",text:`🔔 Faltan cargar ${L.alertasPago} pagos que cargás todos los meses, con Mes «${L.mes.slice(2)}». Están marcados abajo.`}) : null,
       el("p",{class:"hint",text:"✅ lo valida la app con los datos (Templete, Contabilium, cajas). ☑️ lo marcás vos. Si marcás algo que la app todavía ve pendiente, queda en 🟡 para revisar. Cada carga cuenta en el mes que dice su columna «Mes», no el día en que se cargó. Los pagos fijos pueden variar de importe: si están cargados, están bien."})));
+    void listos; void pct;
     Object.keys(CIERRE_GR).forEach(g=>{ const I = L.items.filter(x=>x.grupo===g); if (!I.length) return;
       const ok = I.filter(x=>x.estado==="validado"||x.estado==="marcado").length;
-      caja.append(el("details",{class:"card mas39 cierre39",open:ok<I.length||null}, el("summary",{}, el("b",{text:`${CIERRE_GR[g][0]} ${CIERRE_GR[g][1]}`}), el("span",{class:"hint",text:` · ${ok} de ${I.length}`})),
+      caja.append(el("details",{class:"card mas39 cierre39","data-g":g,open:ok<I.length||null}, el("summary",{}, el("b",{text:`${CIERRE_GR[g][0]} ${CIERRE_GR[g][1]}`}), el("span",{class:"hint",text:` · ${ok} de ${I.length}`})),
         el("ul",{class:"chk39"}, I.slice().sort((a,b)=>(a.estado==="validado")-(b.estado==="validado")).map(x=>{ const [ic,tt,cls] = CIERRE_EST[x.estado];
           const cb = el("input",{type:"checkbox","aria-label":x.texto, checked:x.estado==="validado"||x.marcado||null, disabled:x.estado==="validado"||null});
           cb.onchange = async ()=>{ cb.disabled = true;
@@ -3354,7 +3359,7 @@ function tabCierre(R){
     // 3.9zl · lo que hay que corregir ya está, caso por caso, en «Cargas del Templete» (no se repite abajo)
   };
   LS.forEach(L=>{ const b = el("button",{class:"btn sm",type:"button","data-k":L.mes,text:capi(mesLargo(L.mes))+(L.enCurso?" (en curso)":"")}); b.onclick=()=>{ actual=L.mes; pintar(); }; segs.append(b); });
-  wrap.append(segs, caja); pintar(); return [wrap];
+  wrap.append(segs, caja); pintar(); return [wrap, bloqueCobranzas39()];
 }
 /** Pestaña Control: Contabilium vs Templete, facturas repetidas, de dónde sale cada número, glosario y descargas. */
 function tabControl(D, R, K, recargar){
@@ -3585,6 +3590,334 @@ function filaCob39(x, repintar){
     x.reciboSuelto ? el("div",{class:"recibo39 suelto"}, el("b",{text:`⚠️ Recibo sin aplicar en Contabilium: ${money(x.reciboSuelto.libre)}`}), ` · n.º ${x.reciboSuelto.numero} del ${fCob39(x.reciboSuelto.fecha)}`,
       x.reciboSuelto.medios.length ? el("div",{class:"medios39"}, x.reciboSuelto.medios.map(m=>el("span",{class:"mchip39"}, `${ICO_MEDIO39[m.medio]||"💲"} ${m.medio} `, el("b",{text:money(m.monto)})))) : null) : null,
     el("p",{class:"cobq39",text:x.motivo}), bt);
+}
+/* ===================== 3.9zm · Gráficos simples, Liquidez, guía de Mi cierre, cobranzas por pasos y llegadas tarde ===================== */
+const CZM39 = { disp:"#0F766E", cred:"#2563EB", pas:"#DC2626", fci:"#7C3AED", pf:"#0891B2", ok:"#16A34A", warn:"#D97706", bad:"#DC2626", gris:"#94A3B8" };
+const svgNS39 = "http://www.w3.org/2000/svg";
+const sv39 = (tag, at, ...hijos) => { const n = document.createElementNS(svgNS39, tag); Object.entries(at||{}).forEach(([k,v])=>{ if (v!=null) n.setAttribute(k, v); }); hijos.flat().forEach(h=>{ if (h!=null) n.append(h); }); return n; };
+/** Anillo de avance (0–100). */
+function anillo39(pct, centro, color){
+  const r = 26, c = 2*Math.PI*r, p = Math.max(0, Math.min(100, pct||0));
+  return sv39("svg",{viewBox:"0 0 64 64",class:"anillo39",role:"img","aria-label":`${Math.round(p)} %`},
+    sv39("circle",{cx:32,cy:32,r,fill:"none",stroke:"var(--line)","stroke-width":7}),
+    sv39("circle",{cx:32,cy:32,r,fill:"none",stroke:color||(p>=100?CZM39.ok:p>=50?CZM39.warn:CZM39.bad),"stroke-width":7,"stroke-linecap":"round","stroke-dasharray":`${(c*p/100).toFixed(1)} ${c.toFixed(1)}`,transform:"rotate(-90 32 32)"}),
+    sv39("text",{x:32,y:36,"text-anchor":"middle","font-size":centro&&String(centro).length>4?11:14,"font-weight":700,fill:"currentColor"}, centro!=null?String(centro):Math.round(p)+"%"));
+}
+/** Barra apilada horizontal con leyenda. */
+function apilada39(partes, total){
+  const tot = total || partes.reduce((a,x)=>a+Math.max(0,x.monto),0) || 1;
+  return el("div",{class:"apil39"},
+    el("div",{class:"apil39-b",role:"img","aria-label":partes.map(x=>`${x.nombre}: ${moneyK(x.monto)}`).join("; ")},
+      partes.filter(x=>x.monto>0).map(x=>el("i",{style:`width:${(x.monto/tot*100).toFixed(1)}%;background:${x.color}`,title:`${x.nombre}: ${moneyK(x.monto)}`}))),
+    el("ul",{class:"apil39-l"}, partes.map(x=>el("li",{}, el("i",{class:"dot",style:`background:${x.color}`}), el("span",{text:x.nombre}), el("b",{text:moneyK(x.monto)})))));
+}
+/** Líneas para pocas series y pocos puntos (meses). */
+function lineas39(etiquetas, series){
+  const W = 320, H = 150, pl = 8, pr = 8, pt = 10, pb = 22, vals = series.flatMap(s=>s.vals).filter(v=>v!=null), max = Math.max(1, ...vals), min = Math.min(0, ...vals);
+  const x = i => pl + (etiquetas.length<2 ? (W-pl-pr)/2 : i*(W-pl-pr)/(etiquetas.length-1)), y = v => pt + (H-pt-pb)*(1-(v-min)/(max-min||1));
+  const g = sv39("svg",{viewBox:`0 0 ${W} ${H}`,class:"lin39",role:"img","aria-label":series.map(s=>`${s.nombre}: ${s.vals.map((v,i)=>etiquetas[i]+" "+moneyK(v)).join(", ")}`).join(". ")});
+  g.append(sv39("line",{x1:pl,x2:W-pr,y1:y(0),y2:y(0),stroke:"var(--line)"}));
+  etiquetas.forEach((e,i)=>g.append(sv39("text",{x:x(i),y:H-6,"text-anchor":"middle","font-size":10,fill:"var(--muted)"}, e)));
+  series.forEach(s=>{ const pts = s.vals.map((v,i)=>v==null?null:[x(i),y(v)]).filter(Boolean);
+    g.append(sv39("polyline",{points:pts.map(p=>p.join(",")).join(" "),fill:"none",stroke:s.color,"stroke-width":2.5,"stroke-linejoin":"round"}));
+    pts.forEach(p=>g.append(sv39("circle",{cx:p[0],cy:p[1],r:3,fill:s.color}))); });
+  return el("div",{}, g, el("div",{class:"row leyenda"}, series.map(s=>el("span",{}, el("i",{class:"dot",style:`background:${s.color}`})," "+s.nombre))));
+}
+const semIdx39 = (v, bien, mal) => v==null ? "" : v>=bien ? "ok" : v>=mal ? "warn" : "bad";
+
+/* ---------- Pestaña 💧 Liquidez y pagos (solo María) ---------- */
+function tabLiquidez39(R){
+  const L = R.liquidez, out = [];
+  if (!L || L.error) return [el("div",{class:"card notice warn",text:"Todavía no hay datos de liquidez"+(L&&L.error?`: ${L.error}`:".")})];
+  const B = L.balance, I = L.indices || {}, CB = R.cobranzas;
+  // 1 · Pantallazo
+  out.push(el("div",{class:"card"},
+    el("div",{class:"row"}, el("h2",{style:"margin:0",text:"💧 ¿Cuánta plata hay y para cuánto alcanza?"}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"🔒 Solo vos"})),
+    el("div",{class:"hkpis",style:"margin-top:10px"},
+      B ? hk("🏦 En cajas y bancos", moneyK(B.dispTotal), `cierre de ${MESL(B.mes)}${B.usd?` · + USD ${Math.round(B.usd).toLocaleString("es-AR")} aparte`:""}`, B.dispTotal>0?"pos":"neg") : null,
+      I.diasCaja!=null ? hk("📆 Alcanza para", `${I.diasCaja} días`, `de gastos (${moneyK(L.gastoDiario)} por día, sin retiros)`, I.diasCaja>=30?"pos":I.diasCaja<15?"neg":"") : null,
+      hk("🧾 Pagos del mes que faltan", moneyK(L.proximosTotal), `${L.proximos.length} pagos fijos`, L.proximosTotal?"neg":""),
+      CB ? hk("🤝 Nos deben", moneyK(CB.total), `vencido ${moneyK(CB.vencido)} · ${CB.clientes} clientes`) : null),
+    !B ? el("p",{class:"notice warn",text:"No se pudieron leer los saldos de la hoja «cierre» del Templete. Cuando estén cargados, acá aparece cuánto hay en cajas y bancos."}) : null,
+    B && [I.acida,I.corriente,I.inmediata].some(v=>v!=null) ? el("div",{class:"ind39"},
+      [["Prueba ácida", I.acida, "Caja + lo que nos deben por cada $ 1 de deuda (ideal: 1 o más)", 1, 0.7],
+       ["Liquidez corriente", I.corriente, "Todo, mercadería incluida, por cada $ 1 de deuda (ideal: 1,5)", 1.5, 1],
+       ["Caja inmediata", I.inmediata, "Solo la plata disponible por cada $ 1 de deuda", 0.5, 0.2]].map(([n,v,d,b,m])=>
+        el("div",{class:"ind39-i "+semIdx39(v,b,m),title:d}, el("span",{class:"k",text:n}), el("b",{text:v==null?"–":v.toFixed(2).replace(".",",")}), el("small",{class:"hint",text:d})))) : null,
+    B ? el("p",{class:"hint",text:`Capital de trabajo: ${moneyK(I.capitalTrabajo)} (lo que tenemos y se mueve en el año, menos lo que debemos en el corto plazo). Saldos tomados de la hoja «cierre» del Templete.`}) : null));
+  // 2 · Dónde está la plata y cómo viene
+  if (B){ const pal = ["#0F766E","#14B8A6","#2563EB","#7C3AED","#0891B2","#B45309","#64748B","#DB2777"];
+    const fila = el("div",{class:"split"});
+    fila.append(el("div",{class:"card"}, el("h3",{text:`🏦 Dónde está la plata · ${MESL(B.mes)}`}),
+      apilada39(B.disp.filter(x=>x.monto>0).map((x,i)=>({nombre:x.nombre, monto:x.monto, color:pal[i%pal.length]}))),
+      B.disp.some(x=>x.monto<0) ? el("p",{class:"notice warn",text:"En negativo: "+B.disp.filter(x=>x.monto<0).map(x=>`${x.nombre} ${moneyK(x.monto)}`).join(", ")+" (descubierto o saldo mal cargado)."}) : null,
+      B.usd ? el("p",{class:"hint",text:`Caja en dólares: ${Math.round(B.usd).toLocaleString("es-AR")} (no se suma a los pesos).`}) : null));
+    if ((B.serie||[]).length>1) fila.append(el("div",{class:"card"}, el("h3",{text:"📈 Cómo vino, mes a mes"}),
+      lineas39(B.serie.map(s=>mesTxt(s.mes)), [{nombre:"Cajas y bancos",color:CZM39.disp,vals:B.serie.map(s=>s.disp)},{nombre:"Nos deben",color:CZM39.cred,vals:B.serie.map(s=>s.creditos)},{nombre:"Debemos",color:CZM39.pas,vals:B.serie.map(s=>s.pasivos)}]),
+      el("p",{class:"hint",text:"Si la línea roja (lo que debemos) supera a la verde y la azul juntas, hay que cobrar más rápido o patear pagos."})));
+    out.push(fila);
+    if ((B.pasivos||[]).length) out.push(el("details",{class:"card mas39"}, el("summary",{text:`📕 Lo que debemos · ${moneyK(B.pasivoTotal)}`}), barrasH(B.pasivos.slice().sort((a,b)=>b.monto-a.monto), CZM39.pas)));
+  }
+  // 3 · Pagos que vienen (con la plata que queda después de cada uno)
+  if (L.proximos.length){ let saldo = B ? B.dispTotal : null;
+    out.push(el("div",{class:"card"}, el("h3",{text:"🗓️ Lo que falta pagar este mes, en orden"}),
+      el("ol",{class:"pagos39"}, L.proximos.map(p=>{ if (saldo!=null) saldo -= p.monto;
+        return el("li",{}, el("span",{class:"pagos39-d",text:p.dia?`día ${p.dia}`:"sin día fijo"}), el("b",{text:p.nombre}), el("span",{class:"spacer"}), el("span",{text:moneyK(p.monto)}),
+          saldo!=null ? el("small",{class:"hint "+(saldo<0?"bad-t":""),text:` · queda ${moneyK(saldo)}`}) : null); })),
+      el("p",{class:"hint",text:"Importes estimados con lo que se pagó los últimos meses. Pagá cada uno cerca de su día: antes, la plata puede estar rindiendo."})));
+  }
+  // 4 · Pagos adelantados
+  out.push(el("div",{class:"card"}, el("h3",{text:"⏱️ Pagos hechos antes de lo habitual"}),
+    L.adelantados.length ? el("div",{},
+      el("p",{class:"lead",text:`${L.adelantados.length} ${L.adelantados.length===1?"pago se hizo":"pagos se hicieron"} 5 días o más antes del día en que se pagan siempre.${L.adelantadosCosto?` Esperando, la plata habría rendido unos ${moneyK(L.adelantadosCosto)} en un FCI.`:""}`}),
+      el("ul",{class:"adel39"}, L.adelantados.map(a=>el("li",{}, el("b",{text:a.nombre}), ` · ${moneyK(a.monto)} · pagado el ${fmtF(a.fecha)} (suele pagarse el día ${a.habitual}: ${a.diasAntes} días antes)`,
+        a.costo ? el("span",{class:"pill warn",text:`−${moneyK(a.costo)} de rendimiento`}) : null, el("small",{class:"hint",text:` · fila ${a.fila}`}))))) :
+      el("p",{class:"hint",text:"✅ Ningún pago fijo se adelantó en los últimos dos meses."}),
+    el("p",{class:"hint",text:"Se compara con el día en que se pagó el mismo concepto y proveedor en los meses anteriores (fecha de pago del Templete). Los sueldos a mes vencido no cuentan."})));
+  // 5 · Proveedores
+  if ((L.proveedores||[]).length) out.push(el("div",{class:"card"}, el("h3",{text:"🏭 A quién le pagamos más (últimos 3 meses)"}),
+    el("div",{class:"bh38"}, L.proveedores.map(p=>{ const mx = L.proveedores[0].ult3||1;
+      return el("div",{class:"bh-fila"}, el("span",{class:"bh-n",text:p.nombre}), el("span",{class:"bh-b"}, el("i",{style:`width:${(p.ult3/mx*100).toFixed(1)}%;background:#B45309`})),
+        el("b",{class:"bh-v",text:moneyK(p.ult3)}), p.vs!=null && Math.abs(p.vs)>=15 ? el("span",{class:"pill "+(p.vs>0?"warn":"ok"),text:(p.vs>0?"+":"")+p.vs+" %"}) : null); })),
+    el("p",{class:"hint",text:"El % compara con los 3 meses anteriores. Si sube mucho, conviene pedir plazo o precio, o repartir el pago en cuotas."})));
+  // 6 · Poner a rendir
+  const RD = L.rendir, T = L.tasas || {};
+  if (RD || T.fci || (T.plazoFijo||[]).length){
+    const opc = [].concat(T.fci?[{nombre:"FCI money market (rescate en el día)", tna:T.fci.tna, color:CZM39.fci}]:[], (T.plazoFijo||[]).map(p=>({nombre:`Plazo fijo 30 días · ${p.banco}`, tna:p.tna, color:CZM39.pf})));
+    const mx = Math.max(1, ...opc.map(o=>o.tna));
+    out.push(el("div",{class:"card"}, el("h3",{text:"📈 Poner a rendir la plata que no se usa"}),
+      RD ? el("div",{class:"hkpis"}, hk("💤 Plata que podría rendir", moneyK(RD.libre), `cajas y bancos − pagos que faltan − colchón de 7 días (${moneyK(RD.colchon)})`, RD.libre?"pos":""),
+        RD.fci ? hk("En un FCI rinde", moneyK(RD.fci.porMes)+" por mes", `TNA ${String(RD.fci.tna).replace(".",",")} % · se puede sacar cuando haga falta`, "pos") : null,
+        RD.plazoFijo ? hk("En plazo fijo rinde", moneyK(RD.plazoFijo.porMes)+" por mes", `${RD.plazoFijo.banco} · TNA ${String(RD.plazoFijo.tna).replace(".",",")} % · queda inmovilizada 30 días`) : null) : null,
+      opc.length ? el("div",{class:"bh38"}, opc.map(o=>el("div",{class:"bh-fila"}, el("span",{class:"bh-n",text:o.nombre}), el("span",{class:"bh-b"}, el("i",{style:`width:${(o.tna/mx*100).toFixed(1)}%;background:${o.color}`})), el("b",{class:"bh-v",text:`TNA ${String(o.tna).replace(".",",")} %`})))) : null,
+      RD && !RD.libre ? el("p",{class:"hint",text:"Hoy no sobra plata para invertir: primero se cubren los pagos del mes y el colchón."}) : null,
+      el("p",{class:"hint",text:`Tasas del día de ${T.fuente||"fuente pública"}${T.fci?` (FCI: mediana de los fondos money market más grandes al ${fmtF(T.fci.fecha)})`:""}, leídas ${T.leida?fechaHora(T.leida):"–"}. Son informativas: no es una recomendación de inversión; antes de mover la plata, confirmá la tasa en el banco o la ALyC.`})));
+  }
+  return out;
+}
+
+/* ---------- Mi cierre: la guía de arriba ---------- */
+function guiaCierre39(L, R){
+  const grupo = g => { const I = L.items.filter(x=>x.grupo===g), ok = I.filter(x=>x.estado==="validado"||x.estado==="marcado").length; return { I, ok, falta: I.length-ok }; };
+  const S = grupo("sueldos"), P = grupo("pagos"), T = grupo("templete"), CR = R.cobRes;
+  const cobPend = CR ? (CR.sinImputar.n + CR.listo.n + CR.dudoso.n + CR.viejas.n) : 0;
+  const listos = L.items.filter(x=>x.estado==="validado"||x.estado==="marcado").length, pct = L.total ? Math.round(listos/L.total*100) : 0;
+  const ir = sel => ()=>{ const d = document.querySelector(sel); if (d){ if (d.tagName==="DETAILS") d.open = true; d.scrollIntoView({behavior:"smooth",block:"start"}); } };
+  const pasos = [];
+  if (S.falta) pasos.push(["👥", `Cargá ${S.falta} ${S.falta===1?"sueldo":"sueldos"} en el Templete`, L.enCurso ? "Se pagan a mes vencido: cargalos con Mes «"+L.mes.slice(2)+"» cuando los pagues." : `Con Mes «${L.mes.slice(2)}» aunque los cargues hoy.`, ir('.cierre39[data-g="sueldos"]'), L.enCurso?"":"bad"]);
+  if (P.falta) pasos.push(["💸", `Cargá ${P.falta} ${P.falta===1?"pago fijo":"pagos fijos"}`, "Alquileres, servicios, publicidad… El importe puede variar: con que esté cargado alcanza.", ir('.cierre39[data-g="pagos"]'), L.enCurso?"":"warn"]);
+  if (T.falta) pasos.push(["📒", `Corregí ${T.falta} ${T.falta===1?"cosa":"cosas"} en el Templete`, "Facturas que faltan, importes distintos o cargadas dos veces: cada una dice qué fila tocar.", ir('.cierre39[data-g="templete"]'), "warn"]);
+  if (CR){
+    if (CR.sinImputar.n) pasos.push(["🧷", `Imputá ${CR.sinImputar.n} ${CR.sinImputar.n===1?"cobranza «a cuenta»":"cobranzas «a cuenta»"} en Contabilium (${moneyK(CR.sinImputar.monto)})`, "Son los recibos que Contabilium marca «pendientes de imputación». La app te dice a qué factura va cada uno.", ir("#cob39"), "bad"]);
+    if (CR.listo.n) pasos.push(["✅", `Registrá ${CR.listo.n} ${CR.listo.n===1?"cobro":"cobros"} en Contabilium (${moneyK(CR.listo.monto)})`, "Ya están cobrados y cargados en el Templete: solo falta el recibo en Contabilium.", ir("#cob39"), "warn"]);
+    if (CR.dudoso.n) pasos.push(["🔍", `Revisá ${CR.dudoso.n} ${CR.dudoso.n===1?"cobranza dudosa":"cobranzas dudosas"}`, "Hay un cobro posible pero no coincide del todo (importe o número).", ir("#cob39"), ""]);
+    if (CR.viejas.n) pasos.push(["📞", `Reclamá ${CR.viejas.n} ${CR.viejas.n===1?"factura":"facturas"} de más de 60 días (${moneyK(CR.viejas.monto)})`, "No tienen ningún cobro registrado en ningún lado.", ir("#cob39"), "bad"]);
+  }
+  const anillos = [["Sueldos", S], ["Pagos fijos", P], ["Templete", T]].filter(([,g])=>g.I.length).map(([n,g])=>el("div",{class:"anil39"}, anillo39(g.I.length?g.ok/g.I.length*100:100, `${g.ok}/${g.I.length}`), el("small",{text:n})));
+  if (CR) anillos.push(el("div",{class:"anil39"}, anillo39((CR.cerradasMes+cobPend) ? CR.cerradasMes/(CR.cerradasMes+cobPend)*100 : 100, `${CR.cerradasMes}/${CR.cerradasMes+cobPend}`), el("small",{text:"Cobranzas"})));
+  return el("div",{class:"card guia39"},
+    el("div",{class:"row"}, anillo39(pct), el("div",{style:"flex:1;min-width:180px"}, el("span",{class:"k",text:"🧭 Tu guía"}),
+      el("h2",{style:"margin:2px 0",text:`Cierre de ${mesLargo(L.mes)}${L.enCurso?" (en curso)":""}`}),
+      el("p",{class:"lead",style:"margin:0",text: pasos.length ? `Te ${pasos.length===1?"queda 1 paso":"quedan "+pasos.length+" pasos"}. Empezá por el primero:` : "🎉 No queda nada pendiente."})),
+      el("span",{class:"pill",text:"🔒 Solo vos"})),
+    el("div",{class:"anils39"}, anillos),
+    pasos.length ? el("ol",{class:"pasos39"}, pasos.map(([ic,t,d,fn,c],i)=>el("li",{class:c?"p39-"+c:null}, el("span",{class:"p39-n",text:String(i+1)}),
+      el("div",{class:"p39-t"}, el("b",{text:`${ic} ${t}`}), el("span",{class:"hint",text:d})), el("button",{class:"btn sm",type:"button",text:"Ir →",onclick:fn})))) : null,
+    CR && CR.cerradasMes ? el("p",{class:"hint",text:`✔️ Este mes Contabilium ya confirmó ${CR.cerradasMes} ${CR.cerradasMes===1?"cobranza":"cobranzas"} que cerraste.`}) : null,
+    CR ? el("p",{class:"hint",text:`Cobranzas según la lectura de Contabilium del ${fechaHora(CR.leida)}.`}) : null);
+}
+
+/* ---------- Cobranzas por pasos (dentro de Mi cierre) ---------- */
+const PASOS_COB39 = [
+  ["imputar","1 · Imputar","🧷 Cobranzas «a cuenta» para imputar","Contabilium tiene el recibo, pero no está aplicado a ninguna factura. Abrí el recibo en Contabilium (Cobranzas), agregá la factura que te indicamos en los comprobantes a cancelar y guardá. Después tocá «Ya lo imputé»."],
+  ["registrar","2 · Registrar","✅ Cobros para registrar en Contabilium","Ya se cobraron y están en el Templete: hacé el recibo en Contabilium con el medio de pago que figura y tocá «Ya la cargué»."],
+  ["revisar","3 · Revisar","🔍 Para revisar antes de cargar","Hay un cobro posible pero no coincide del todo. Fijate el motivo de cada una."],
+  ["reclamar","4 · Reclamar","📞 Facturas sin ningún cobro","No hay cobro en el Templete ni recibo en Contabilium: o falta cobrarlas o falta cargar el cobro."],
+  ["marcadas","Marcadas","☑️ Ya las marcaste","Se confirman solas cuando Contabilium las lea en cero (la lectura es diaria, o tocá «Leer de nuevo»)."]];
+function pasoDe39(x){ if (x.estado==="marcada") return "marcadas"; if (x.reciboSuelto) return "imputar"; if (x.estado==="listo") return "registrar"; if (x.estado==="dudoso") return "revisar"; return "reclamar"; }
+function filaRec39(r, marcado, repintar){
+  const b = el("button",{class:"btn sm"+(marcado?"":" primary"),type:"button",text:marcado?"↩️ Desmarcar":"🧷 Ya lo imputé"});
+  b.onclick = async ()=>{ spinBtn(b, marcado?"Quitando…":"Guardando…");
+    try{ await apiS("cobranzaMarcar", "REC:"+r.numero, !marcado); if (!marcado) COBVAL39.recibosMarcados[r.numero] = { ts:new Date().toISOString() }; else delete COBVAL39.recibosMarcados[r.numero];
+      toast(marcado ? "Desmarcado." : `Recibo ${r.numero} marcado: se confirma solo cuando Contabilium lo muestre imputado.`); repintar(); }
+    catch(e){ unspin(b); toast(msgErr(e)); } };
+  return el("div",{class:"cobi39 rec39"+(marcado?" cob39-marcada":"")},
+    el("div",{class:"cobh39"}, el("span",{class:"mono",text:"Recibo "+r.numero}), el("b",{class:"cobm39",text:money(r.libre)})),
+    el("div",{class:"cobc39"}, el("strong",{text:r.cliente||"—"}), ` · ${fCob39(r.fecha)} · ${r.dias==null?"—":r.dias} días`, r.parcial?` · recibo de ${money(r.importe)} (una parte ya está imputada)`:""),
+    (r.medios||[]).length ? el("div",{class:"medios39"}, r.medios.map(m=>el("span",{class:"mchip39"}, `${ICO_MEDIO39[m.medio]||"💲"} ${m.medio} `, el("b",{text:money(m.monto)})))) : null,
+    el("p",{class:"cobq39"}, el("b",{text:r.sugerencia==="exacta"?"👉 ":r.sugerencia==="anticipo"?"💡 ":"👉 "}), r.accion),
+    (r.facturas||[]).length ? el("div",{class:"facs39"}, el("span",{class:"hint",text:"Facturas abiertas del cliente: "}),
+      r.facturas.map(f=>el("span",{class:"mchip39"+(r.aplicarA.includes(f.cot)?" sug":""),title:fCob39(f.fecha)}, el("span",{class:"mono",text:f.cot}), " ", el("b",{text:money(f.saldo)})))) : null,
+    marcado ? el("p",{class:"hint",text:"☑️ Lo marcaste como imputado: se confirma solo en la próxima lectura de Contabilium."}) : null, b);
+}
+function diagnosticoCob39(D){
+  if (!(D||[]).length) return el("div",{class:"card notice ok",text:"🩺 Sin problemas de carga detectados en las cobranzas."});
+  return el("div",{class:"card diag39"}, el("h3",{text:"🩺 Qué está fallando en las cobranzas (y cómo evitarlo)"}),
+    el("div",{class:"diag39-l"}, D.map(d=>el("details",{class:"diag39-i "+(d.nivel||"")},
+      el("summary",{}, el("b",{text:d.titulo}), el("span",{class:"spacer"}), el("span",{class:"pill "+(d.nivel||""),text:`${d.n} · ${moneyK(d.monto)}`})),
+      el("p",{}, el("b",{text:"Qué pasó: "}), d.que), el("p",{}, el("b",{text:"Cómo evitarlo: "}), d.evitar)))),
+    el("p",{class:"hint",text:"Tocá cada problema para ver qué lo causa. Compartilo con quien carga las ventas y el Templete: la mayoría se evita cargando bien en el momento."}));
+}
+function pintarCobPasos39(cont, recargar){
+  const R = COBVAL39; cont.textContent = ""; R.recibosMarcados = R.recibosMarcados || {};
+  const SI = (R.sinImputar && R.sinImputar.lista) || [], grupos = { imputar:[], registrar:[], revisar:[], reclamar:[], marcadas:[] };
+  R.lista.forEach(x=>grupos[pasoDe39(x)].push(x));
+  const recPend = SI.filter(r=>!R.recibosMarcados[r.numero]), recMarc = SI.filter(r=>R.recibosMarcados[r.numero]);
+  const n = k => k==="imputar" ? recPend.length + grupos.imputar.length : k==="marcadas" ? grupos.marcadas.length + recMarc.length : grupos[k].length;
+  const monto = k => (k==="imputar" ? recPend.reduce((a,r)=>a+r.libre,0) : 0) + grupos[k].reduce((a,x)=>a+x.saldo,0);
+  const pend = ["imputar","registrar","revisar","reclamar"].reduce((a,k)=>a+n(k),0), cerr = (R.confirmadas||[]).filter(c=>String(c.confirmada||"").slice(0,7)===new Date().toISOString().slice(0,7)).length;
+  const bA = el("button",{class:"btn sm",type:"button",text:"🔄 Leer de nuevo"}); bA.onclick = ()=>recargar(bA);
+  const colP = { imputar:CZM39.bad, registrar:CZM39.warn, revisar:"#64748B", reclamar:"#7C3AED" };
+  cont.append(el("div",{class:"card"},
+    el("div",{class:"row"}, anillo39((cerr+pend)?cerr/(cerr+pend)*100:100, `${cerr}/${cerr+pend}`), el("div",{style:"flex:1;min-width:180px"},
+      el("h2",{style:"margin:0",text: pend ? `Te quedan ${pend} cobranzas por cerrar` : "🎉 No quedan cobranzas por cerrar"}),
+      el("p",{class:"hint",style:"margin:2px 0 0",text:`Este mes Contabilium confirmó ${cerr} que cerraste. Leído de Contabilium el ${fechaHora(R.leida)}.`})), bA),
+    apilada39(["imputar","registrar","revisar","reclamar"].map(k=>({ nombre:PASOS_COB39.find(p=>p[0]===k)[1]+` (${n(k)})`, monto:monto(k), color:colP[k] }))),
+    R.sinImputarError ? el("p",{class:"notice warn",text:"No se pudieron leer los recibos «a cuenta»: "+R.sinImputarError}) : null,
+    R.sinImputar && R.sinImputar.pendientesDeLeer ? el("p",{class:"hint",text:`Faltan revisar ${R.sinImputar.pendientesDeLeer} recibos viejos: se completan en las próximas lecturas.`}) : null));
+  cont.append(diagnosticoCob39(R.diagnostico));
+  // Pasos
+  let actual = ["imputar","registrar","revisar","reclamar"].find(k=>n(k)) || "imputar", fLoc = "", fTxt = "";
+  const segs = el("div",{class:"row seg38 pasoscob39"}), caja = el("div",{class:"stack"});
+  const sel = el("select",{"aria-label":"Local"}, el("option",{value:"",text:"Todos los locales"}), el("option",{value:"Palermo",text:"Palermo (0001)"}), el("option",{value:"Janette",text:"Janette (0007)"}));
+  const q = el("input",{type:"search",placeholder:"Buscar cliente o número…",autocomplete:"off"});
+  const ver = x => (!fLoc || x.local===fLoc) && (!fTxt || (String(x.cliente)+" "+(x.cot||x.numero||"")).toLowerCase().includes(fTxt));
+  const repintar = () => pintarCobPasos39(cont, recargar);
+  const pinta = () => { caja.textContent = ""; [...segs.children].forEach(b=>b.setAttribute("aria-pressed", b.dataset.k===actual));
+    const P = PASOS_COB39.find(p=>p[0]===actual), lst = el("div",{class:"cobl39"});
+    caja.append(el("div",{class:"card"}, el("h3",{style:"margin-top:0",text:`${P[2]} · ${n(actual)}`}), el("p",{class:"hint",text:P[3]}), lst));
+    if (actual==="imputar"){ recPend.filter(ver).forEach(r=>lst.append(filaRec39(r, false, repintar))); }
+    if (actual==="marcadas"){ recMarc.filter(ver).forEach(r=>lst.append(filaRec39(r, true, repintar))); }
+    if (actual==="reclamar"){ const G = grupos.reclamar.filter(ver), tr = [["0 a 30 días",0,30],["31 a 60",31,60],["61 a 90",61,90],["Más de 90",91,1e9]];
+      const tot = tr.map(([nn,a,b])=>({ nombre:nn, monto:G.filter(x=>(x.dias||0)>=a && (x.dias||0)<=b).reduce((s,x)=>s+x.saldo,0) }));
+      lst.before(el("div",{}, el("p",{class:"k",text:"Antigüedad de lo que falta cobrar"}), apilada39(tot.map((t,i)=>Object.assign(t,{color:["#94A3B8","#D97706","#DC2626","#7F1D1D"][i]})))));
+      G.slice().sort((a,b)=>(b.dias||0)-(a.dias||0)).slice(0,300).forEach(x=>lst.append(filaCob39(x, repintar))); }
+    else grupos[actual].filter(ver).slice(0,300).forEach(x=>lst.append(filaCob39(x, repintar)));
+    if (!lst.children.length) lst.append(el("p",{class:"hint",text: n(actual) ? "Nada con esos filtros." : "✅ Nada en este paso."})); };
+  PASOS_COB39.forEach(([k,t])=>{ const b = el("button",{class:"btn sm",type:"button","data-k":k}, t, el("span",{class:"cnt39",text:String(n(k))})); b.onclick=()=>{ actual=k; pinta(); }; segs.append(b); });
+  sel.onchange = ()=>{ fLoc = sel.value; pinta(); }; q.oninput = ()=>{ fTxt = q.value.trim().toLowerCase(); pinta(); };
+  cont.append(segs, el("div",{class:"row cobfil39"}, sel, q), caja); pinta();
+  // Descargas (toda la lista, incluidos los recibos a imputar)
+  const col = ["Paso","Local","Factura","Cliente","Fecha","Días","Total","Saldo","Cobro: fecha","Medio de pago","Cobro: importe","Fila Templete","Qué hacer"];
+  const nomP = Object.fromEntries(PASOS_COB39.map(p=>[p[0], p[2].replace(/^\S+\s/,"")]));
+  const hojas = ["imputar","registrar","revisar","reclamar","marcadas"].map(k=>({ nombre:nomP[k].slice(0,31), columnas:col, dinero:[6,7,10], totales:[7],
+    filas: grupos[k].map(x=>[nomP[k], x.local, x.cot, x.cliente, fCob39(x.fecha), x.dias, x.total, x.saldo, x.cobro?fCob39(x.cobro.fecha):"", txtMedios39(x), x.cobro?x.cobro.monto:"", x.cobro?x.cobro.fila:"", x.motivo]) })).filter(h=>h.filas.length);
+  if (SI.length) hojas.unshift({ nombre:"Recibos a imputar", columnas:["Recibo","Cliente","Fecha","Días","Importe","Sin imputar","Medios","Imputar a","Qué hacer","Marcado"], dinero:[4,5], totales:[5],
+    filas: SI.map(r=>[r.numero, r.cliente, fCob39(r.fecha), r.dias, r.importe, r.libre, (r.medios||[]).map(m=>m.medio+" "+m.monto).join(" + "), r.aplicarA.join(", "), r.accion, R.recibosMarcados[r.numero]?"Sí":""]) });
+  if ((R.diagnostico||[]).length) hojas.push({ nombre:"Qué está fallando", columnas:["Problema","Cantidad","Monto","Qué pasó","Cómo evitarlo"], dinero:[2], filas:R.diagnostico.map(d=>[d.titulo,d.n,d.monto,d.que,d.evitar]) });
+  const D = { titulo:"Cobranzas por cerrar · Palermo y Janette", archivo:`Cobranzas_${new Date().toISOString().slice(0,10)}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"", hojas };
+  const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
+  bx.onclick = async ()=>{ spinBtn(bx,"Armando…"); try{ await exportarXLSX37(D); }catch(e){ toast(msgErr(e)); } unspin(bx); };
+  bp.onclick = async ()=>{ spinBtn(bp,"Armando…"); try{ await exportarPDF37(D); }catch(e){ toast(msgErr(e)); } unspin(bp); };
+  if (hojas.length) cont.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Toda la lista:"}), bx, bp));
+}
+/** Bloque de cobranzas dentro de Mi cierre (los datos piden tu PIN). */
+function bloqueCobranzas39(){
+  const box = el("section",{class:"stack",id:"cob39"});
+  const cab = el("div",{class:"card"}, el("h2",{style:"margin:0 0 4px",text:"💳 Cerrar cobranzas · Palermo y Janette"}),
+    el("p",{class:"hint",text:"La app cruza cada factura con saldo en Contabilium con los cobros del Templete y los recibos «a cuenta», y te ordena qué hacer en 4 pasos. No carga nada en Contabilium: vos hacés el paso allá y lo marcás acá."}));
+  const b = el("button",{class:"btn primary",type:"button",text:"🔒 Abrir mis cobranzas (con tu PIN)"});
+  const cont = el("div",{class:"stack"});
+  const cargar = async (forzar, btn) => { spinBtn(btn, forzar ? "Leyendo Contabilium y el Templete (1 a 3 min)…" : "Buscando…");
+    try{ COBVAL39 = await apiS("cobranzasValidar", !!forzar); b.remove(); pintarCobPasos39(cont, recargar); }catch(e){ toast(msgErr(e)); unspin(btn); } };
+  const recargar = btn => cargar(true, btn);
+  b.onclick = () => cargar(false, b);
+  if (!COBVAL39) cab.append(b);
+  box.append(cab, cont); if (COBVAL39) pintarCobPasos39(cont, recargar);
+  return box;
+}
+
+/* ---------- Llegadas tarde: lo que ve la persona al fichar ---------- */
+function leerCert39(){
+  return new Promise(res=>{
+    const i = el("input",{type:"file",accept:"image/*,application/pdf",style:"position:fixed;left:-9999px"});
+    const fin = v => { i.remove(); res(v); };
+    i.addEventListener("change", async ()=>{ const f = i.files[0]; if (!f) return fin(null);
+      if (f.size > 4*1024*1024 && f.type==="application/pdf"){ toast("El PDF pesa más de 4 MB. Sacale una foto al certificado."); return fin(null); }
+      try{ if (/^image\//.test(f.type)) return fin(await aDataURL(f));
+        const r = new FileReader(); r.onload = ()=>fin(r.result); r.onerror = ()=>{ toast("No se pudo leer el archivo."); fin(null); }; r.readAsDataURL(f); }
+      catch(e){ toast("No se pudo leer el archivo."); fin(null); } });
+    i.addEventListener("cancel", ()=>fin(null));
+    document.body.append(i); i.click();
+  });
+}
+const MOT39 = [["transporte","🚌 Transporte o tránsito"],["medico","🩺 Médico"],["estudio","📚 Examen o estudio"],["personal","🏠 Personal"],["otro","✏️ Otro"]];
+/** Formulario «¿Por qué llegaste tarde?». llamar(fn, ...args) usa la sesión que corresponda; alListo(T) recibe la novedad actualizada. */
+function formTardanza39(T, {llamar, alListo, vigilar}={}){
+  let aviso = T.aviso, motivo = T.motivo || "", cert = null;
+  const box = el("div",{class:"tard39"});
+  const pinta = () => { box.textContent = "";
+    if (T.respuesta==="respondida"){
+      box.append(el("p",{}, el("b",{text:"📨 Ya se lo mandaste a RR. HH."}), ` ${T.aviso?"Avisaste":"No avisaste"} · ${(MOT39.find(m=>m[0]===T.motivo)||["",T.motivo])[1]}.`),
+        T.faltaCertificado ? el("div",{class:"notice warn"}, el("b",{text:"Falta el certificado. "}), "Sacale una foto o subí el PDF para que RR. HH. pueda aprobarla.", el("div",{class:"row",style:"margin-top:8px"}, botonCert())) :
+        el("p",{class:"hint",text:"RR. HH. la va a revisar. Te avisamos acá cuando la resuelvan."}));
+      return; }
+    const si = el("button",{class:"btn"+(aviso===true?" primary":""),type:"button","aria-pressed":aviso===true,text:"👍 Sí, avisé"}), no = el("button",{class:"btn"+(aviso===false?" primary":""),type:"button","aria-pressed":aviso===false,text:"🙊 No avisé"});
+    si.onclick = ()=>{ aviso = true; vigilar&&vigilar(); pinta(); }; no.onclick = ()=>{ aviso = false; vigilar&&vigilar(); pinta(); };
+    const chips = el("div",{class:"mot39"}, MOT39.map(([k,t])=>el("button",{class:"chip39"+(motivo===k?" on":""),type:"button","aria-pressed":motivo===k,text:t,onclick:()=>{ motivo = k; vigilar&&vigilar(); pinta(); }})));
+    const det = el("textarea",{maxlength:"300",rows:"2",placeholder: motivo==="otro" ? "Contá qué pasó (obligatorio)" : "Si querés, sumá un detalle (opcional)","aria-label":"Detalle"}); det.value = box.dataset.det || ""; det.oninput = ()=>{ box.dataset.det = det.value; vigilar&&vigilar(); };
+    const pideCert = motivo==="medico" || motivo==="estudio";
+    const env = el("button",{class:"btn primary",type:"button",text: pideCert && !cert ? "Enviar (subo el certificado después)" : "Enviar a RR. HH."});
+    env.onclick = async ()=>{ if (aviso==null) return toast("Contanos si avisaste."); if (!motivo) return toast("Elegí el motivo.");
+      spinBtn(env,"Enviando…"); try{ const r = await llamar("justificarTardanza", T.id, { aviso, motivo, detalle:det.value, certificado:cert }); Object.assign(T, r);
+        toast(r.faltaCertificado ? "📨 Enviado. Acordate de subir el certificado." : "📨 Enviado a RR. HH."); alListo&&alListo(T); pinta(); }
+      catch(e){ unspin(env); toast(msgErr(e)); } };
+    box.append(el("p",{class:"k",text:"1 · ¿Avisaste que ibas a llegar tarde?"}), el("div",{class:"row"}, si, no),
+      el("p",{class:"k",text:"2 · ¿Por qué?"}), chips, det,
+      pideCert ? el("div",{class:"notice"+(cert?" ok":" warn")}, el("b",{text: cert ? "📎 Certificado listo para enviar." : "📎 Para médico o examen, RR. HH. necesita el certificado."}),
+        el("div",{class:"row",style:"margin-top:6px"}, el("button",{class:"btn sm",type:"button",text: cert ? "Cambiar archivo" : "📷 Sacar foto o subir PDF",onclick:async()=>{ const f = await leerCert39(); if (f){ cert = f; pinta(); } }}))) : null,
+      el("div",{class:"row",style:"margin-top:8px"}, env));
+  };
+  const botonCert = () => { const b = el("button",{class:"btn primary sm",type:"button",text:"📷 Subir certificado"});
+    b.onclick = async ()=>{ const f = await leerCert39(); if (!f) return; spinBtn(b,"Subiendo…");
+      try{ const r = await llamar("subirCertificado", T.id, f); Object.assign(T, r); toast("📎 Certificado enviado a RR. HH."); alListo&&alListo(T); pinta(); }catch(e){ unspin(b); toast(msgErr(e)); } };
+    return b; };
+  pinta(); return box;
+}
+/** Tarjeta para la pantalla de fichada: llegadas tarde que esperan respuesta y las ya resueltas por RR. HH. */
+function bloqueTardanzas39(L, opts){
+  if (!(L||[]).length) return null;
+  const box = el("div",{class:"stack tards39"});
+  L.forEach(T=>{
+    if (T.estado!=="abierta"){ const ok = T.estado==="justificada";
+      const b = el("button",{class:"btn sm",type:"button",text:"Entendido"});
+      b.onclick = async ()=>{ try{ await opts.llamar("tardanzaVista", T.id); }catch(e){} b.closest(".tard39-r").remove(); };
+      box.append(el("div",{class:"notice tard39-r "+(ok?"ok":"bad")}, el("b",{text: ok ? `✅ RR. HH. justificó tu llegada tarde del ${fmtF(T.fecha)}.` : `❌ RR. HH. no justificó tu llegada tarde del ${fmtF(T.fecha)}.`}),
+        T.nota ? ` «${T.nota}»` : "", " ", b)); return; }
+    box.append(el("div",{class:"card tard39-c"}, el("h3",{style:"margin:0",text:`⏰ Llegaste ${T.minutos} min tarde el ${fmtF(T.fecha)}`}),
+      el("p",{class:"hint",text:`Entraste ${T.hora} y tu horario es ${T.horario}. Contanos qué pasó: va directo a RR. HH. para que lo apruebe.`}), formTardanza39(T, opts)));
+  });
+  return box;
+}
+
+/* ---------- RR. HH.: llegadas tarde para aprobar ---------- */
+function cardTardanzasRRHH39(L, recargar){
+  const T = L.filter(n=>n.origen==="fichada" && n.tipo==="llegada_tarde"), pend = T.filter(n=>n.estado==="abierta");
+  if (!T.length) return null;
+  const fila = n => { const lista = n.respuesta==="respondida", mot = (MOT39.find(m=>m[0]===n.motivo)||["",n.motivo||""])[1];
+    const ap = el("button",{class:"btn sm primary",type:"button",text:"✅ Justificar"}), re = el("button",{class:"btn sm",type:"button",text:"❌ No justificar"});
+    const nota = el("input",{type:"text",maxlength:"300",placeholder:"Nota para la persona (opcional)","aria-label":"Nota"});
+    const decidir = async (estado, b) => { if (estado==="no_justificada" && !nota.value.trim() && !(await confirmar("¿No justificar sin dejar una nota?","Sí, sin nota"))) return;
+      spinBtn(b,"Guardando…"); try{ await apiS("actualizarNovedad", n.id, estado, nota.value); toast("Listo: la persona lo ve la próxima vez que ficha."); recargar(); }catch(e){ unspin(b); toast(msgErr(e)); } };
+    ap.onclick = ()=>decidir("justificada", ap); re.onclick = ()=>decidir("no_justificada", re);
+    const vc = n.certificado ? el("button",{class:"btn sm",type:"button",text:"📎 Ver certificado",onclick:async e=>{ const b = e.currentTarget; spinBtn(b,"Abriendo…");
+      try{ const c = await apiS("verCertificado", n.id); unspin(b); const src = `data:${c.tipo};base64,${c.b64}`;
+        if (/^image\//.test(c.tipo)) verFoto(src, "Certificado · "+c.nombre);
+        else { const bl = await (await fetch(src)).blob(), u = URL.createObjectURL(bl); window.open(u, "_blank"); setTimeout(()=>URL.revokeObjectURL(u), 60000); } }
+      catch(x){ unspin(b); toast(msgErr(x)); } }}) : null;
+    return el("li",{class:"tardr39"+(n.estado!=="abierta"?" hecha":"")},
+      el("div",{class:"row"}, el("b",{text:n.nombre}), el("span",{class:"hint",text:` · ${fmtF(n.fecha)} · entró ${n.hora||"–"} (horario ${n.horario||"–"})`}), el("span",{class:"spacer"}),
+        el("span",{class:"pill "+((n.minutos||0)>=30?"bad":"warn"),text:`${n.minutos||"?"} min tarde`})),
+      lista ? el("div",{class:"row"}, el("span",{class:"pill "+(n.aviso?"ok":"bad"),text:n.aviso?"👍 Avisó":"🙊 No avisó"}), el("span",{class:"pill",text:mot}),
+          n.certificado ? el("span",{class:"pill ok",text:"📎 Con certificado"}) : n.faltaCertificado ? el("span",{class:"pill warn",text:"📎 Falta el certificado"}) : null) :
+        el("p",{class:"hint",text:"⏳ Todavía no explicó el motivo (se le pide al fichar)."}),
+      n.motivoTxt ? el("p",{class:"hint",text:`«${n.motivoTxt}»`}) : null,
+      n.estado==="abierta" ? el("div",{class:"row"}, vc, nota, ap, re) : el("p",{class:"hint"}, n.estado==="justificada"?"✅ Justificada":"❌ No justificada", n.actualizadoPor?` por ${n.actualizadoPor}`:"", n.nota?` · «${n.nota}»`:"", vc?" · ":"", vc));
+  };
+  return el("div",{class:"card"}, el("h2",{text:`⏰ Llegadas tarde para aprobar · ${pend.length}`}),
+    el("p",{class:"lead",text:"Las detecta la app cuando alguien ficha la entrada después de su horario (más la tolerancia). La persona contesta si avisó y por qué; si fue por médico o examen, adjunta el certificado."}),
+    el("ul",{class:"tardrl39"}, pend.map(fila)),
+    T.length>pend.length ? el("details",{class:"mas39"}, el("summary",{text:`Ya resueltas (${T.length-pend.length})`}), el("ul",{class:"tardrl39"}, T.filter(n=>n.estado!=="abierta").slice(0,40).map(fila))) : null);
 }
 /* ===================== 3.3 · Resumen hablado (Web Speech API del navegador: sin servicios pagos ni claves) =====================
    El texto lo arma el servidor con datos reales; acá solo se lee en voz alta. Nunca suena solo: únicamente al tocar un botón. */
@@ -4021,11 +4354,12 @@ async function vRRHH(main){
     body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(b); try{ await apiS("crearNovedad",{uid:u.value,tipo:t.value,fecha:f.value,detalle:d.value}); main.textContent=""; route(); toast("Novedad registrada"); }catch(x){ unspin(b); toast(msgErr(x)); } }},
       el("h2",{text:"Nueva novedad"}), el("div",{class:"grid2"}, el("label",{class:"f"},"Empleado",u), el("label",{class:"f"},"Tipo",t), el("label",{class:"f"},"Fecha",f)), el("label",{class:"f"},"Detalle",d), b));
   }
+  { const ct = cardTardanzasRRHH39(L, ()=>{ main.textContent=""; route(); }); if (ct) body.append(ct); }   // 3.9zm
   const tb = el("tbody");
   L.forEach(n=>{ const sel = el("select",{"aria-label":"Estado"}, ...["abierta","justificada","no_justificada","cerrada"].map(v=>el("option",{value:v,text:v.replace("_"," "),selected:n.estado===v})));
     sel.onchange = async ()=>{ try{ await apiS("actualizarNovedad", n.id, sel.value, ""); toast("Estado actualizado"); }catch(e){ toast(msgErr(e)); sel.value=n.estado; } };
     tb.append(el("tr",{}, el("td",{class:"mono",text:fmtF(n.fecha)}), el("td",{text:n.nombre}), el("td",{text:TIPO_RH[n.tipo]||n.tipo}), el("td",{text:n.detalle||""}),
-      el("td",{text:n.origen==="derivada_de_ingresos"?"Derivada de ingresos":"Manual"}), el("td",{text:n.creadoPor||""}), el("td",{},sel))); });
+      el("td",{text:n.origen==="derivada_de_ingresos"?"Derivada de ingresos":n.origen==="fichada"?"Detectada al fichar":"Manual"}), el("td",{text:n.creadoPor||""}), el("td",{},sel))); });
   if (!L.length) tb.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin novedades."})));
   body.append(el("div",{class:"card"}, el("h2",{text:"Novedades"}), el("p",{class:"lead",text:"Circuito separado de la fichada: las alertas de ingreso no se convierten solas en novedades."}),
     el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Detalle","Origen","Cargó","Estado"].map(x=>el("th",{text:x})))), tb))));
@@ -4156,7 +4490,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zl";
+const APP_V = "3.9zm";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
