@@ -3629,42 +3629,48 @@ const semIdx39 = (v, bien, mal) => v==null ? "" : v>=bien ? "ok" : v>=mal ? "war
 function tabLiquidez39(R){
   const L = R.liquidez, out = [];
   if (!L || L.error) return [el("div",{class:"card notice warn",text:"Todavía no hay datos de liquidez"+(L&&L.error?`: ${L.error}`:".")})];
-  const B = L.balance, I = L.indices || {}, CB = R.cobranzas;
-  // 1 · Pantallazo
-  out.push(el("div",{class:"card"},
-    el("div",{class:"row"}, el("h2",{style:"margin:0",text:"💧 ¿Cuánta plata hay y para cuánto alcanza?"}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"🔒 Solo vos"})),
-    el("div",{class:"hkpis",style:"margin-top:10px"},
-      B ? hk("🏦 En cajas y bancos", moneyK(B.dispTotal), `cierre de ${MESL(B.mes)}${B.usd?` · + USD ${Math.round(B.usd).toLocaleString("es-AR")} aparte`:""}`, B.dispTotal>0?"pos":"neg") : null,
-      I.diasCaja!=null ? hk("📆 Alcanza para", `${I.diasCaja} días`, `de gastos (${moneyK(L.gastoDiario)} por día, sin retiros)`, I.diasCaja>=30?"pos":I.diasCaja<15?"neg":"") : null,
-      hk("🧾 Pagos del mes que faltan", moneyK(L.proximosTotal), `${L.proximos.length} pagos fijos`, L.proximosTotal?"neg":""),
-      CB ? hk("🤝 Nos deben", moneyK(CB.total), `vencido ${moneyK(CB.vencido)} · ${CB.clientes} clientes`) : null),
-    !B ? el("p",{class:"notice warn",text:"No se pudieron leer los saldos de la hoja «cierre» del Templete. Cuando estén cargados, acá aparece cuánto hay en cajas y bancos."}) : null,
-    B && [I.acida,I.corriente,I.inmediata].some(v=>v!=null) ? el("div",{class:"ind39"},
-      [["Prueba ácida", I.acida, "Caja + lo que nos deben por cada $ 1 de deuda (ideal: 1 o más)", 1, 0.7],
-       ["Liquidez corriente", I.corriente, "Todo, mercadería incluida, por cada $ 1 de deuda (ideal: 1,5)", 1.5, 1],
-       ["Caja inmediata", I.inmediata, "Solo la plata disponible por cada $ 1 de deuda", 0.5, 0.2]].map(([n,v,d,b,m])=>
-        el("div",{class:"ind39-i "+semIdx39(v,b,m),title:d}, el("span",{class:"k",text:n}), el("b",{text:v==null?"–":v.toFixed(2).replace(".",",")}), el("small",{class:"hint",text:d})))) : null,
-    B ? el("p",{class:"hint",text:`Capital de trabajo: ${moneyK(I.capitalTrabajo)} (lo que tenemos y se mueve en el año, menos lo que debemos en el corto plazo). Saldos tomados de la hoja «cierre» del Templete.`}) : null));
-  // 2 · Dónde está la plata y cómo viene
-  if (B){ const pal = ["#0F766E","#14B8A6","#2563EB","#7C3AED","#0891B2","#B45309","#64748B","#DB2777"];
-    const fila = el("div",{class:"split"});
-    fila.append(el("div",{class:"card"}, el("h3",{text:`🏦 Dónde está la plata · ${MESL(B.mes)}`}),
-      apilada39(B.disp.filter(x=>x.monto>0).map((x,i)=>({nombre:x.nombre, monto:x.monto, color:pal[i%pal.length]}))),
-      B.disp.some(x=>x.monto<0) ? el("p",{class:"notice warn",text:"En negativo: "+B.disp.filter(x=>x.monto<0).map(x=>`${x.nombre} ${moneyK(x.monto)}`).join(", ")+" (descubierto o saldo mal cargado)."}) : null,
-      B.usd ? el("p",{class:"hint",text:`Caja en dólares: ${Math.round(B.usd).toLocaleString("es-AR")} (no se suma a los pesos).`}) : null));
-    if ((B.serie||[]).length>1) fila.append(el("div",{class:"card"}, el("h3",{text:"📈 Cómo vino, mes a mes"}),
-      lineas39(B.serie.map(s=>mesTxt(s.mes)), [{nombre:"Cajas y bancos",color:CZM39.disp,vals:B.serie.map(s=>s.disp)},{nombre:"Nos deben",color:CZM39.cred,vals:B.serie.map(s=>s.creditos)},{nombre:"Debemos",color:CZM39.pas,vals:B.serie.map(s=>s.pasivos)}]),
-      el("p",{class:"hint",text:"Si la línea roja (lo que debemos) supera a la verde y la azul juntas, hay que cobrar más rápido o patear pagos."})));
-    out.push(fila);
-    if ((B.pasivos||[]).length) out.push(el("details",{class:"card mas39"}, el("summary",{text:`📕 Lo que debemos · ${moneyK(B.pasivoTotal)}`}), barrasH(B.pasivos.slice().sort((a,b)=>b.monto-a.monto), CZM39.pas)));
-  }
-  // 3 · Pagos que vienen (con la plata que queda después de cada uno)
-  if (L.proximos.length){ let saldo = B ? B.dispTotal : null;
-    out.push(el("div",{class:"card"}, el("h3",{text:"🗓️ Lo que falta pagar este mes, en orden"}),
-      el("ol",{class:"pagos39"}, L.proximos.map(p=>{ if (saldo!=null) saldo -= p.monto;
-        return el("li",{}, el("span",{class:"pagos39-d",text:p.dia?`día ${p.dia}`:"sin día fijo"}), el("b",{text:p.nombre}), el("span",{class:"spacer"}), el("span",{text:moneyK(p.monto)}),
-          saldo!=null ? el("small",{class:"hint "+(saldo<0?"bad-t":""),text:` · queda ${moneyK(saldo)}`}) : null); })),
-      el("p",{class:"hint",text:"Importes estimados con lo que se pagó los últimos meses. Pagá cada uno cerca de su día: antes, la plata puede estar rindiendo."})));
+  const CB = R.cobranzas, BAL = L.balances || (L.balance ? [L.balance] : []);
+  const hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date()), mesHoy = hoyAR.slice(0,7), diaHoy = Number(hoyAR.slice(8,10));
+  // 3.9zm3 · Selector de mes (y año): por defecto el mes en curso. Meses = los del Templete + los que tienen saldos en la hoja «cierre».
+  const meses = [...new Set([].concat((R.meses||[]).map(m=>m.mes), BAL.map(b=>b.mes), [mesHoy]))].sort();
+  const anios = [...new Set(meses.map(m=>m.slice(0,4)))];
+  let anio = mesHoy.slice(0,4), mes = mesHoy;
+  const wrap = el("div",{class:"stack"}), selA = el("div",{class:"row seg38"}), selM = el("div",{class:"row seg38 meses39"}), cuerpo = el("div",{class:"stack"});
+  const pintarSel = () => { selA.textContent = ""; selM.textContent = "";
+    if (anios.length > 1) anios.forEach(a=>{ const b = el("button",{class:"btn sm",type:"button",text:a,"aria-pressed":a===anio}); b.onclick=()=>{ anio=a; mes = meses.filter(m=>m.startsWith(a)).pop(); pintarSel(); pintarMes(); }; selA.append(b); });
+    meses.filter(m=>m.startsWith(anio)).forEach(m=>{ const b = el("button",{class:"btn sm",type:"button",text:capi(MESL(m))+(m===mesHoy?" (en curso)":""),"aria-pressed":m===mes}); b.onclick=()=>{ mes=m; pintarSel(); pintarMes(); }; selM.append(b); }); };
+  const pintarMes = () => { cuerpo.textContent = "";
+    const B = BAL.find(b=>b.mes===mes), M = (R.meses||[]).find(x=>x.mes===mes), ult = BAL[BAL.length-1];
+    const card = el("div",{class:"card"}, el("h2",{style:"margin:0 0 8px",text:`💧 ${capi(mesLargo(mes))}${mes===mesHoy?" · en curso":""}`}));
+    const k = el("div",{class:"hkpis"});
+    if (M) k.append(hk("💵 Entró", moneyK(M.ingresos), "según el Templete", "pos"), hk("💸 Salió", moneyK(M.egresos), M.retiros?`con ${moneyK(M.retiros)} de retiros`:"según el Templete", "neg"),
+      hk(M.ingresos-M.egresos>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(M.ingresos-M.egresos)), "entró − salió", M.ingresos-M.egresos>=0?"pos":"neg"));
+    if (B) k.append(hk("🏦 En cajas y bancos", moneyK(B.dispTotal), "saldo al cierre del mes", B.dispTotal>0?"pos":"neg"));
+    if (mes===mesHoy && CB) k.append(hk("🤝 Nos deben hoy", moneyK(CB.total), `vencido ${moneyK(CB.vencido)}`));
+    card.append(k);
+    if (B && (B.disp||[]).filter(x=>x.monto>0).length){ const pal = ["#0F766E","#14B8A6","#2563EB","#7C3AED","#0891B2","#B45309","#64748B","#DB2777"];
+      card.append(el("p",{class:"k",style:"margin-top:12px",text:"Dónde está la plata"}), apilada39(B.disp.filter(x=>x.monto>0).map((x,i)=>({nombre:x.nombre, monto:x.monto, color:pal[i%pal.length]})))); }
+    if (!B) card.append(el("p",{class:"notice warn",text:`El saldo de cajas y bancos de ${MESL(mes)} todavía no está en la hoja «cierre» del Templete${ult?` (el último cargado es ${MESL(ult.mes)} ${ult.mes.slice(0,4)})`:""}. Cuando se cargue, aparece acá solo.`}));
+    if (!M && !B) card.append(el("p",{class:"hint",text:"Sin movimientos cargados en este mes."}));
+    cuerpo.append(card);
+  };
+  pintarSel(); pintarMes();
+  if (anios.length>1) wrap.append(selA); wrap.append(selM, cuerpo); out.push(wrap);
+  // Evolución (solo meses con saldo cargado)
+  if (BAL.length > 1){ const S = BAL.slice(-6);
+    out.push(el("details",{class:"card mas39"}, el("summary",{text:"📈 Cajas y bancos, mes a mes"}),
+      lineas39(S.map(s=>mesTxt(s.mes)), [{nombre:"Cajas y bancos",color:CZM39.disp,vals:S.map(s=>s.dispTotal)}].concat(S.some(s=>s.pasivoTotal)?[{nombre:"Debemos",color:CZM39.pas,vals:S.map(s=>s.pasivoTotal)}]:[])),
+      el("p",{class:"hint",text:"Saldos de la hoja «cierre» del Templete (solo los meses que tienen saldo cargado)."}))); }
+  // 3 · Pagos que faltan: simple (día, qué, cuánto). Sin saldo corrido.
+  if (L.proximos.length){
+    const nom = p => { const [a,b] = String(p.nombre).split(" · "); return b ? [b, capi(a)] : [a, ""]; };
+    const vencidos = L.proximos.filter(p=>p.dia && p.dia < diaHoy), prox7 = L.proximos.filter(p=>!p.dia || (p.dia>=diaHoy && p.dia<diaHoy+7));
+    out.push(el("div",{class:"card"}, el("h3",{text:"🗓️ Pagos fijos que faltan este mes"}),
+      el("div",{class:"hkpis"}, hk("Total", moneyK(L.proximosTotal), `${L.proximos.length} pagos`), vencidos.length ? hk("Ya pasó el día", String(vencidos.length), "¿se pagaron? cargalos", "neg") : null,
+        hk("Próximos 7 días", moneyK(prox7.reduce((a,p)=>a+p.monto,0)), `${prox7.length} pagos`)),
+      el("table",{class:"pagt39"}, el("tbody",{}, L.proximos.map(p=>{ const [t,s] = nom(p), pasado = p.dia && p.dia < diaHoy;
+        return el("tr",{class:pasado?"pas39":null}, el("td",{class:"d",text:p.dia?String(p.dia):"–"}), el("td",{}, el("b",{text:t}), s?el("small",{class:"hint",text:" · "+s}):null, pasado?el("span",{class:"pill warn",text:"¿pagado?"}):null), el("td",{class:"n",text:moneyK(p.monto)})); }))),
+      el("p",{class:"hint",text:"Día = cuando se paga normalmente. «¿pagado?»: ya pasó el día y no está en el Templete; si se pagó, cargalo. Importes estimados con lo pagado los últimos meses."})));
   }
   // 4 · Pagos adelantados
   out.push(el("div",{class:"card"}, el("h3",{text:"⏱️ Pagos hechos antes de lo habitual"}),
@@ -3774,6 +3780,7 @@ function pintarCobPasos39(cont, recargar){
       el("p",{class:"hint",style:"margin:2px 0 0",text:`Este mes Contabilium confirmó ${cerr} que cerraste. Leído de Contabilium el ${fechaHora(R.leida)}.`})), bA),
     apilada39(["imputar","registrar","revisar","reclamar"].map(k=>({ nombre:PASOS_COB39.find(p=>p[0]===k)[1]+` (${n(k)})`, monto:monto(k), color:colP[k] }))),
     R.sinImputarError ? el("p",{class:"notice warn",text:"No se pudieron leer los recibos «a cuenta»: "+R.sinImputarError}) : null,
+    R.sinImputar && R.sinImputar.fuente ? el("p",{class:"hint",text:`Recibos «a cuenta»: lista de Contabilium («Aplicar cobranzas a cuenta») leída el ${fechaHora(R.sinImputar.leida)}. Se actualiza con cada «actualizar todo».`}) : null,
     R.sinImputar && R.sinImputar.pendientesDeLeer ? el("p",{class:"hint",text:`Faltan revisar ${R.sinImputar.pendientesDeLeer} recibos viejos: se completan en las próximas lecturas.`}) : null));
   cont.append(diagnosticoCob39(R.diagnostico));
   // Pasos
@@ -3865,7 +3872,7 @@ function formTardanza39(T, {llamar, alListo, vigilar}={}){
     box.append(el("p",{class:"k",text:"1 · ¿Avisaste que ibas a llegar tarde?"}), el("div",{class:"row"}, si, no),
       el("p",{class:"k",text:"2 · ¿Por qué?"}), chips, det,
       pideCert ? el("div",{class:"notice"+(cert?" ok":" warn")}, el("b",{text: cert ? "📎 Certificado listo para enviar." : "📎 Para médico o examen, RR. HH. necesita el certificado."}),
-        el("div",{class:"row",style:"margin-top:6px"}, el("button",{class:"btn sm",type:"button",text: cert ? "Cambiar archivo" : "📷 Sacar foto o subir PDF",onclick:async()=>{ const f = await leerCert39(); if (f){ cert = f; pinta(); } }}))) : null,
+        el("div",{class:"row",style:"margin-top:6px"}, el("button",{class:"btn sm",type:"button",text: cert ? "Cambiar archivo" : "📷 Sacar foto o subir PDF",onclick:async()=>{ const f = await leerCert39(); if (f){ cert = f; pinta(); } }}))) : "",
       el("div",{class:"row",style:"margin-top:8px"}, env));
   };
   const botonCert = () => { const b = el("button",{class:"btn primary sm",type:"button",text:"📷 Subir certificado"});
@@ -4490,7 +4497,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zm";
+const APP_V = "3.9zm3";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
