@@ -2767,6 +2767,7 @@ async function exportarXLSX37(D){
       headerFooter:{oddFooter:"&L&8Hey Blackk · "+String(D.titulo).replace(/&/g,"y")+"&R&8Página &P de &N"}});
     ws.getCell("A1").value = "Hey Blackk · "+D.titulo+" · "+h.nombre; ws.getCell("A1").font={bold:true,size:14};
     ws.getCell("A2").value = pieAct37(D); ws.getCell("A2").font={size:10,color:{argb:"FF5F5F68"}};
+    if (D.aviso){ ws.getCell("A3").value = "⚠️ "+D.aviso; ws.getCell("A3").font={bold:true,size:10,color:{argb:"FFB91C1C"}}; }   // 3.9zw · el aviso de datos viejos/incompletos viaja en el archivo
     const hr = ws.getRow(4); hr.values = h.columnas; hr.height = 32;
     hr.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"},size:10}; c.fill=fill("FF111113"); c.alignment={vertical:"middle",horizontal:"center",wrapText:true}; });
     h.filas.forEach((f,i)=>{ const r = ws.getRow(fr+i); r.values = f;
@@ -2795,7 +2796,7 @@ async function exportarPDF37(D){
   let titulo = "";
   D.hojas.forEach((h,n)=>{
     if (n) doc.addPage();
-    titulo = "Hey Blackk · "+D.titulo+" · "+h.nombre;
+    titulo = "Hey Blackk · "+D.titulo+" · "+h.nombre+(D.aviso?"  ⚠️ "+String(D.aviso).slice(0,140):"");
     const nc = Math.max(1,h.columnas.length), fs = nc>18 ? 6.5 : nc>14 ? 6.8 : nc>10 ? 7.2 : nc>6 ? 8 : 9, tots = totales37(h);
     const foot = tots.length ? [h.columnas.map((c,j)=> !j ? "TOTAL" : tots.includes(j) ? num(h.filas.reduce((a,f)=>a+(typeof f[j]==="number"?f[j]:0),0), j, h) : "")] : undefined;
     const body = h.filas.length ? h.filas.map(f=>h.columnas.map((c,j)=>num(f[j],j,h))) : [[{content:"Sin datos para este período.", colSpan:nc, styles:{halign:"center",textColor:120}}]];
@@ -3134,14 +3135,17 @@ function pintarFinanzas(body, D, recargar){
   body.append(el("div",{class:"row act36 act39m"},
     el("span",{class:"hint",text:`Datos al ${fechaHora(R.leida)}${S.ultimaCarga?" · último movimiento cargado "+fmtF(S.ultimaCarga):""}`}), el("span",{class:"spacer"}), bAct));
   const ba = barraSeccion(D.audio, "Administración y Finanzas"); if (ba) body.append(ba);
+  // 3.9zw · Las alertas ROJAS (datos viejos, planilla que no se pudo leer, importes ilegibles) se muestran siempre arriba: antes no aparecían en ninguna pantalla
+  const rojas = (R.alertas||[]).filter(a=>a.nivel==="rojo");
+  if (rojas.length) body.append(el("div",{class:"card notice bad"}, el("b",{text:"🔴 Antes de usar estos números"}), el("ul",{class:"alertas-rrhh"}, rojas.map(a=>el("li",{text:a.texto})))));
 
   // ===== 0 · 3.9s · Pantallazo del mes que cerró (se muestra los primeros 10 días del mes siguiente)
   if (R.resumenMes){ const RM = R.resumenMes, hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date());
     const ant = (()=>{ const d=new Date(hoyAR.slice(0,7)+"-15T12:00:00Z"); d.setUTCMonth(d.getUTCMonth()-1); return d.toISOString().slice(0,7); })();
     // 3.9zv · Ahora es EN VIVO (los mismos números que el resto del panel) y dice «provisorio» mientras falten puntos del cierre del mes
-    if (RM.mes === ant && (Number(hoyAR.slice(8,10)) <= 10 || RM.provisorio)){ const PV = RM.privado || {};
+    if (RM.mes === ant && (Number(hoyAR.slice(8,10)) <= 10 || (RM.provisorio && D.maria))){ const PV = RM.privado || {}; RM._card = true;
       body.append(el("div",{class:"card cierre-mes39"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:(RM.provisorio?"📆 Así viene cerrando ":"📆 Así cerró ")+mesLargo(RM.mes)}), el("span",{class:"spacer"}),
-          el("span",{class:"pill "+(RM.provisorio?"warn":"ok"),text:RM.provisorio?("Provisorio"+(RM.pendientesCierre?` · faltan ${RM.pendientesCierre} puntos del cierre`:" · todavía se cargan sueldos y pagos")):"Cerrado"})),
+          el("span",{class:"pill "+(RM.provisorio?"warn":"ok"),text:RM.provisorio?("Provisorio"+(D.maria&&RM.pendientesCierre?` · faltan ${RM.pendientesCierre} puntos de tu cierre`:" · todavía se cargan sueldos y pagos")):"Cerrado"})),
         el("div",{class:"hkpis",style:"margin-top:10px"}, hk("💵 Entró", moneyK(RM.ingresos), "", "pos"), hk("💸 Salió", moneyK(RM.egresos), "", "neg"), hk(RM.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(RM.neto)), RM.retiros?`con ${moneyK(RM.retiros)} de retiros`:"", RM.neto<0?"neg":"pos"),
           RM.facturado!=null ? hk("🧾 Facturado", moneyK(RM.facturado), "Contabilium, con IVA") : null),
         el("ul",{class:"sem38-lista"}, RM.puntos.map(t=>el("li",{text:t}))),
@@ -3152,17 +3156,18 @@ function pintarFinanzas(body, D, recargar){
     const hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date()), dia = Number(hoyAR.slice(8,10)), dm = new Date(Number(C.mes.slice(0,4)), Number(C.mes.slice(5,7)), 0).getDate();
     // 3.9zv · Palermo arranca el mes el primer miércoles (abre mié–sáb): la primera semana no se marca «en rojo»; el equilibrio se mide con VENTAS
     const arranque = dia <= 7, vC = C.ventas!=null ? C.ventas : C.ingresos;
-    const neto = C.ingresos - C.egresos, color = neto >= 0 ? "verde" : (arranque || (E && vC >= E.necesario*dia/dm) ? "amarillo" : "rojo");
+    // 3.9zw · el semáforo del mes en curso es de CAJA: las facturas de Contabilium sin cargar no se toman como plata que entró (noviembre daba «+12,5 M» y en caja iba −7,9 M)
+    const cajaC = C.ingresos - (C.ctbFalta||0), neto = cajaC - C.egresos, color = neto >= 0 ? "verde" : (arranque || (E && vC >= E.necesario*dia/dm) ? "amarillo" : "rojo");
     const titulo = neto >= 0 ? `Por ahora quedan ${moneyK(neto)} a favor` : arranque ? "Arranque de mes: todavía es temprano para sacar conclusiones" : `Por ahora salió ${moneyK(-neto)} más de lo que entró`;
     body.append(el("div",{class:"card sem38 sem-"+color},
       el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:{verde:"🟢",amarillo:"🟡",rojo:"🔴"}[color]}),
         el("div",{}, el("span",{class:"k",text:`Cómo venimos · ${mesLargo(C.mes)} (día ${dia} de ${dm})`}), el("h2",{text:titulo}),
-          el("p",{class:"lead",text:`Lo cargado en el Templete hasta ${S.ultimaCarga?fmtF(S.ultimaCarga):"hoy"}${C.ctbFalta>1?`, más ${moneyK(C.ctbFalta)} de facturas de Contabilium que todavía no se cargaron`:""}. Los pagos del mes (sueldos, alquileres) se cargan después: lo que salió va a subir.`}))),
+          el("p",{class:"lead",text:`Lo cargado en el Templete hasta ${S.ultimaCarga?fmtF(S.ultimaCarga):"hoy"}. Los pagos del mes (sueldos, alquileres) se cargan después: lo que salió va a subir.`}))),
       el("div",{class:"hkpis"},
-        hk("💵 Entró", moneyK(C.ingresos), C.ctbFalta>1 ? `${moneyK(C.templete+(C.ajusteGC||0))} cargado en el Templete + ${moneyK(C.ctbFalta)} facturado en Contabilium sin cargar` : "en lo que va del mes", "pos"),
+        hk("💵 Entró", moneyK(cajaC), "cobrado y cargado en el Templete"+((C.ajusteGC||0)<-1?` (ya sin ${moneyK(-C.ajusteGC)} de grandes cuentas contados dos veces)`:""), "pos"),
+        C.ctbFalta>1 ? hk("🧾 Facturado sin cargar", moneyK(C.ctbFalta), "Contabilium: falta cargarlo en el Templete (no se suma a lo que entró)") : null,
         hk("💸 Salió", moneyK(C.egresos), "en lo que va del mes", "neg"),
-        FXc ? hk("🧾 Facturado", moneyK(FXc), "Contabilium, con IVA") : null,
-        U ? hk("📆 "+capi(MESL(U.mes))+((R.resumenMes&&R.resumenMes.provisorio)?" (provisorio)":" cerró"), (U.neto>=0?"+":"−")+moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"en contra", U.neto<0?"neg":"pos") : null),
+        U && !(R.resumenMes && R.resumenMes.mes===U.mes && R.resumenMes._card) ? hk("📆 "+capi(MESL(U.mes))+((R.resumenMes&&R.resumenMes.provisorio)?" (provisorio)":" cerró"), (U.neto>=0?"+":"−")+moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"en contra", U.neto<0?"neg":"pos") : null),
       E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que vender ${moneyK(E.necesario)} en el mes${vC<E.necesario&&dia<dm?` · van ${moneyK(vC)}, faltan ${moneyK(E.necesario-vC)} en ${dm-dia} días`:""}.`}), medidorVenta(vC, E.necesario)) : null));
   } else if (U){
     const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""};
@@ -3173,7 +3178,7 @@ function pintarFinanzas(body, D, recargar){
       E ? medidorVenta(U.ventas!=null?U.ventas:U.ingresos, E.necesario) : null));
   }
   // Mes cerrado en una línea (el detalle está en «La plata»)
-  if (C && U){ const sem = S.semaforo || {};
+  if (C && U && !(R.resumenMes && R.resumenMes._card)){ const sem = S.semaforo || {};
     body.append(el("p",{class:"hint",style:"margin:-4px 2px 0",text:`${capi(mesLargo(U.mes))}${(R.resumenMes&&R.resumenMes.provisorio)?" (provisorio)":""}: entraron ${moneyK(U.ingresos)} y salieron ${moneyK(U.egresos)}${U.retiros?` (con ${moneyK(U.retiros)} de retiros de socios)`:""}${U.ajusteGC<-1?` · ya descontados ${moneyK(-U.ajusteGC)} de grandes cuentas contados dos veces`:""}. ${sem.titulo||""}`})); }
   // 3.9p · Aviso para María: pagos que todos los meses se cargan y este mes todavía no
   if (D.maria && R.cierre && R.cierre.checklists){ const Lc = R.cierre.checklists.find(x=>!x.enCurso && x.alertasPago);   // 3.9zl · solo un mes cerrado al que le falta algo
@@ -3238,8 +3243,8 @@ function tabVentas(R, PR, K){
     if (SX.filas.length){
       const tc = SX.filas.map(f=>fila(f.sector, f.valores, f.anio));
       if (SX.cajaPalermo.some(Boolean)) tc.splice(1,0, el("tr",{class:"caja38"}, el("th",{scope:"row",text:"↳ Palermo según caja"}), ...SX.cajaPalermo.map((v,i)=>el("td",{class:"n",text:v?moneyK(v):"–"})), el("td",{})));
-      tc.push(fila("Total cobrado", M.map((m,i)=>SX.filas.reduce((a,f)=>a+f.valores[i],0)), SX.filas.reduce((a,f)=>a+f.anio,0), "tot38"));
-      card.append(el("details",{class:"mas39"}, el("summary",{text:"Ver lo cobrado por sector (Templete)"}),
+      tc.push(fila("Total (con facturado sin cargar y ajuste de grandes cuentas)", M.map((m,i)=>SX.filas.reduce((a,f)=>a+f.valores[i],0)), SX.filas.reduce((a,f)=>a+f.anio,0), "tot38"));
+      card.append(el("details",{class:"mas39"}, el("summary",{text:"Ver lo que entró por sector (Templete + facturado sin cargar − ajuste de grandes cuentas)"}),
         el("p",{class:"hint",text:"La plata que entró según el Templete. No se suma a lo facturado: es la misma venta vista del lado del cobro."}),
         el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cabe("Sector")), el("tbody",{},tc)))));
     }
@@ -3300,7 +3305,7 @@ function tabGrandes(R){
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
       av.length ? el("ul",{class:"ant38-av"}, av.map(t=>el("li",{text:"🟡 "+t}))) : el("p",{class:"hint",text:"✅ Contabilium y la planilla de cuentas corrientes coinciden."}),
       el("details",{class:"mas39"}, el("summary",{text:"¿De dónde sale cada columna?"}),
-        el("p",{class:"hint",text:"Pidió = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre Contabilium (lo aplicado a las facturas SS27 + los cobros «a cuenta» sin imputar) y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Debe hoy = seña del 50 % del pedido inicial + 50 % de cada factura SS27 (Córdoba: lo despachado, sin seña) − lo abonado, más lo que se debía de antes y menos las notas de crédito a favor."}),
+        el("p",{class:"hint",text:"Pidió = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre Contabilium (lo aplicado a las facturas SS27 + los cobros «a cuenta» sin imputar) y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Debe hoy = seña del 50 % del pedido inicial + 50 % de lo SS27 de cada factura (Córdoba: lo SS27 despachado, sin seña) − lo abonado. Es la misma cuenta del Plan de pagos. La deuda anterior a SS27 y las notas de crédito abiertas se avisan aparte."}),
         el("p",{class:"hint",text:`Contabilium leído ${G.leida.contabilium?fechaHora(G.leida.contabilium):"–"} · planilla modificada ${G.leida.cuentaCorriente?fechaHora(G.leida.cuentaCorriente):"–"}.`}))));
   }
   // 3.9zi · «Lo que nos deben (todos los clientes)» se sacó: repetía lo de Cobranzas a validar y la descarga de Control.
@@ -3329,7 +3334,7 @@ const cardCorregir39 = av => el("div",{class:"card"}, el("h3",{text:"📋 Para c
 /** Lista «Para corregir en el Templete» (Contabilium vs Templete). */
 function avisosCorregir39(R){ const K = R.contabilium || {}, av = [];
   if (K.ok) (K.conciliacion||[]).forEach(c=>{
-    if (c.montoFalta) av.push(`🧾 ${capi(mesLargo(c.mes))}: ${c.faltaCargar.length} facturas por ${moneyK(c.montoFalta)} todavía no están en el Templete (ya se suman al panel).`);
+    if (c.montoFalta) av.push(`🧾 ${capi(mesLargo(c.mes))}: ${c.nFalta!=null?c.nFalta:c.faltaCargar.length} facturas por ${moneyK(c.montoFalta)} todavía no están en el Templete (ya se suman al panel).`);
     if (c.diferencias.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.diferencias.length} facturas con importe distinto.`);
     if (c.noEnCtb.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.noEnCtb.length} facturas del Templete no están en Contabilium.`);
     if (c.anuladas.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.anuladas.length} facturas anuladas siguen como venta en el Templete.`); });
@@ -3392,7 +3397,7 @@ function tabControl(D, R, K, recargar){
   // Facturas del mes en curso que faltan cargar + repetidas
   const av = [];
   if (K.ok) (K.conciliacion||[]).forEach(c=>{
-    if (c.montoFalta) av.push(`🧾 ${capi(mesLargo(c.mes))}: ${c.faltaCargar.length} facturas por ${moneyK(c.montoFalta)} todavía no están en el Templete (ya se suman al panel).`);
+    if (c.montoFalta) av.push(`🧾 ${capi(mesLargo(c.mes))}: ${c.nFalta!=null?c.nFalta:c.faltaCargar.length} facturas por ${moneyK(c.montoFalta)} todavía no están en el Templete (ya se suman al panel).`);
     if (c.diferencias.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.diferencias.length} facturas con importe distinto.`);
     if (c.noEnCtb.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.noEnCtb.length} facturas del Templete no están en Contabilium.`);
     if (c.anuladas.length) av.push(`🟡 ${capi(mesLargo(c.mes))}: ${c.anuladas.length} facturas anuladas siguen como venta en el Templete.`); });
@@ -3651,9 +3656,9 @@ function tabLiquidez39(R){
     const B = BAL.find(b=>b.mes===mes), M = (R.meses||[]).find(x=>x.mes===mes), ult = BAL[BAL.length-1];
     const card = el("div",{class:"card"}, el("h2",{style:"margin:0 0 8px",text:`💧 ${capi(mesLargo(mes))}${mes===mesHoy?" · en curso":""}`}));
     const k = el("div",{class:"hkpis"});
-    if (M) k.append(hk("💵 Entró", moneyK(M.ingresos), M.ctbFalta>1?`incluye ${moneyK(M.ctbFalta)} facturado sin cargar en el Templete`:"según el Templete", "pos"), hk("💸 Salió", moneyK(M.egresos), M.retiros?`con ${moneyK(M.retiros)} de retiros`:"según el Templete", "neg"),
+    if (M) k.append(hk("💵 Entró", moneyK(M.ingresos), [M.ctbFalta>1?`incluye ${moneyK(M.ctbFalta)} facturado sin cargar`:"", (M.ajusteGC||0)<-1?`sin ${moneyK(-M.ajusteGC)} de grandes cuentas contados dos veces`:"", (M.otrosIngresos||0)>1?`${moneyK(M.otrosIngresos)} no son ventas`:""].filter(Boolean).join(" · ")||"según el Templete", "pos"), hk("💸 Salió", moneyK(M.egresos), M.retiros?`con ${moneyK(M.retiros)} de retiros`:"según el Templete", "neg"),
       hk(M.ingresos-M.egresos>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(M.ingresos-M.egresos)), "entró − salió", M.ingresos-M.egresos>=0?"pos":"neg"));
-    if (B) k.append(hk("🏦 En cajas y bancos", moneyK(B.dispTotal), "saldo al cierre del mes", B.dispTotal>0?"pos":"neg"));
+    if (B && B.dispTotal) k.append(hk("🏦 En cajas y bancos", moneyK(B.dispTotal), "saldo al cierre del mes", B.dispTotal>0?"pos":"neg"));   // 3.9zw · un mes sin saldo cargado no se muestra como «$ 0» en rojo
     if (mes===mesHoy && CB) k.append(hk("🤝 Nos deben hoy", moneyK(CB.total), `vencido ${moneyK(CB.vencido)}${CB.aCuentaDescontado?` · ya descontados ${moneyK(CB.aCuentaDescontado)} de cobros «a cuenta» sin imputar`:""}`));
     card.append(k);
     if (B && (B.disp||[]).filter(x=>x.monto>0).length){ const pal = ["#0F766E","#14B8A6","#2563EB","#7C3AED","#0891B2","#B45309","#64748B","#DB2777"];
@@ -4509,7 +4514,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zv";
+const APP_V = "3.9zw";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
