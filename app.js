@@ -3165,7 +3165,7 @@ function pintarFinanzas(body, D, recargar){
           el("p",{class:"lead",text:`Lo cargado en el Templete hasta ${S.ultimaCarga?fmtF(S.ultimaCarga):"hoy"}. Los pagos del mes (sueldos, alquileres) se cargan después: lo que salió va a subir.`}))),
       el("div",{class:"hkpis"},
         hk("💵 Entró", moneyK(cajaC), "cobrado y cargado en el Templete"+((C.ajusteGC||0)<-1?` (ya sin ${moneyK(-C.ajusteGC)} de grandes cuentas contados dos veces)`:""), "pos"),
-        C.ctbFalta>1 ? hk("🧾 Facturado sin cargar", moneyK(C.ctbFalta), "Contabilium: falta cargarlo en el Templete (no se suma a lo que entró)") : null,
+        C.facturadoSinCargar>1 ? hk("🧾 Facturado sin cargar", moneyK(C.facturadoSinCargar), "Contabilium: falta cargarlo en el Templete (no se suma a lo que entró)") : null,
         hk("💸 Salió", moneyK(C.egresos), "en lo que va del mes", "neg"),
         U && !(R.resumenMes && R.resumenMes.mes===U.mes && R.resumenMes._card) ? hk("📆 "+capi(MESL(U.mes))+((R.resumenMes&&R.resumenMes.provisorio)?" (provisorio)":" cerró"), (U.neto>=0?"+":"−")+moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"en contra", U.neto<0?"neg":"pos") : null),
       E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que vender ${moneyK(E.necesario)} en el mes${vC<E.necesario&&dia<dm?` · van ${moneyK(vC)}, faltan ${moneyK(E.necesario-vC)} en ${dm-dia} días`:""}.`}), medidorVenta(vC, E.necesario)) : null));
@@ -3659,7 +3659,7 @@ function tabLiquidez39(R){
     if (M) k.append(hk("💵 Entró", moneyK(M.ingresos), [M.ctbFalta>1?`incluye ${moneyK(M.ctbFalta)} facturado sin cargar`:"", (M.ajusteGC||0)<-1?`sin ${moneyK(-M.ajusteGC)} de grandes cuentas contados dos veces`:"", (M.otrosIngresos||0)>1?`${moneyK(M.otrosIngresos)} no son ventas`:""].filter(Boolean).join(" · ")||"según el Templete", "pos"), hk("💸 Salió", moneyK(M.egresos), M.retiros?`con ${moneyK(M.retiros)} de retiros`:"según el Templete", "neg"),
       hk(M.ingresos-M.egresos>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(M.ingresos-M.egresos)), "entró − salió", M.ingresos-M.egresos>=0?"pos":"neg"));
     if (B && B.dispTotal) k.append(hk("🏦 En cajas y bancos", moneyK(B.dispTotal), "saldo al cierre del mes", B.dispTotal>0?"pos":"neg"));   // 3.9zw · un mes sin saldo cargado no se muestra como «$ 0» en rojo
-    if (mes===mesHoy && CB) k.append(hk("🤝 Nos deben hoy", moneyK(CB.total), `vencido ${moneyK(CB.vencido)}${CB.aCuentaDescontado?` · ya descontados ${moneyK(CB.aCuentaDescontado)} de cobros «a cuenta» sin imputar`:""}`));
+    if (mes===mesHoy && CB) k.append(hk("🤝 Nos deben hoy", moneyK(CB.total), `vencido ${moneyK(CB.vencido)}${CB.aCuentaDescontado?` · ya descontados ${moneyK(CB.aCuentaDescontado)} de cobros «a cuenta» sin imputar${CB.aCuentaLeida?` (lista del ${fmtF(String(CB.aCuentaLeida).slice(0,10))})`:""}`:""}`));
     card.append(k);
     if (B && (B.disp||[]).filter(x=>x.monto>0).length){ const pal = ["#0F766E","#14B8A6","#2563EB","#7C3AED","#0891B2","#B45309","#64748B","#DB2777"];
       card.append(el("p",{class:"k",style:"margin-top:12px",text:"Dónde está la plata"}), apilada39(B.disp.filter(x=>x.monto>0).map((x,i)=>({nombre:x.nombre, monto:x.monto, color:pal[i%pal.length]})))); }
@@ -4514,7 +4514,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zw";
+const APP_V = "3.9zx";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
