@@ -3119,6 +3119,8 @@ function formContabilium(recargar){
     el("p",{class:"lead",text:"🔒 Conectar Contabilium (solo lo ves vos). En Contabilium: tu nombre → Configuración → API → Credenciales. Copiá y pegá los dos datos acá. Se verifican con Contabilium y se guardan en el servidor; no quedan en el teléfono."}),
     id, sec, err, b);
 }
+/** 3.9zv · Fecha de HOY en Argentina (aaaa-mm-dd): nunca la de UTC (después de las 21 h daba el día siguiente). */
+function hoyAR39(){ return new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date()); }
 /* 3.9m · Pantalla compacta: arriba «Cómo venimos» (lo justo); el resto en pestañas. Lo que no tiene datos no se muestra. */
 function pintarFinanzas(body, D, recargar){
   if (!D.conectado){
@@ -3136,8 +3138,10 @@ function pintarFinanzas(body, D, recargar){
   // ===== 0 · 3.9s · Pantallazo del mes que cerró (se muestra los primeros 10 días del mes siguiente)
   if (R.resumenMes){ const RM = R.resumenMes, hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date());
     const ant = (()=>{ const d=new Date(hoyAR.slice(0,7)+"-15T12:00:00Z"); d.setUTCMonth(d.getUTCMonth()-1); return d.toISOString().slice(0,7); })();
-    if (RM.mes === ant && Number(hoyAR.slice(8,10)) <= 10){ const PV = RM.privado || {};
-      body.append(el("div",{class:"card cierre-mes39"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"📆 Así cerró "+mesLargo(RM.mes)}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"Pantallazo del 1° · "+fechaHora(RM.generado)})),
+    // 3.9zv · Ahora es EN VIVO (los mismos números que el resto del panel) y dice «provisorio» mientras falten puntos del cierre del mes
+    if (RM.mes === ant && (Number(hoyAR.slice(8,10)) <= 10 || RM.provisorio)){ const PV = RM.privado || {};
+      body.append(el("div",{class:"card cierre-mes39"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:(RM.provisorio?"📆 Así viene cerrando ":"📆 Así cerró ")+mesLargo(RM.mes)}), el("span",{class:"spacer"}),
+          el("span",{class:"pill "+(RM.provisorio?"warn":"ok"),text:RM.provisorio?("Provisorio"+(RM.pendientesCierre?` · faltan ${RM.pendientesCierre} puntos del cierre`:" · todavía se cargan sueldos y pagos")):"Cerrado"})),
         el("div",{class:"hkpis",style:"margin-top:10px"}, hk("💵 Entró", moneyK(RM.ingresos), "", "pos"), hk("💸 Salió", moneyK(RM.egresos), "", "neg"), hk(RM.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(RM.neto)), RM.retiros?`con ${moneyK(RM.retiros)} de retiros`:"", RM.neto<0?"neg":"pos"),
           RM.facturado!=null ? hk("🧾 Facturado", moneyK(RM.facturado), "Contabilium, con IVA") : null),
         el("ul",{class:"sem38-lista"}, RM.puntos.map(t=>el("li",{text:t}))),
@@ -3146,29 +3150,31 @@ function pintarFinanzas(body, D, recargar){
   const E = S.equilibrio, FXc = R.sectores && R.sectores.facturado ? R.sectores.facturado.totalConIva[2] : 0;
   if (C){
     const hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date()), dia = Number(hoyAR.slice(8,10)), dm = new Date(Number(C.mes.slice(0,4)), Number(C.mes.slice(5,7)), 0).getDate();
-    const neto = C.ingresos - C.egresos, color = neto >= 0 ? "verde" : (E && C.ingresos >= E.necesario*dia/dm ? "amarillo" : "rojo");
-    const titulo = neto >= 0 ? `Por ahora quedan ${moneyK(neto)} a favor` : `Por ahora salió ${moneyK(-neto)} más de lo que entró`;
+    // 3.9zv · Palermo arranca el mes el primer miércoles (abre mié–sáb): la primera semana no se marca «en rojo»; el equilibrio se mide con VENTAS
+    const arranque = dia <= 7, vC = C.ventas!=null ? C.ventas : C.ingresos;
+    const neto = C.ingresos - C.egresos, color = neto >= 0 ? "verde" : (arranque || (E && vC >= E.necesario*dia/dm) ? "amarillo" : "rojo");
+    const titulo = neto >= 0 ? `Por ahora quedan ${moneyK(neto)} a favor` : arranque ? "Arranque de mes: todavía es temprano para sacar conclusiones" : `Por ahora salió ${moneyK(-neto)} más de lo que entró`;
     body.append(el("div",{class:"card sem38 sem-"+color},
       el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:{verde:"🟢",amarillo:"🟡",rojo:"🔴"}[color]}),
         el("div",{}, el("span",{class:"k",text:`Cómo venimos · ${mesLargo(C.mes)} (día ${dia} de ${dm})`}), el("h2",{text:titulo}),
-          el("p",{class:"lead",text:`Lo cargado en el Templete hasta ${S.ultimaCarga?fmtF(S.ultimaCarga):"hoy"}. Puede haber cobros que todavía no se cargaron.`}))),
+          el("p",{class:"lead",text:`Lo cargado en el Templete hasta ${S.ultimaCarga?fmtF(S.ultimaCarga):"hoy"}${C.ctbFalta>1?`, más ${moneyK(C.ctbFalta)} de facturas de Contabilium que todavía no se cargaron`:""}. Los pagos del mes (sueldos, alquileres) se cargan después: lo que salió va a subir.`}))),
       el("div",{class:"hkpis"},
-        hk("💵 Entró", moneyK(C.ingresos), "en lo que va del mes", "pos"),
+        hk("💵 Entró", moneyK(C.ingresos), C.ctbFalta>1 ? `${moneyK(C.templete+(C.ajusteGC||0))} cargado en el Templete + ${moneyK(C.ctbFalta)} facturado en Contabilium sin cargar` : "en lo que va del mes", "pos"),
         hk("💸 Salió", moneyK(C.egresos), "en lo que va del mes", "neg"),
         FXc ? hk("🧾 Facturado", moneyK(FXc), "Contabilium, con IVA") : null,
-        U ? hk("📆 "+capi(MESL(U.mes))+" cerró", (U.neto>=0?"+":"−")+moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"en contra", U.neto<0?"neg":"pos") : null),
-      E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que llegar a ${moneyK(E.necesario)} en el mes${C.ingresos<E.necesario&&dia<dm?` · faltan ${moneyK(E.necesario-C.ingresos)} en ${dm-dia} días`:""}.`}), medidorVenta(C.ingresos, E.necesario)) : null));
+        U ? hk("📆 "+capi(MESL(U.mes))+((R.resumenMes&&R.resumenMes.provisorio)?" (provisorio)":" cerró"), (U.neto>=0?"+":"−")+moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"en contra", U.neto<0?"neg":"pos") : null),
+      E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que vender ${moneyK(E.necesario)} en el mes${vC<E.necesario&&dia<dm?` · van ${moneyK(vC)}, faltan ${moneyK(E.necesario-vC)} en ${dm-dia} días`:""}.`}), medidorVenta(vC, E.necesario)) : null));
   } else if (U){
     const sem = S.semaforo || {color:"amarillo",titulo:"",texto:""};
     body.append(el("div",{class:"card sem38 sem-"+sem.color},
       el("div",{class:"sem38-cab"}, el("span",{class:"sem38-luz",text:{verde:"🟢",amarillo:"🟡",rojo:"🔴"}[sem.color]}), el("div",{}, el("span",{class:"k",text:"Cómo venimos · "+mesLargo(U.mes)}), el("h2",{text:sem.titulo}), sem.texto?el("p",{class:"lead",text:sem.texto}):null)),
       el("div",{class:"hkpis"}, hk("💵 Entró", moneyK(U.ingresos), P?vsNormal(U.ingresos,P.ingresos):"", "pos"), hk("💸 Salió", moneyK(U.egresos), P?vsNormal(U.egresos,P.egresos):"", "neg"),
         hk(U.neto>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(U.neto)), U.retiros?`con ${moneyK(U.retiros)} de retiros de socios`:"", U.neto<0?"neg":"pos")),
-      E ? medidorVenta(U.ingresos, E.necesario) : null));
+      E ? medidorVenta(U.ventas!=null?U.ventas:U.ingresos, E.necesario) : null));
   }
   // Mes cerrado en una línea (el detalle está en «La plata»)
   if (C && U){ const sem = S.semaforo || {};
-    body.append(el("p",{class:"hint",style:"margin:-4px 2px 0",text:`${capi(mesLargo(U.mes))}: entraron ${moneyK(U.ingresos)} y salieron ${moneyK(U.egresos)}${U.retiros?` (con ${moneyK(U.retiros)} de retiros de socios)`:""}. ${sem.titulo||""}`})); }
+    body.append(el("p",{class:"hint",style:"margin:-4px 2px 0",text:`${capi(mesLargo(U.mes))}${(R.resumenMes&&R.resumenMes.provisorio)?" (provisorio)":""}: entraron ${moneyK(U.ingresos)} y salieron ${moneyK(U.egresos)}${U.retiros?` (con ${moneyK(U.retiros)} de retiros de socios)`:""}${U.ajusteGC<-1?` · ya descontados ${moneyK(-U.ajusteGC)} de grandes cuentas contados dos veces`:""}. ${sem.titulo||""}`})); }
   // 3.9p · Aviso para María: pagos que todos los meses se cargan y este mes todavía no
   if (D.maria && R.cierre && R.cierre.checklists){ const Lc = R.cierre.checklists.find(x=>!x.enCurso && x.alertasPago);   // 3.9zl · solo un mes cerrado al que le falta algo
     if (Lc && Lc.alertasPago) body.append(el("div",{class:"card notice warn row"}, el("span",{text:`🔔 En ${MESL(Lc.mes)} faltan cargar ${Lc.alertasPago} pagos que cargás todos los meses (sueldos y gastos fijos), con Mes «${Lc.mes.slice(2)}».`}), el("span",{class:"spacer"}),
@@ -3294,7 +3300,7 @@ function tabGrandes(R){
       el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},cab), el("tbody",{},filas))),
       av.length ? el("ul",{class:"ant38-av"}, av.map(t=>el("li",{text:"🟡 "+t}))) : el("p",{class:"hint",text:"✅ Contabilium y la planilla de cuentas corrientes coinciden."}),
       el("details",{class:"mas39"}, el("summary",{text:"¿De dónde sale cada columna?"}),
-        el("p",{class:"hint",text:"Pidió = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre las cobranzas de Contabilium (también las «a cuenta») y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Hoy = lo abonado contra lo ya despachado (más lo que se debía de antes)."}),
+        el("p",{class:"hint",text:"Pidió = «Control ingreso Nueva temporada 27». Abonó = lo mayor entre Contabilium (lo aplicado a las facturas SS27 + los cobros «a cuenta» sin imputar) y los pagos SS27 de la planilla de cuentas corrientes. Despachado = facturas de Contabilium desde el 1/9. Debe hoy = seña del 50 % del pedido inicial + 50 % de cada factura SS27 (Córdoba: lo despachado, sin seña) − lo abonado, más lo que se debía de antes y menos las notas de crédito a favor."}),
         el("p",{class:"hint",text:`Contabilium leído ${G.leida.contabilium?fechaHora(G.leida.contabilium):"–"} · planilla modificada ${G.leida.cuentaCorriente?fechaHora(G.leida.cuentaCorriente):"–"}.`}))));
   }
   // 3.9zi · «Lo que nos deben (todos los clientes)» se sacó: repetía lo de Cobranzas a validar y la descarga de Control.
@@ -3310,7 +3316,8 @@ function tabGrandes(R){
     else {
       CC.cuentas.forEach(c=>det.append(el("p",{}, el("b",{text:c.granCuenta}), ` · ${c.estado==="a favor"?"a favor "+moneyK(-c.saldo):c.estado==="debe"?"debe "+moneyK(c.saldo):"saldado"} · último movimiento ${c.ultimo?fmtF(c.ultimo):"–"}`,
         c.avisos.length ? el("span",{class:"pill bad",text:` ${c.avisos.length} para revisar`}) : null)));
-      if ((R.dobleConteo||[]).length) det.append(el("p",{class:"notice warn",text:`Posible doble conteo: ${R.dobleConteo.map(x=>`factura ${x.factura} de ${x.granCuenta} (${moneyK(x.monto)})`).join("; ")}. No se descontó nada: revisalo.`}));
+      const AJ = R.ajustesGC && (R.ajustesGC.detalle||[]).filter(x=>x.ajuste);   // 3.9zv · regla de caja: el «entró» de cada gran cuenta nunca supera lo que pagó
+      if (AJ && AJ.length) det.append(el("p",{class:"notice",text:`Regla de caja de grandes cuentas (no contar dos veces factura + anticipo): ${AJ.map(x=>`${x.granCuenta} ${mesLargo(x.mes)}: en el Templete ${moneyK(x.templete)}, pagó ${moneyK(x.pagado)} → ${x.ajuste<0?"se descuentan":"se suman"} ${moneyK(Math.abs(x.ajuste))}`).join(" · ")}. Detalle en la descarga (hoja «Ajuste grandes cuentas»).`}));
       det.append(el("p",{class:"hint",text:`«${CC.archivo}», modificada ${fechaHora(CC.modificado)}. El detalle está en la descarga (hojas «Cuentas corrientes» y «Grandes cuentas SS27»).`}));
     }
     out.push(det);
@@ -3468,15 +3475,16 @@ function cardPanorama39(P){
 }
 function cardPagos39(G){
   if (!G || !(G.lista||[]).length) return null;
-  const pend = G.lista.filter(p=>p.estado!=="pagado"), pag = G.lista.filter(p=>p.estado==="pagado");
+  const pend = G.lista.filter(p=>p.estado!=="pagado"&&p.estado!=="mes_vencido"), pag = G.lista.filter(p=>p.estado==="pagado"), venc = G.lista.filter(p=>p.estado==="mes_vencido");   // 3.9zv
   const item = p => el("li",{class:p.ultimo?"ult39":""}, el("span",{class:"sem",text:p.ultimo?"🏁":p.estado==="pagado"?"✅":p.estado==="parcial"?"🟡":"⏳"}),
     el("div",{}, el("b",{text:p.nombre}), ` · ${p.estado==="pagado"?"pagado "+moneyK(p.pagado):"lo normal: "+moneyK(p.promedio)}`,
       p.estado==="parcial" ? el("span",{class:"hint",text:` (cargado ${moneyK(p.pagado)})`}) : null,
       p.dia && p.estado!=="pagado" ? el("span",{class:"hint",text:` · suele pagarse alrededor del día ${p.dia}`}) : null,
-      p.nota ? el("div",{class:"pill ok",style:"margin-top:4px",text:"🏁 "+p.nota}) : null));
+      p.nota ? el("div",{class:"pill ok",style:"margin-top:4px",text:(p.estado==="mes_vencido"?"🗓️ ":"🏁 ")+p.nota}) : null));
   return el("div",{class:"card pag39"}, el("h2",{text:`🗓️ Pagos que se hacen todos los meses · ${capi(MESL(G.mes))}`}),
     el("p",{class:"lead",text: pend.length ? `Faltan ${pend.length} ${pend.length===1?"pago":"pagos"} por unos ${moneyK(G.pendiente)}.` : "Ya están todos cargados en el Templete."}),
     pend.length ? el("ul",{class:"alertas-rrhh"}, pend.map(item)) : null,
+    venc.length ? el("details",{class:"mas39"}, el("summary",{text:`Se pagan a mes vencido (${venc.length}, unos ${moneyK(G.aMesVencido||0)}): se cargan el mes que viene`}), el("ul",{class:"alertas-rrhh"}, venc.map(item))) : null,
     pag.length ? el("details",{class:"mas39"}, el("summary",{text:`Ya pagados este mes (${pag.length})`}), el("ul",{class:"alertas-rrhh"}, pag.map(item))) : null,
     el("p",{class:"hint",text:"Se arma solo con lo que se repite en el Templete en los últimos meses (los sueldos van juntos, sin detalle por persona)."}));
 }
@@ -3548,7 +3556,7 @@ function pintarCob39(cont, recargar){
   const col = ["Estado","Local","Factura","Cliente","Fecha","Días","Total","Saldo","Cobro: fecha","Medio de pago","Cobro: importe","Fila Templete","En Contabilium","Qué hacer"];
   const est = Object.fromEntries(COB_GRUPOS39.map(g=>[g[0],g[1].replace(/^\S+\s/,"")]));
   const filas = L => L.map(x=>[est[x.estado], x.local, x.cot, x.cliente, fCob39(x.fecha), x.dias, x.total, x.saldo, x.cobro?fCob39(x.cobro.fecha):"", txtMedios39(x), x.cobro?x.cobro.monto:"", x.cobro?x.cobro.fila:"", [...(x.mixto?[`Dos modalidades: ${x.mixto.map(m=>m.medio+" "+m.monto+(m.estado==="falta"?" (falta cargar)":" (ya cargado)")).join(" + ")}`]:[]), x.reciboSuelto?`Recibo sin aplicar ${x.reciboSuelto.numero} por ${x.reciboSuelto.libre}: ${x.reciboSuelto.medios.map(m=>m.medio+" "+m.monto).join(" + ")}`:""].filter(Boolean).join(" · "), x.motivo]);
-  const D = { titulo:"Cobranzas a validar · Palermo 0001 y Janette 0007", archivo:`Cobranzas_a_validar_${new Date().toISOString().slice(0,10)}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"",
+  const D = { titulo:"Cobranzas a validar · Palermo 0001 y Janette 0007", archivo:`Cobranzas_a_validar_${hoyAR39()}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"",
     hojas: COB_GRUPOS39.map(([k,t])=>({ nombre:t.replace(/^\S+\s/,"").slice(0,31), columnas:col, dinero:[6,7,10], totales:[7], filas:filas(R.lista.filter(x=>x.estado===k)) })).filter(h=>h.filas.length) };
   const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
   bx.onclick = async ()=>{ spinBtn(bx,"Armando…"); try{ await exportarXLSX37(D); }catch(e){ toast(msgErr(e)); } unspin(bx); };
@@ -3643,10 +3651,10 @@ function tabLiquidez39(R){
     const B = BAL.find(b=>b.mes===mes), M = (R.meses||[]).find(x=>x.mes===mes), ult = BAL[BAL.length-1];
     const card = el("div",{class:"card"}, el("h2",{style:"margin:0 0 8px",text:`💧 ${capi(mesLargo(mes))}${mes===mesHoy?" · en curso":""}`}));
     const k = el("div",{class:"hkpis"});
-    if (M) k.append(hk("💵 Entró", moneyK(M.ingresos), "según el Templete", "pos"), hk("💸 Salió", moneyK(M.egresos), M.retiros?`con ${moneyK(M.retiros)} de retiros`:"según el Templete", "neg"),
+    if (M) k.append(hk("💵 Entró", moneyK(M.ingresos), M.ctbFalta>1?`incluye ${moneyK(M.ctbFalta)} facturado sin cargar en el Templete`:"según el Templete", "pos"), hk("💸 Salió", moneyK(M.egresos), M.retiros?`con ${moneyK(M.retiros)} de retiros`:"según el Templete", "neg"),
       hk(M.ingresos-M.egresos>=0?"✅ Quedó":"⚠️ Faltó", moneyK(Math.abs(M.ingresos-M.egresos)), "entró − salió", M.ingresos-M.egresos>=0?"pos":"neg"));
     if (B) k.append(hk("🏦 En cajas y bancos", moneyK(B.dispTotal), "saldo al cierre del mes", B.dispTotal>0?"pos":"neg"));
-    if (mes===mesHoy && CB) k.append(hk("🤝 Nos deben hoy", moneyK(CB.total), `vencido ${moneyK(CB.vencido)}`));
+    if (mes===mesHoy && CB) k.append(hk("🤝 Nos deben hoy", moneyK(CB.total), `vencido ${moneyK(CB.vencido)}${CB.aCuentaDescontado?` · ya descontados ${moneyK(CB.aCuentaDescontado)} de cobros «a cuenta» sin imputar`:""}`));
     card.append(k);
     if (B && (B.disp||[]).filter(x=>x.monto>0).length){ const pal = ["#0F766E","#14B8A6","#2563EB","#7C3AED","#0891B2","#B45309","#64748B","#DB2777"];
       card.append(el("p",{class:"k",style:"margin-top:12px",text:"Dónde está la plata"}), apilada39(B.disp.filter(x=>x.monto>0).map((x,i)=>({nombre:x.nombre, monto:x.monto, color:pal[i%pal.length]})))); }
@@ -3699,7 +3707,8 @@ function tabLiquidez39(R){
         RD.fci ? hk("En un FCI rinde", moneyK(RD.fci.porMes)+" por mes", `TNA ${String(RD.fci.tna).replace(".",",")} % · se puede sacar cuando haga falta`, "pos") : null,
         RD.plazoFijo ? hk("En plazo fijo rinde", moneyK(RD.plazoFijo.porMes)+" por mes", `${RD.plazoFijo.banco} · TNA ${String(RD.plazoFijo.tna).replace(".",",")} % · queda inmovilizada 30 días`) : null) : null,
       opc.length ? el("div",{class:"bh38"}, opc.map(o=>el("div",{class:"bh-fila"}, el("span",{class:"bh-n",text:o.nombre}), el("span",{class:"bh-b"}, el("i",{style:`width:${(o.tna/mx*100).toFixed(1)}%;background:${o.color}`})), el("b",{class:"bh-v",text:`TNA ${String(o.tna).replace(".",",")} %`})))) : null,
-      RD && !RD.libre ? el("p",{class:"hint",text:"Hoy no sobra plata para invertir: primero se cubren los pagos del mes y el colchón."}) : null,
+      RD && RD.viejo ? el("p",{class:"notice warn",text:`⚠️ Estos números salen de los saldos de cajas y bancos de ${mesLargo(RD.base)} (hoja «cierre» del Templete), que no está al día: no sirven para decidir hoy. Actualizá la hoja «cierre» con los saldos del último mes.`})
+        : RD && !RD.libre ? el("p",{class:"hint",text:`Con los saldos de ${mesLargo(RD.base)} no sobra plata para invertir: primero se cubren los pagos del mes y el colchón.`}) : null,
       el("p",{class:"hint",text:`Tasas del día de ${T.fuente||"fuente pública"}${T.fci?` (FCI: mediana de los fondos money market más grandes al ${fmtF(T.fci.fecha)})`:""}, leídas ${T.leida?fechaHora(T.leida):"–"}. Son informativas: no es una recomendación de inversión; antes de mover la plata, confirmá la tasa en el banco o la ALyC.`})));
   }
   return out;
@@ -3774,7 +3783,7 @@ function pintarCobPasos39(cont, recargar){
   const recPend = SI.filter(r=>!R.recibosMarcados[r.numero]), recMarc = SI.filter(r=>R.recibosMarcados[r.numero]);
   const n = k => k==="imputar" ? recPend.length + grupos.imputar.length : k==="marcadas" ? grupos.marcadas.length + recMarc.length : grupos[k].length;
   const monto = k => (k==="imputar" ? recPend.reduce((a,r)=>a+r.libre,0) : 0) + grupos[k].reduce((a,x)=>a+x.saldo,0);
-  const pend = ["imputar","registrar","revisar","reclamar"].reduce((a,k)=>a+n(k),0), cerr = (R.confirmadas||[]).filter(c=>String(c.confirmada||"").slice(0,7)===new Date().toISOString().slice(0,7)).length;
+  const pend = ["imputar","registrar","revisar","reclamar"].reduce((a,k)=>a+n(k),0), cerr = (R.confirmadas||[]).filter(c=>String(c.confirmada||"").slice(0,7)===hoyAR39().slice(0,7)).length;
   const bA = el("button",{class:"btn sm",type:"button",text:"🔄 Leer de nuevo"}); bA.onclick = ()=>recargar(bA);
   const colP = { imputar:CZM39.bad, registrar:CZM39.warn, revisar:"#64748B", reclamar:"#7C3AED" };
   cont.append(el("div",{class:"card"},
@@ -3815,7 +3824,7 @@ function pintarCobPasos39(cont, recargar){
   if (SI.length) hojas.unshift({ nombre:"Recibos a imputar", columnas:["Recibo","Cliente","Fecha","Días","Importe","Sin imputar","Medios","Imputar a","Qué hacer","Marcado"], dinero:[4,5], totales:[5],
     filas: SI.map(r=>[r.numero, r.cliente, fCob39(r.fecha), r.dias, r.importe, r.libre, (r.medios||[]).map(m=>m.medio+" "+m.monto).join(" + "), r.aplicarA.join(", "), r.accion, R.recibosMarcados[r.numero]?"Sí":""]) });
   if ((R.diagnostico||[]).length) hojas.push({ nombre:"Qué está fallando", columnas:["Problema","Cantidad","Monto","Qué pasó","Cómo evitarlo"], dinero:[2], filas:R.diagnostico.map(d=>[d.titulo,d.n,d.monto,d.que,d.evitar]) });
-  const D = { titulo:"Cobranzas por cerrar · Palermo y Janette", archivo:`Cobranzas_${new Date().toISOString().slice(0,10)}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"", hojas };
+  const D = { titulo:"Cobranzas por cerrar · Palermo y Janette", archivo:`Cobranzas_${hoyAR39()}`, actualizado:R.leida, generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"", hojas };
   const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF"});
   bx.onclick = async ()=>{ spinBtn(bx,"Armando…"); try{ await exportarXLSX37(D); }catch(e){ toast(msgErr(e)); } unspin(bx); };
   bp.onclick = async ()=>{ spinBtn(bp,"Armando…"); try{ await exportarPDF37(D); }catch(e){ toast(msgErr(e)); } unspin(bp); };
@@ -4500,7 +4509,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zm4";
+const APP_V = "3.9zv";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
