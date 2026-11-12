@@ -280,7 +280,7 @@ function setUser(r){
   S.token=r.token; S.user=r.user; S.perms=r.user.permisos||[]; S.params={...DEF,...(r.params||{})};
   if (r.politica) S.politica=r.politica;
   if (r.elev) S.elevTs=Date.now();
-  S.persistente = r.user.rol!=="empleado"; S.ultimoApi=Date.now();
+  S.persistente = r.user.rol!=="empleado" || (r.user.permisos||[]).length>0; S.ultimoApi=Date.now();
   sesGuardar(r.token, {user:r.user, params:S.params, politica:S.politica});
   $("who").textContent = `${r.user.nombre} · ${rolTxt(r.user)}`;
   $("btn-salir").hidden = S.view==="home"; bumpIdle();
@@ -317,7 +317,7 @@ function vAcceso(main){
   main.textContent="";
   main.append(el("div",{class:"modhead",style:"--mc:#334155"}, el("span",{class:"mod-ico"}, icono("acceso",24)), el("div",{}, el("h1",{text:"Jefes y Administración"}), el("p",{class:"lead",text:"Panel de gestión y control"}))));
   const min = Math.round(limInact()/60000);
-  loginCard(main, `Ingresá con tu usuario y PIN de 6 números. La sesión queda abierta mientras usás la app y se cierra sola tras ${min} minutos sin actividad.`,
+  loginCard(main, `Ingresá con tu usuario y PIN. La sesión queda abierta mientras usás la app y se cierra sola tras ${min} minutos sin actividad.`,
     ()=>{ if (!S.perms.length) toast("Tu usuario no tiene módulos de gestión. Para fichar, usá «Fichar entrada o salida»."); ir("home"); });
 }
 
@@ -821,7 +821,7 @@ function editarSectores(x, recargar){
     catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
 function editarPermisos(x, recargar){
-  const NOM = {ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
+  const NOM = {finanzas:"Administración y Finanzas",clientes:"Clientes y pedidos",produccion:"Producción",ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
   const rol = el("select",{}, ...["empleado","responsable","admin"].map(r=>el("option",{value:r,text:{empleado:"Empleado",responsable:"Jefe / Responsable",admin:"Administración"}[r],selected:x.rol===r})));
   const checks = Object.keys(NOM).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:x.permisos.includes(k)}); return el("label",{class:"chk"},c," "+NOM[k]); });
   const pers = el("input",{type:"checkbox",checked:x.permisosPersonalizados});
@@ -3011,16 +3011,17 @@ async function detalleTallerUI(taller){
 
 /* ---------------- PERMISOS DE JEFES (solo administración) ---------------- */
 async function vPermisosJefes(body){
-  if (!(S.user && S.user.rol==="admin")) return body.append(el("div",{class:"card notice bad",text:"Solo la administración ve y cambia los permisos de los jefes."}));
+  if (!(S.user && S.user.rol==="admin")) return body.append(el("div",{class:"card notice bad",text:"Solo la administración ve y cambia los permisos."}));
   body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando jefes…"));
   let P; try{ P = await apiS("permisosJefes"); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
   body.textContent="";
-  const jefes = P.jefes.filter(j=>j.rol==="responsable");
-  const card = el("div",{class:"card"}, el("h2",{text:"🔐 Permisos de jefes"}),
-    el("p",{class:"lead",text:"Un interruptor por sección. Lo que un jefe no tiene habilitado no aparece en su menú y el servidor no le envía esos datos. Un jefe nuevo arranca sin Clientes y pedidos ni Producción."}));
-  if (!jefes.length) card.append(el("p",{class:"hint",text:"Cuando des de alta a un jefe (rol Jefe/Responsable en Personal), aparece acá."}));
+  // 3.9zy · también empleados: un empleado con alguna sección habilitada entra al panel con su mismo usuario y PIN
+  const jefes = P.jefes.filter(j=>j.rol==="responsable").concat(P.jefes.filter(j=>j.rol==="empleado"));
+  const card = el("div",{class:"card"}, el("h2",{text:"🔐 Permisos de jefes y empleados"}),
+    el("p",{class:"lead",text:"Un interruptor por sección. Lo que una persona no tiene habilitado no aparece en su menú y el servidor no le envía esos datos. Un empleado arranca sin ninguna sección (solo fichar y vacaciones); si le habilitás una, entra por «Jefes y Administración» con su mismo usuario y PIN."}));
+  if (!jefes.length) card.append(el("p",{class:"hint",text:"Cuando des de alta a una persona en Personal, aparece acá."}));
   const head = el("tr",{}, el("th",{text:"Jefe"}), ...P.secciones.map(s=>el("th",{class:"vert",text:s.nombre})));
-  const tb = el("tbody",{}, jefes.map(j=>el("tr",{}, el("th",{scope:"row",text:j.nombre}), ...P.secciones.map(s=>{
+  const tb = el("tbody",{}, jefes.map(j=>el("tr",{}, el("th",{scope:"row"}, j.nombre, el("small",{class:"hint",text:j.rol==="empleado"?" · empleado":" · jefe"})), ...P.secciones.map(s=>{
     const c = el("input",{type:"checkbox",role:"switch",checked:j.permisos.includes(s.id),"aria-label":`${s.nombre} para ${j.nombre}`});
     c.onchange = async ()=>{ c.disabled=true; try{ const u = await apiS("setPermisoJefe", j.id, s.id, c.checked); j.permisos = u.permisos; toast(`✅ ${j.nombre}: ${c.checked?"habilitado":"quitado"} «${s.nombre}»`); }
       catch(e){ c.checked=!c.checked; toast(msgErr(e)); } c.disabled=false; };
@@ -3751,12 +3752,12 @@ function guiaCierre39(L, R){
 }
 
 /* ---------- Cobranzas por pasos (dentro de Mi cierre) ---------- */
-const PASOS_COB39 = [
-  ["imputar","1 · Imputar","🧷 Cobranzas «a cuenta» para imputar","Contabilium tiene el recibo, pero no está aplicado a ninguna factura. Abrí el recibo en Contabilium (Cobranzas), agregá la factura que te indicamos en los comprobantes a cancelar y guardá. Después tocá «Ya lo imputé»."],
-  ["registrar","2 · Registrar","✅ Cobros para registrar en Contabilium","Ya se cobraron y están en el Templete: hacé el recibo en Contabilium con el medio de pago que figura y tocá «Ya la cargué»."],
-  ["revisar","3 · Revisar","🔍 Para revisar antes de cargar","Hay un cobro posible pero no coincide del todo. Fijate el motivo de cada una."],
-  ["reclamar","4 · Reclamar","📞 Facturas sin ningún cobro","No hay cobro en el Templete ni recibo en Contabilium: o falta cobrarlas o falta cargar el cobro."],
-  ["marcadas","Marcadas","☑️ Ya las marcaste","Se confirman solas cuando Contabilium las lea en cero (la lectura es diaria, o tocá «Leer de nuevo»)."]];
+const PASOS_COB39 = [   // 3.9zy · cada paso dice DÓNDE se hace (Contabilium o Templete) y qué NO hay que tocar
+  ["imputar","1 · Imputar","🧷 Imputar (solo en Contabilium)","DÓNDE: solo en Contabilium. QUÉ: la plata ya entró y el recibo ya existe, pero quedó «a cuenta» (sin factura). Entrá a Contabilium → Ventas → Cobranzas → «Aplicar cobranzas a cuenta», elegí el recibo, tildá la factura que te indicamos y guardá. NO cargues una cobranza nueva. Si el cobro tampoco figura en el Templete, cargalo ahí también. Al terminar tocá «Ya lo imputé» (recibos) o «Ya la cargué» (facturas)."],
+  ["registrar","2 · Cargar cobranza","✅ Cargar la cobranza en Contabilium","DÓNDE: solo en Contabilium. QUÉ: el cobro ya está en el Templete pero en Contabilium la factura sigue impaga. Hacé una cobranza nueva (recibo) en Contabilium para esa factura, con el medio de pago que figura. NO toques el Templete. Al terminar tocá «Ya la cargué»."],
+  ["revisar","3 · Revisar","🔍 Revisar (Templete o Contabilium, según el motivo)","DÓNDE: depende del motivo de cada una. Si el importe, el cliente o el número de factura están mal en el Templete → corregí la fila del Templete. Si el Templete está bien → cargá la cobranza en Contabilium como en el paso 2."],
+  ["reclamar","4 · Reclamar","📞 Sin ningún cobro (ni Templete ni Contabilium)","Si el cliente NO pagó: reclamale el pago (no cargues nada). Si SÍ pagó: primero cargá el cobro en el Templete y después la cobranza en Contabilium."],
+  ["marcadas","Marcadas","☑️ Ya las marcaste","No hay que hacer nada más: se confirman solas cuando Contabilium las lea en cero (la lectura es diaria, o tocá «Leer de nuevo»)."]];
 function pasoDe39(x){ if (x.estado==="marcada") return "marcadas"; if (x.reciboSuelto) return "imputar"; if (x.estado==="listo") return "registrar"; if (x.estado==="dudoso") return "revisar"; return "reclamar"; }
 function filaRec39(r, marcado, repintar){
   const b = el("button",{class:"btn sm"+(marcado?"":" primary"),type:"button",text:marcado?"↩️ Desmarcar":"🧷 Ya lo imputé"});
@@ -4121,6 +4122,8 @@ function loginEmpleado(body, texto, onOk){
     el("div",{class:"lockicon",text:"🏖️"}), el("h2",{text:"Identificate"}), el("p",{class:"lead",text:texto}), el("div",{class:"grid"}, u, p, err, b)));
   setTimeout(()=>u.focus(),60);
 }
+/** 3.9zy · En febrero no se toman vacaciones (temporada de SALE). */
+function tocaFebrero39(d, h){ if (!d) return false; for (let f=d; f<=(h||d); f=sumarD(f,1)) if (f.slice(5,7)==="02") return true; return false; }
 function vVacacionesEmp(body){
   if (F.token) return vacEmp(body);
   loginEmpleado(body, "Usá el mismo usuario y PIN con el que fichás. Solo vos ves tus solicitudes.", ()=>{ body.textContent=""; vacEmp(body); });
@@ -4144,12 +4147,14 @@ async function vacEmp(body){
   const cuenta = ()=>{ if (!sel.desde) return; const h = sel.hasta||sel.desde; const n = diasEntre(sel.desde,h);
     let habiles = 0; for (let f=sel.desde; f<=h; f=sumarD(f,1)) if (M.diasOperativos.includes(dowD(f)) && !M.feriados.some(x=>x.fecha===f)) habiles++;
     res.textContent = `Del ${rangoVac(sel.desde,h)} · ${n} día${n===1?"":"s"} corrido${n===1?"":"s"}` + (M.modoDias==="apertura" ? ` (${habiles} día${habiles===1?"":"s"} de apertura: así se cuentan)` : ` · ${habiles} de apertura`) + (n>M.maxDias?` · supera el máximo de ${M.maxDias}`:"");
-    bS.disabled = !sel.hasta || n>M.maxDias; };
+    const feb = tocaFebrero39(sel.desde, h); if (feb) res.textContent += " · ⛔ Incluye días de febrero: en febrero no se pueden tomar vacaciones (estamos de SALE).";
+    bS.disabled = !sel.hasta || n>M.maxDias || feb; };
   const cal = calendarioVac({mes:hoy().slice(0,7), meses:2, feriados:M.feriados, periodos, sel, min:hoy(), diasOperativos:M.diasOperativos,
     onSel:f=>{ if (!sel.desde || sel.hasta){ sel.desde=f; sel.hasta=null; } else if (f<sel.desde){ sel.desde=f; } else { sel.hasta=f; } cuenta(); cal.repintar(); }});
   body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(bS,"Enviando…");
       try{ await api("solicitarVacaciones", F.token, sel.desde, sel.hasta||sel.desde, com.value); toast("✅ Solicitud enviada. La revisa un jefe."); vacEmp(body); }
       catch(x){ unspin(bS); toast(msgErr(x)); if (esAuth(x)){ F.token=null; body.textContent=""; vVacacionesEmp(body); } } }},
+    el("div",{class:"notice warn"}, el("b",{text:"⚠️ Febrero: no se pueden tomar vacaciones."}), " Ese mes estamos de SALE y necesitamos a todo el equipo."),
     el("h2",{text:`Pedir vacaciones · ${M.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:"Elegí el primer y el último día en el calendario. Las fechas pasadas no se pueden pedir. Los puntos muestran vacaciones del equipo ya aprobadas (solo nombre y fechas)."}),
     cal, res, el("label",{class:"f"},"Comentario",com), bS));
   // Mis solicitudes
@@ -4514,7 +4519,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zx";
+const APP_V = "3.9zy";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
