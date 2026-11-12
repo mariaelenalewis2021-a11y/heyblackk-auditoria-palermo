@@ -1,6 +1,6 @@
 # Actualizar el servidor (Google Apps Script)
 
-1. Abrí el proyecto de Apps Script de la cuenta dueña y reemplazá todo el contenido de `Código.gs` por `servidor-Code.gs`.
+1. Abrí el proyecto de Apps Script de la cuenta dueña y reemplazá todo el contenido de `Código.gs` por la versión que te pase administración (el código del servidor ya no se publica en este repositorio).
 2. Guardá. **Implementar → Gestionar implementaciones → editar → Versión: nueva → Implementar** (la URL no cambia).
 3. Primera vez en v3: al abrir la app aparece «Actualización a usuarios individuales». Se confirma con la **clave de jefes anterior**
    y se crea el primer usuario de administración. Las claves compartidas quedan retiradas y las auditorías se conservan.
@@ -19,7 +19,7 @@
    El borrado de fichajes es solo para el rol Administración, pide escribir BORRAR y el PIN, y deja constancia en el Historial.
 
 8. **3.6:** no requiere permisos nuevos (la planilla «Control ingreso Nueva temporada 27» se abre en solo lectura con SpreadsheetApp,
-   ID 1ecqEsW9ZILcGxYjAqWvSTqJAgOtaBA7lhSZ5hnf8zP0; se puede cambiar en la configuración `controlFileId`). En el primer ingreso
+   el ID vive solo en la configuración privada; se puede cambiar en la configuración `controlFileId`). En el primer ingreso
    después de desplegar se aplica una sola vez el caso inicial de permisos: Thomás con Clientes y pedidos, Víctor con Producción.
    El comando «actualizar las planillas» es `actualizarApp` (relee las dos planillas).
 
