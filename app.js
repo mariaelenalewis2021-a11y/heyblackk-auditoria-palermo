@@ -40,7 +40,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaCyber","verCertificado"]);
+const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaParaTemplete","descargaCyber","verCertificado"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -3069,7 +3069,10 @@ function botonesDescargaFin(){
     catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); }
     unspin(b); };
   bx.onclick = ()=>ir(bx,"xlsx"); bp.onclick = ()=>ir(bp,"pdf");
-  return el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Todo el detalle para guardar o imprimir (meses, gastos por cuenta, semanas, canales, grandes cuentas y retiros):"}), bx, bp);
+  // 3.9zz · Botón propio (solo María): ventas de enero a hoy que faltan en el Templete, con su estructura y Fecha = hoy
+  const bt = (typeof S!=="undefined" && S.user && /^maria$/i.test(String(S.user.legajo||""))) ? el("button",{class:"btn sm primary",type:"button",text:"📥 Ventas para cargar en el Templete (enero → hoy)"}) : null;
+  if (bt) bt.onclick = async ()=>{ spinBtn(bt,"Armando el Excel…"); try{ const D = await apiS("descargaParaTemplete"); await exportarXLSX37(D); toast(`✅ ${D.resumen.facturas} facturas para cargar${D.resumen.revisar?` · ${D.resumen.revisar} para revisar antes`:""}.`); }catch(e){ toast(msgErr(e)); } unspin(bt); };
+  return el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Todo el detalle para guardar o imprimir (meses, gastos por cuenta, semanas, canales, grandes cuentas y retiros):"}), bx, bp, bt);
 }
 /** Barras dobles por período (ingresos vs egresos). */
 function barrasIE(L, etiqueta){
@@ -4143,18 +4146,21 @@ async function vacEmp(body){
   const res = el("p",{class:"lead sel-txt",text:"Tocá el primer día y después el último."});
   const com = el("input",{type:"text",maxlength:"300",placeholder:"Comentario para tu jefe (opcional)"});
   const bS = el("button",{class:"btn primary big-btn",type:"submit",text:"Solicitar vacaciones",disabled:true});
-  const periodos = M.equipo.map(e=>({desde:e.desde,hasta:e.hasta,nombre:e.nombre,estado:"aprobada"})).concat(M.mias.filter(v=>v.estado==="pendiente"||v.estado==="aprobada").map(v=>({desde:v.desde,hasta:v.hasta,nombre:"Vos",estado:v.estado,mio:true})));
+  const periodos = M.equipo.map(e=>({desde:e.desde,hasta:e.hasta,nombre:e.nombre,estado:e.pendiente?"pendiente":"aprobada"})).concat(M.mias.filter(v=>v.estado==="pendiente"||v.estado==="aprobada").map(v=>({desde:v.desde,hasta:v.hasta,nombre:"Vos",estado:v.estado,mio:true})));
   const cuenta = ()=>{ if (!sel.desde) return; const h = sel.hasta||sel.desde; const n = diasEntre(sel.desde,h);
     let habiles = 0; for (let f=sel.desde; f<=h; f=sumarD(f,1)) if (M.diasOperativos.includes(dowD(f)) && !M.feriados.some(x=>x.fecha===f)) habiles++;
     res.textContent = `Del ${rangoVac(sel.desde,h)} · ${n} día${n===1?"":"s"} corrido${n===1?"":"s"}` + (M.modoDias==="apertura" ? ` (${habiles} día${habiles===1?"":"s"} de apertura: así se cuentan)` : ` · ${habiles} de apertura`) + (n>M.maxDias?` · supera el máximo de ${M.maxDias}`:"");
+    const pisa = M.sinSolape && sel.desde ? M.equipo.filter(e=>e.mismaSucursal && e.desde<=h && e.hasta>=sel.desde) : [];   // 3.9zz · en Lima no se pisan
+    if (pisa.length) res.textContent += ` · ⚠️ En ${M.sucursal} se superpone con ${pisa.map(e=>`${e.nombre.split(" ")[0]} (${rangoVac(e.desde,e.hasta)}${e.pendiente?", pendiente":""})`).join(", ")}: elegí otras fechas si podés.`;
     const feb = tocaFebrero39(sel.desde, h); if (feb) res.textContent += " · ⛔ Incluye días de febrero: en febrero no se pueden tomar vacaciones (estamos de SALE).";
     bS.disabled = !sel.hasta || n>M.maxDias || feb; };
   const cal = calendarioVac({mes:hoy().slice(0,7), meses:2, feriados:M.feriados, periodos, sel, min:hoy(), diasOperativos:M.diasOperativos,
     onSel:f=>{ if (!sel.desde || sel.hasta){ sel.desde=f; sel.hasta=null; } else if (f<sel.desde){ sel.desde=f; } else { sel.hasta=f; } cuenta(); cal.repintar(); }});
   body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(bS,"Enviando…");
-      try{ await api("solicitarVacaciones", F.token, sel.desde, sel.hasta||sel.desde, com.value); toast("✅ Solicitud enviada. La revisa un jefe."); vacEmp(body); }
+      try{ const rv = await api("solicitarVacaciones", F.token, sel.desde, sel.hasta||sel.desde, com.value); if (rv && rv.aviso) alert("✅ Solicitud enviada.\n\n⚠️ "+rv.aviso); else toast("✅ Solicitud enviada. La revisa un jefe."); vacEmp(body); }
       catch(x){ unspin(bS); toast(msgErr(x)); if (esAuth(x)){ F.token=null; body.textContent=""; vVacacionesEmp(body); } } }},
     el("div",{class:"notice warn"}, el("b",{text:"⚠️ Febrero: no se pueden tomar vacaciones."}), " Ese mes estamos de SALE y necesitamos a todo el equipo."),
+    M.sinSolape ? el("div",{class:"notice warn"}, el("b",{text:`⚠️ En ${M.sucursal} no se pueden pisar las vacaciones.`}), " Fijate en el calendario que nadie de tu equipo esté de vacaciones en esas fechas.") : null,
     el("h2",{text:`Pedir vacaciones · ${M.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:"Elegí el primer y el último día en el calendario. Las fechas pasadas no se pueden pedir. Los puntos muestran vacaciones del equipo ya aprobadas (solo nombre y fechas)."}),
     cal, res, el("label",{class:"f"},"Comentario",com), bS));
   // Mis solicitudes
@@ -4169,7 +4175,7 @@ async function vacEmp(body){
   });
   if (!M.mias.length) lista.append(el("div",{class:"empty",text:"Todavía no pediste vacaciones."}));
   body.append(el("div",{class:"card"}, el("h2",{text:"Mis vacaciones"}), lista));
-  if (M.equipo.length) body.append(el("div",{class:"card"}, el("h3",{text:"Equipo de vacaciones (aprobadas)"}), el("ul",{class:"action"}, M.equipo.map(e=>el("li",{}, el("span",{text:"🏖️"}), el("span",{text:`${e.nombre}: ${rangoVac(e.desde,e.hasta)}`}))))));
+  if (M.equipo.length) body.append(el("div",{class:"card"}, el("h3",{text:M.equipo.some(e=>e.pendiente)?"Equipo de vacaciones (aprobadas y pendientes de tu sucursal)":"Equipo de vacaciones (aprobadas)"}), el("ul",{class:"action"}, M.equipo.map(e=>el("li",{}, el("span",{text:"🏖️"}), el("span",{text:`${e.nombre}: ${rangoVac(e.desde,e.hasta)}${e.pendiente?" (pendiente)":""}`}))))));
   body.append(el("div",{class:"row"}, el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Terminar",onclick:()=>{ finFichada(); body.textContent=""; vVacacionesEmp(body); }})));
 }
 
@@ -4186,6 +4192,7 @@ async function vVacaciones(main){
   pend.forEach(v=>{
     const cob = v.cobertura||{otras:[],feriados:[]};
     const avisos = [];
+    if ((cob.pisanLima||[]).length) avisos.unshift(`⛔ LIMA: se pisa con ${cob.pisanLima.map(o=>`${o.nombre} (${rangoVac(o.desde,o.hasta)}${o.estado==="pendiente"?", pendiente":""})`).join(", ")}. En Lima no se deberían superponer: revisá antes de aprobar.`);
     if (cob.otras.length) avisos.push(`👥 En esas fechas ya tienen vacaciones aprobadas: ${cob.otras.map(o=>`${o.nombre} (${rangoVac(o.desde,o.hasta)})`).join(", ")}.`);
     if (cob.feriados.length) avisos.push(`🎉 Feriados en el período: ${cob.feriados.map(f=>`${fmtF(f.fecha).slice(0,5)} ${f.nombre}`).join(", ")}${cob.finDeSemanaLargo?" (fin de semana largo)":""}.`);
     const decidir = async (aprobar)=>{
@@ -4519,7 +4526,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zy";
+const APP_V = "3.9zz";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
