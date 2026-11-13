@@ -117,6 +117,8 @@ function resChk(tot, p=S.params){ return tot===0?"Excelente":tot<=p.maxInf?"Adve
 const cls = r => r==="Excelente"?"ok":r==="Advertencia"?"warn":r==="Reclamo"?"bad":"";
 const scChip = v => el("span",{class:"sc",style:v?`background:var(--s${v}bg);color:var(--s${v})`:null,text:v??"–"});
 const tiene = p => S.perms.includes(p);
+/** 3.9zz4 · Vacaciones (sección, avisos, saldos y todo lo relacionado): solo María. */
+const vacOK = () => !!(S.user && /^maria$/i.test(String(S.user.legajo||"")));
 function spinBtn(b, txt){ b.disabled=true; b.dataset.t=b.textContent; b.textContent=""; b.append(el("span",{class:"spin"})," "+(txt||"Procesando…")); }
 function unspin(b){ b.disabled=false; if (b.dataset.t) b.textContent=b.dataset.t; }
 
@@ -252,7 +254,7 @@ function pintarVista(id){
   if (id==="empleados") return vEmpleados(main);
   if (id==="otros") return vOtros(main);
   if (!S.user) return loginCard(main, "Ingresá con tu usuario y PIN para abrir este módulo.");
-  if (!puedeVer(m)) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
+  if (!puedeVer(m) || (id==="vacaciones" && !vacOK())) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
   const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, produccion:vProduccion, finanzas:vFinanzas}[id];
   V(main);
 }
@@ -513,7 +515,7 @@ function tiraHoy(R){
   const F = R.fichadas;
   if (F){
     if (F.abre) tile("Equipo hoy", F.esperadas ? `${F.entradas} de ${F.esperadas} fichadas` : `${F.entradas} fichadas`,
-      [F.salidas ? `${F.salidas} ya salieron` : "", F.deVacaciones ? plural(F.deVacaciones, "1 de vacaciones", "% de vacaciones") : "", F.feriado ? "🎉 "+F.feriado : ""].filter(Boolean).join(" · "),
+      [F.salidas ? `${F.salidas} ya salieron` : "", F.deVacaciones && vacOK() ? plural(F.deVacaciones, "1 de vacaciones", "% de vacaciones") : "", F.feriado ? "🎉 "+F.feriado : ""].filter(Boolean).join(" · "),
       F.esperadas && F.entradas < F.esperadas ? "atencion" : "ok", F.esperadas ? anillo(F.entradas, F.esperadas) : null);
     else tile("Equipo hoy", "Local cerrado", F.feriado ? "🎉 Feriado: "+F.feriado : "Hoy no es día de apertura", "neutro");
     if ((F.porSucursal||[]).length > 1) tile("Por sucursal", F.porSucursal.map(x=>`${x.nombre} ${x.abre ? x.entradas+"/"+x.esperadas : "cerrada"}`).join(" · "), "", "neutro");
@@ -554,12 +556,12 @@ function renderHome(){
     el("span",{class:"ic"}, icono("camara",26)),
     el("span",{class:"tx"}, el("b",{text:"Fichar entrada o salida"}), el("span",{text:"Con tu usuario y PIN. Ubicación activada, sacate la foto y listo."})),
     el("span",{class:"fl"}, icono("flecha",20))));
-  home.append(el("button",{class:"cta sec",type:"button",style:"--i:2",onclick:()=>{ location.hash="#/empleados/vacaciones"; }},
+  if (vacOK()) home.append(el("button",{class:"cta sec",type:"button",style:"--i:2",onclick:()=>{ location.hash="#/empleados/vacaciones"; }},
     el("span",{class:"ic"}, icono("vacaciones",26)),
     el("span",{class:"tx"}, el("b",{text:"Mis vacaciones"}), el("span",{text:"Pedí tus vacaciones y mirá el estado de tus solicitudes."})),
     el("span",{class:"fl"}, icono("flecha",20))));
   const resto = MODULOS.filter(m=>m.id!=="empleados");
-  const visibles = resto.filter(m=>!m.perm || (staff && puedeVer(m)));
+  const visibles = resto.filter(m=>(m.id!=="vacaciones" || vacOK()) && (!m.perm || (staff && puedeVer(m))));   // 3.9zz4
   if (staff && tiene("personal")) visibles.splice(0, 0, PERSONAL);
   const grid = el("div",{class:"mods"});
   visibles.forEach((m,i)=>grid.append(tarjetaMod(m, i+2, R, false)));
@@ -591,7 +593,7 @@ function filaSesion(){
 /* 3.4 · Contador rojo de pendientes (fichajes manuales, correcciones y vacaciones) en la fila de sesión del panel. */
 function badgePendientes(R){
   const n = R && R.pendientesTotal; if (!n) return null;
-  const destino = (R.manualesPendientes||R.correccionesPendientes) && tiene("ingresos") ? "#/ingresos/pendientes" : "#/vacaciones";
+  const destino = (R.manualesPendientes||R.correccionesPendientes) && tiene("ingresos") || !tiene("vacaciones") ? "#/ingresos/pendientes" : "#/vacaciones";
   return el("a",{class:"badge-rojo",href:destino,"aria-label":plural(n, "1 pendiente por resolver", "% pendientes por resolver")}, String(n), el("span",{text:n===1?" pendiente":" pendientes"}));
 }
 /* 3.3 · Banner de feriados: próximos (30 días, solo días de apertura) y pendientes de confirmar, resolubles con un toque.
@@ -653,11 +655,11 @@ function tabs(main, items, activo, onSel){
   main.append(bar, body); sel(items.some(x=>x[0]===sub) ? sub : (activo || items[0][0]));
 }
 function vEmpleados(main){
-  const items = [["fichar","📸 Fichar entrada / salida"], ["vacaciones","🏖️ Vacaciones"]];
+  const items = [["fichar","📸 Fichar entrada / salida"]].concat(vacOK() ? [["vacaciones","🏖️ Vacaciones"]] : []);   // 3.9zz4 · solo María
   if (S.user && tiene("personal")) items.push(["personal","🗂️ Personal (altas y bajas)"]);
   else items.push(["personal","🗂️ Personal (jefes)"]);
   if (S.user && S.user.rol==="admin") items.push(["permisos","🔐 Permisos de jefes"]);   // 3.6: solo administración
-  tabs(main, items, "fichar", (id, body)=> id==="fichar" ? vFichar(body) : id==="vacaciones" ? vVacacionesEmp(body) : id==="permisos" ? vPermisosJefes(body) : (S.user && tiene("personal") ? vPersonal(body) :
+  tabs(main, items, "fichar", (id, body)=> id==="fichar" ? vFichar(body) : id==="vacaciones" && vacOK() ? vVacacionesEmp(body) : id==="permisos" ? vPermisosJefes(body) : (S.user && tiene("personal") ? vPersonal(body) :
     S.user ? body.append(el("div",{class:"card empty",text:"🔒 Solo jefes y administración pueden gestionar el personal."})) : loginCard(body,"Solo jefes: ingresá con tu usuario y PIN de 6 números.",()=>route())));
 }
 
@@ -689,7 +691,7 @@ function editorContrato(h, diasSuc){
   const minDia = () => { if (!e1.value || !e2.value || e2.value <= e1.value) return 0; const [a,b]=e1.value.split(":").map(Number), [c,d]=e2.value.split(":").map(Number); return (c*60+d)-(a*60+b); };
   const upd = () => { const m = minDia(), dias = [...sel];
     calc.textContent = !e1.value && !e2.value ? "Cargá entrada y salida para calcular la carga horaria." : !m ? "⚠️ La salida tiene que ser después de la entrada." : !dias.length ? "⚠️ Elegí al menos un día." :
-      `${txtMin(m)} por día · ${txtMin(m*dias.length)} por semana · ≈ ${txtMin(m*diasDelMes(dias))} este mes (${diasDelMes(dias)} días, antes de feriados y vacaciones)`; };
+      `${txtMin(m)} por día · ${txtMin(m*dias.length)} por semana · ≈ ${txtMin(m*diasDelMes(dias))} este mes (${diasDelMes(dias)} días, antes de feriados${vacOK()?" y vacaciones":""})`; };
   e1.oninput = upd; e2.oninput = upd; upd();
   return { el: el("div",{class:"grid contrato37"}, el("span",{class:"k",text:"Días que trabaja"}), chips,
       el("div",{class:"grid2"}, el("label",{class:"f"},"Entra",e1), el("label",{class:"f"},"Sale",e2)), calc),
@@ -800,19 +802,19 @@ function editarSucHoras(x, recargar){
   const m = modal(el("div",{class:"grid"}, el("h2",{text:"Contratación · "+x.nombre}), el("label",{class:"f"},"Sucursal",su),
     ctr.el,
     el("details",{open:sinHor||null}, el("summary",{text:"No tiene horario fijo (solo horas por semana)"}), el("label",{class:"f"},"Horas por semana",hs)),
-    el("label",{class:"f"},"Días de vacaciones por año (para el saldo)",va),
+    vacOK() ? el("label",{class:"f"},"Días de vacaciones por año (para el saldo)",va) : null,
     el("p",{class:"hint",text:"Con esto la app espera a la persona solo los días que le tocan, calcula su carga por día, semana y mes, y la compara con lo que ficha. Es informativo: no calcula pagos."}),
     el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
   ok.onclick = async ()=>{
     const hor = ctr.valor(); if (hor && !ctr.completo()) return toast("Revisá la contratación: días, entrada y salida.");
     spinBtn(ok,"Guardando…");
-    try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horario: hor, horasEsperadas: hor ? null : (Number(hs.value)>0 ? {tipo:"semana", horas:Number(hs.value)} : null), vacacionesAnuales: Number(va.value)>0 ? Number(va.value) : null})); m.cerrar(); toast("✅ Contratación guardada"); }
+    try{ recargar(await apiS("editarEmpleado", x.id, {sucursal:su.value, horario: hor, horasEsperadas: hor ? null : (Number(hs.value)>0 ? {tipo:"semana", horas:Number(hs.value)} : null), vacacionesAnuales: vacOK() ? (Number(va.value)>0 ? Number(va.value) : null) : (x.vacacionesAnuales||null)})); m.cerrar(); toast("✅ Contratación guardada"); }
     catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
 /* 3.9t · Sectores de cada persona (los mismos del módulo «Jefes»). Es información de a qué sectores pertenece: no cambia permisos. */
 const SECTORES39 = {finanzas:"Administración y Finanzas", clientes:"Clientes y pedidos", produccion:"Producción", ingresos:"Fichaje y horas / RRHH", vacaciones:"Vacaciones", rrhh:"Novedades RR. HH.", kpi:"KPIs comerciales", cierre:"Cierre diario", auditar:"Auditar", auditoria:"Registro de auditorías", acciones:"Acciones correctivas", historial:"Historial", personal:"Personal", config:"Configuración", otros:"Otros"};
 function editarSectores(x, recargar){
-  const checks = Object.keys(SECTORES39).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:(x.sectores||[]).includes(k)||null}); return el("label",{class:"chk"},c," "+SECTORES39[k]); });
+  const checks = Object.keys(SECTORES39).filter(k=>k!=="vacaciones" || /^maria$/i.test(String(x.legajo||""))).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:(x.sectores||[]).includes(k)||null}); return el("label",{class:"chk"},c," "+SECTORES39[k]); });
   const ok = el("button",{class:"btn primary",type:"button",text:"Guardar"});
   const m = modal(el("div",{class:"grid"}, el("h2",{text:"Sectores · "+x.nombre}), el("p",{class:"lead",text:"Marcá uno o varios sectores. Podés cambiarlos o quitarlos cuando quieras; queda registrado en el Historial. No cambia sus permisos de acceso."}),
     el("div",{class:"chkgrid"},checks), el("div",{class:"row"}, ok, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>m.cerrar()}))));
@@ -823,7 +825,7 @@ function editarSectores(x, recargar){
 function editarPermisos(x, recargar){
   const NOM = {finanzas:"Administración y Finanzas",clientes:"Clientes y pedidos",produccion:"Producción",ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
   const rol = el("select",{}, ...["empleado","responsable","admin"].map(r=>el("option",{value:r,text:{empleado:"Empleado",responsable:"Jefe / Responsable",admin:"Administración"}[r],selected:x.rol===r})));
-  const checks = Object.keys(NOM).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:x.permisos.includes(k)}); return el("label",{class:"chk"},c," "+NOM[k]); });
+  const checks = Object.keys(NOM).filter(k=>k!=="vacaciones" || /^maria$/i.test(String(x.legajo||""))).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:x.permisos.includes(k)}); return el("label",{class:"chk"},c," "+NOM[k]); });
   const pers = el("input",{type:"checkbox",checked:x.permisosPersonalizados});
   const ok = el("button",{class:"btn primary",type:"button",text:"Guardar"});
   const m = modal(el("div",{class:"grid"}, el("h2",{text:"Rol y permisos · "+x.nombre}), el("label",{class:"f"},"Rol",rol),
@@ -887,7 +889,7 @@ async function jornada(body, j){
       botonProbar(body));
     if (incompleta) card.append(el("button",{class:"btn",type:"button",text:"✋ Solicitar fichaje manual",onclick:()=>formManual(body, j.siguiente, {motivo:"sucursal_incompleta", sucursal:j.sucursal.nombre, faltan:j.sucursal.incompleta}, null)}));
   }
-  if (j.vacacionesNovedades) card.append(el("div",{class:"notice ok"}, `📬 ${j.vacacionesNovedades===1?"Tenés 1 solicitud de vacaciones resuelta":"Tenés "+j.vacacionesNovedades+" solicitudes de vacaciones resueltas"}. `, el("button",{class:"btn sm",type:"button",text:"Ver",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }})));
+  if (j.vacacionesNovedades && vacOK()) card.append(el("div",{class:"notice ok"}, `📬 ${j.vacacionesNovedades===1?"Tenés 1 solicitud de vacaciones resuelta":"Tenés "+j.vacacionesNovedades+" solicitudes de vacaciones resueltas"}. `, el("button",{class:"btn sm",type:"button",text:"Ver",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }})));
   if (j.habilitado && !j.abiertaAnterior) estadoPermisoGeo().then(p=>{ if (!card.isConnected) return;
     const amb = entornoGeo();
     if (p==="denied" || amb.webview || amb.iframe) bloqueAyudaGeo({error: amb.webview?"no_soportado":"sin_permiso", amb}, true, g=>{ if (g.error) return toast("La ubicación sigue sin responder: probá de nuevo."); toast("✅ Ubicación habilitada. Ya podés fichar."); jornada(body, F.j); }).then(b=>{ if (card.isConnected) card.insertBefore(b, card.querySelector(".fbtns")); });
@@ -897,7 +899,7 @@ async function jornada(body, j){
   card.append(el("div",{class:"row"},
     el("button",{class:"btn",type:"button",text:"⏱️ Mis horas",onclick:()=>misHoras(body)}),
     el("button",{class:"btn",type:"button",text:"🧾 Mis registros y correcciones",onclick:()=>misRegistros(body)}),
-    el("button",{class:"btn",type:"button",text:"🏖️ Mis vacaciones",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }}),
+    vacOK() ? el("button",{class:"btn",type:"button",text:"🏖️ Mis vacaciones",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }}) : null,
     el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Terminar",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
   body.append(card);
 }
@@ -1154,11 +1156,11 @@ function tablaHorasEmpleado(e, r, jefe, onCorregir){
   const avisos = [];
   if (e.incompletos) avisos.push(`${e.incompletos} día(s) incompleto(s): no se suman hasta que se corrijan.`);
   if (e.sinFichaje) avisos.push(`${e.sinFichaje} día(s) de apertura sin fichaje (para revisar, no es una conclusión).`);
-  if (e.vacaciones) avisos.push(`${e.vacaciones} día(s) de vacaciones y ${e.feriados} feriado(s): no cuentan como ausencia.`);
+  if (e.vacaciones && vacOK()) avisos.push(`${e.vacaciones} día(s) de vacaciones y ${e.feriados} feriado(s): no cuentan como ausencia.`);
   else if (e.feriados) avisos.push(`${e.feriados} feriado(s): no cuentan como ausencia.`);
   if (avisos.length) box.append(el("ul",{class:"hint lista-avisos"}, avisos.map(a=>el("li",{text:a}))));
   if (e.contrato) box.append(el("p",{class:"hint",text:`Contratación: ${e.contrato.diasTxt} de ${e.contrato.entrada} a ${e.contrato.salida} (${hm(e.contrato.minDia)} h por día, ${hm(e.contrato.minSemana)} h por semana)${e.cargaMes?` · carga de ${e.cargaMes.mes.split("-").reverse().join("/")}: ${hm(e.cargaMes.minutos)} h en ${e.cargaMes.dias} días (sin feriados ni vacaciones)`:""}. Lo esperado cuenta solo los días que le tocan; es informativo, no calcula pagos.`}));
-  else if (e.diferencia!=null) box.append(el("p",{class:"hint",text:`Esperado: ${e.horasEsperadas.horas} h por ${e.horasEsperadas.tipo==="semana"?"semana":"día de apertura"} (sin vacaciones ni feriados). La diferencia es informativa: no calcula pagos ni horas extra.`}));
+  else if (e.diferencia!=null) box.append(el("p",{class:"hint",text:`Esperado: ${e.horasEsperadas.horas} h por ${e.horasEsperadas.tipo==="semana"?"semana":"día de apertura"} (sin feriados). La diferencia es informativa: no calcula pagos ni horas extra.`}));
   if (r.redondeo>1) box.append(el("p",{class:"hint",text:`Horas por día redondeadas a ${r.redondeo} minutos.`}));
   if (e.semanas.length){ const tw = el("tbody"); e.semanas.forEach(w=>tw.append(el("tr",{}, el("td",{class:"mono",text:"Semana del "+fmtF(w.semana).slice(0,5)}), el("td",{class:"n",text:hm(w.minutos)}), el("td",{class:"n",text:w.esperado==null?"–":hm(w.esperado)}), el("td",{class:"n",text:w.esperado==null?"–":difTxt(w.minutos-w.esperado)}))));
     box.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, el("th",{text:"Semana"}), el("th",{class:"n",text:"Horas"}), el("th",{class:"n",text:"Esperado"}), el("th",{class:"n",text:"Diferencia"}))), tw))); }
@@ -1194,7 +1196,7 @@ function vFichadas(main){
     const pend = D.correcciones.filter(c=>c.estado==="pendiente");
     if (pend.length) al.append(el("div",{class:"notice warn",text:`✋ ${pend.length} solicitud(es) de corrección pendientes de aprobación.`}));
     if (D.pendientes.length) al.append(el("div",{class:"notice",text:`🔎 ${D.pendientes.length} día(s)-persona de apertura sin entrada registrada. Es una alerta para revisar, no una falta.`}));
-    if ((D.deVacaciones||[]).length) al.append(el("div",{class:"notice ok",text:`🏖️ ${D.deVacaciones.length} día(s)-persona de vacaciones aprobadas en el período: no cuentan como falta ni como fichada pendiente.`}));
+    if ((D.deVacaciones||[]).length && vacOK()) al.append(el("div",{class:"notice ok",text:`🏖️ ${D.deVacaciones.length} día(s)-persona de vacaciones aprobadas en el período: no cuentan como falta ni como fichada pendiente.`}));
     if (D.sinSalida.length) al.append(el("div",{class:"notice",text:`🔎 ${D.sinSalida.length} jornada(s) con entrada y sin salida.`}));
     const dup = L.filter(x=>x.duplicado).length; if (dup) al.append(el("div",{class:"notice bad",text:`⚠️ ${dup} registro(s) con la secuencia entrada/salida rota (dos entradas seguidas o salida sin entrada): revisar.`}));
     const pb = L.filter(x=>x.precisionBaja && x.estado==="revisar").length; if (pb) al.append(el("div",{class:"notice warn",text:`📡 ${pb} fichaje(s) con precisión baja del GPS, marcados para revisar (la ubicación del celular puede alterarse).`}));
@@ -1235,7 +1237,7 @@ function vFichadas(main){
     if (D.pendientes.length){ const tp=el("tbody"); D.pendientes.forEach(p=>tp.append(el("tr",{}, el("td",{class:"mono"}, fmtF(p.fecha), p.feriado?el("span",{class:"pill",text:"🎉 "+p.feriado}):null), el("td",{text:p.nombre}),
         el("td",{}, el("button",{class:"btn sm",type:"button",text:"Derivar a RR. HH.",onclick:()=>derivar({uid:p.uid,fecha:p.fecha}, p.nombre)})))));
       body.append(el("div",{class:"card"}, el("h2",{text:"Días de apertura sin entrada (para revisar)"}), el("p",{class:"lead",text:"Puede haber motivos válidos (franco, licencia, olvido). Si corresponde, derivalo a RR. HH. Los días cerrados (feriado confirmado o excepción) y las vacaciones aprobadas no aparecen acá."}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado",""].map(x=>el("th",{text:x})))), tp)))); }
-    if ((D.deVacaciones||[]).length){ const tv=el("tbody"); D.deVacaciones.forEach(p=>tv.append(el("tr",{}, el("td",{class:"mono",text:fmtF(p.fecha)}), el("td",{text:p.nombre}), el("td",{},el("span",{class:"pill ok",text:"🏖️ De vacaciones"})))));
+    if ((D.deVacaciones||[]).length && vacOK()){ const tv=el("tbody"); D.deVacaciones.forEach(p=>tv.append(el("tr",{}, el("td",{class:"mono",text:fmtF(p.fecha)}), el("td",{text:p.nombre}), el("td",{},el("span",{class:"pill ok",text:"🏖️ De vacaciones"})))));
       body.append(el("div",{class:"card"}, el("h2",{text:"De vacaciones (aprobadas)"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Estado"].map(x=>el("th",{text:x})))), tv)))); }
   };
   [emp,est].forEach(x=>x.onchange=pintar); q.oninput=pintar; [de,ha].forEach(x=>x.onchange=cargar);
@@ -1321,7 +1323,7 @@ async function vHoyFich(body){
     if (s.incompleta.length) card.append(el("div",{class:"notice bad"}, `⚠️ Faltan datos de la sucursal (${s.incompleta.join(", ")}): nadie de ${s.nombre} puede fichar con ubicación hasta completarlos. `,
       el("button",{class:"btn sm",type:"button",text:"Completar",onclick:()=>{ location.hash="#/ingresos/sucursales"; }})));
     s.avisos.forEach(a=>card.append(el("p",{class:"hint",text:"ℹ️ "+a})));
-    card.append(el("div",{class:"hkpis"}, ...[["Adentro",s.adentro],["Salieron",s.salieron],["Sin fichaje",s.faltan],["De vacaciones",s.deVacaciones]].map(([k,v])=>el("div",{class:"hk"+(k==="Sin fichaje"&&v?" neg":"")}, el("span",{class:"k",text:k}), el("b",{text:String(v)})))));
+    card.append(el("div",{class:"hkpis"}, ...[["Adentro",s.adentro],["Salieron",s.salieron],["Sin fichaje",s.faltan]].concat(vacOK() ? [["De vacaciones",s.deVacaciones]] : []).map(([k,v])=>el("div",{class:"hk"+(k==="Sin fichaje"&&v?" neg":"")}, el("span",{class:"k",text:k}), el("b",{text:String(v)})))));
     const tb = el("tbody");
     s.personas.forEach(p=>{ const [txt,cls] = EST_HOY[p.estado]||[p.estado,""];
       tb.append(el("tr",{}, el("td",{text:p.nombre}), el("td",{}, el("span",{class:"pill "+cls,text: p.estado==="adentro" ? `Adentro desde ${p.pares.length?p.pares[p.pares.length-1].entrada:"?"}` : p.estado==="salio" ? `Salió ${p.ultima}` : txt}),
@@ -1332,7 +1334,7 @@ async function vHoyFich(body){
     card.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Persona","Estado","Entradas y salidas","Horas hoy",""].map((x,i)=>el("th",{class:i===3?"n":null,text:x})))), tb)));
     body.append(card);
   });
-  body.append(el("p",{class:"hint",text:"«Sin fichaje» es una alerta para revisar, no una conclusión sobre la persona. Vacaciones aprobadas y feriados no cuentan como ausencia."}));
+  body.append(el("p",{class:"hint",text:"«Sin fichaje» es una alerta para revisar, no una conclusión sobre la persona. "+(vacOK()?"Vacaciones aprobadas y feriados":"Los feriados")+" no cuentan como ausencia."}));
 }
 /* Rechazo con motivo obligatorio (la persona lo ve). Sirve para fichajes manuales y correcciones. */
 function rechazarSolicitud(c, recargar){
@@ -1405,7 +1407,7 @@ async function vHorasJefes(body){
       el("td",{}, x.incompletos?el("span",{class:"pill warn",text:x.incompletos+" incompl."}):null, x.sinFichaje?el("span",{class:"pill bad",text:x.sinFichaje+" sin fichaje"}):null, x.revisar?el("span",{class:"pill warn",text:x.revisar+" revisar"}):null))));
     res.append(el("div",{class:"card"}, el("h2",{text:`Resumen del ${fmtF(R.desde)} al ${fmtF(R.hasta)}`}),
       el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Persona","Sucursal","Días","Total","Promedio","Esperado","Diferencia","Revisar"].map((x,i)=>el("th",{class:i>=2&&i<=6?"n":null,text:x})))), tb)),
-      el("p",{class:"hint",text:"Vacaciones aprobadas y feriados no cuentan como ausencia. La diferencia con lo esperado es informativa: no calcula pagos ni horas extra legales."+(R.redondeo>1?` Redondeo: ${R.redondeo} min por día.`:"")})));
+      el("p",{class:"hint",text:(vacOK()?"Vacaciones aprobadas y feriados":"Los feriados")+" no cuentan como ausencia. La diferencia con lo esperado es informativa: no calcula pagos ni horas extra legales."+(R.redondeo>1?` Redondeo: ${R.redondeo} min por día.`:"")})));
     R.empleados.forEach(x=>res.append(el("details",{class:"card"}, el("summary",{}, el("b",{text:x.nombre}), ` · ${x.sucursal} · ${hm(x.total)} h`), tablaHorasEmpleado(x, R, true, (e,d)=>cargarFaltante(e, d, cargar)))));
   };
   const bx = el("button",{class:"btn primary",type:"button",text:"⬆️ Exportar a la planilla (hoja «Horas»)"});
@@ -2581,7 +2583,7 @@ async function vPanoramaRRHH(body){
   const cargar = async ()=>{
     Object.assign(RRHH_F, {sucursal:fsuc.value, uid:femp.value, per:fper.value, desde:fd.value, hasta:fh.value}); fechas.hidden = fper.value!=="otro";
     if (fper.value==="otro" && !(fd.value && fh.value)) return;
-    res.textContent=""; res.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Analizando fichajes, horarios y vacaciones…"));
+    res.textContent=""; res.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Analizando fichajes y horarios…"));
     let P; try{ P = await apiS("panoramaRRHH", Object.assign({sucursal:RRHH_F.sucursal||null, uid:RRHH_F.uid||null}, rango())); }
     catch(e){ res.textContent=""; return res.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
     if (fsuc.options.length===1) (P.sucursales||[]).forEach(s=>fsuc.append(el("option",{value:s,text:s,selected:RRHH_F.sucursal===s})));
@@ -2603,7 +2605,7 @@ function pintarPanorama(res, P, recargar){
     const pos = P.alertas.find(a=>a.nivel==="verde"); if (pos && t.length<3) t.push(`Para destacar: ${pos.nombre}, ${pos.titulo.charAt(0).toLowerCase()+pos.titulo.slice(1)}.`);
     if (!VOZ.hablar("Panorama de recursos humanos. "+t.join(" "))) toast("Este navegador no tiene voz."); }});
   if (P.alertas.length && VOZ.soporta()) top.append(voz, selVelocidad());
-  top.append(el("p",{class:"hint",text:"Informativo: la app no sanciona ni descuenta nada. Las faltas descuentan vacaciones aprobadas y feriados, y no cuentan los registros borrados por administración. Antes de sacar conclusiones, conversalo con la persona."}));
+  top.append(el("p",{class:"hint",text:"Informativo: la app no sanciona ni descuenta nada. Las faltas descuentan feriados"+(vacOK()?" y vacaciones aprobadas":"")+", y no cuentan los registros borrados por administración. Antes de sacar conclusiones, conversalo con la persona."}));
   res.append(top);
   const at = P.alertas.filter(a=>a.nivel!=="verde"), po = P.alertas.filter(a=>a.nivel==="verde");
   if (at.length) res.append(el("div",{class:"card"}, el("h3",{text:"Para atender"}), listaAlertas(at, true)));
@@ -2614,10 +2616,10 @@ function pintarPanorama(res, P, recargar){
     const tb = el("tbody",{}, P.resumen.map(r=>el("tr",{}, el("td",{text:r.nombre}), el("td",{text:r.sucursal}),
       el("td",{class:"n",text: r.horas ? hm(r.horas)+(r.esperado?" / "+hm(r.esperado):"") : ""}), el("td",{class:"n",text:r.cumplimiento!=null?r.cumplimiento+" %":""}),
       el("td",{class:"n",text:r.faltas||""}), el("td",{class:"n",text:(r.tardanzas+r.salidasAnticipadas)||""}), el("td",{class:"n",text:r.incompletos||""}),
-      el("td",{class:"n",text:r.vacacionesTomadas||""}), el("td",{class:"n",text:v(r.saldoVacaciones)}))));
+      vacOK() ? el("td",{class:"n",text:r.vacacionesTomadas||""}) : null, vacOK() ? el("td",{class:"n",text:v(r.saldoVacaciones)}) : null)));
     res.append(el("div",{class:"card"}, el("h3",{text:"Resumen por persona"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"},
-      el("thead",{}, el("tr",{}, ...["Persona","Sucursal","Horas / pactadas","Cumplimiento","Faltas","Tardanzas","Incompletos","Vacaciones tomadas","Saldo de vacaciones"].map((x,i)=>el("th",{class:i>1?"n":null,text:x})))), tb)),
-      el("p",{class:"hint",text:"La contratación de cada persona (días, horario y carga horaria) y los días de vacaciones por año se cargan en Personal → «Contratación»."})));
+      el("thead",{}, el("tr",{}, ...["Persona","Sucursal","Horas / pactadas","Cumplimiento","Faltas","Tardanzas","Incompletos"].concat(vacOK()?["Vacaciones tomadas","Saldo de vacaciones"]:[]).map((x,i)=>el("th",{class:i>1?"n":null,text:x})))), tb)),
+      el("p",{class:"hint",text:"La contratación de cada persona (días, horario y carga horaria) "+(vacOK()?" y los días de vacaciones por año":"")+" se cargan en Personal → «Contratación»."})));
   }
   res.append(editorUmbrales(P.umbrales, recargar));
 }
@@ -2666,7 +2668,7 @@ async function vBorradoFich(body){
       spinBtn(bBorrar,"Borrando…");
       try{ const x = await apiS("borrarFichajes", Object.assign(crit(), {confirmacion:conf.value, esperado:r.fichajes, quitarPersona: quitar.checked}));
         toast(`✅ Borrado todo lo de ${x.nombre}`);
-        prev.textContent=""; prev.append(el("div",{class:"notice ok",text:`✅ Listo: se borraron ${x.fichajes} fichaje(s), ${x.solicitudes} solicitud(es), ${x.vacaciones||0} pedido(s) de vacaciones y ${x.novedades||0} novedad(es); ${x.fotos} foto(s) fueron a la papelera${x.quitada?". La persona ya no figura en Personal":""}. Quedó registrado en el Historial.`}));
+        prev.textContent=""; prev.append(el("div",{class:"notice ok",text:`✅ Listo: se borraron ${x.fichajes} fichaje(s), ${x.solicitudes} solicitud(es), ${vacOK()?(x.vacaciones||0)+" pedido(s) de vacaciones y ":""}${x.novedades||0} novedad(es); ${x.fotos} foto(s) fueron a la papelera${x.quitada?". La persona ya no figura en Personal":""}. Quedó registrado en el Historial.`}));
         if (x.quitada){ const o = [...emp.options].find(z=>z.value===r.uid); if (o) o.remove(); }
       }catch(e){ unspin(bBorrar); toast(msgErr(e)); }
     };
@@ -2674,7 +2676,7 @@ async function vBorradoFich(body){
       el("b",{text: n ? `Se van a borrar ${n} registro${n===1?"":"s"} de ${r.nombre}${r.estado!=="activo"?" (dado de baja)":""}:` : `Podés quitar a ${r.nombre} de Personal:`}),
       el("ul",{}, r.fichajes ? el("li",{text:`${r.fichajes} fichaje${r.fichajes===1?"":"s"}${r.primero?` (del ${fmtF(r.primero)} al ${fmtF(r.ultimo)})`:""}`}) : null,
         r.solicitudes ? el("li",{text:`${r.solicitudes} solicitud${r.solicitudes===1?"":"es"} de fichaje manual o corrección`}) : null,
-        r.vacaciones ? el("li",{text:`${r.vacaciones} pedido${r.vacaciones===1?"":"s"} de vacaciones`}) : null,
+        r.vacaciones && vacOK() ? el("li",{text:`${r.vacaciones} pedido${r.vacaciones===1?"":"s"} de vacaciones`}) : null,
         r.novedades ? el("li",{text:`${r.novedades} novedad${r.novedades===1?"":"es"} de RR. HH.`}) : null,
         r.fotos ? el("li",{text:`${r.fotos} foto${r.fotos===1?"":"s"} (van a la papelera de Drive)`}) : null),
       r.quitable ? el("label",{class:"check"}, quitar, " Quitar también a la persona de Personal (no aparece más en ninguna lista)") : null,
@@ -2683,7 +2685,7 @@ async function vBorradoFich(body){
     setTimeout(()=>conf.focus(),60);
   };
   body.append(el("div",{class:"card"}, el("h2",{text:"🗑️ Borrar registros del personal"}),
-    el("p",{class:"lead",text:"Solo administración. Borra TODO lo de la persona elegida: fichajes, fotos, solicitudes de fichaje manual o corrección, pedidos de vacaciones y novedades de RR. HH. Sirve para limpiar registros de prueba o de personas que ya no están."}),
+    el("p",{class:"lead",text:"Solo administración. Borra TODO lo de la persona elegida: fichajes, fotos, solicitudes de fichaje manual o corrección, "+(vacOK()?"pedidos de vacaciones, ":"")+"y novedades de RR. HH. Sirve para limpiar registros de prueba o de personas que ya no están."}),
     el("label",{class:"f"},"Empleado (incluye dados de baja)",emp),
     el("label",{class:"check"}, todos, " Todos los registros de ese empleado"), rango, bCalc, prev,
     el("p",{class:"hint",text:"En el Historial queda quién borró, cuándo, de qué empleado y cuántos registros. Los datos borrados no se guardan en ningún lado. Para borrar un solo registro, abrilo en «Fichadas» y tocá «Borrar este registro»."})));
@@ -3018,7 +3020,7 @@ async function vPermisosJefes(body){
   // 3.9zy · también empleados: un empleado con alguna sección habilitada entra al panel con su mismo usuario y PIN
   const jefes = P.jefes.filter(j=>j.rol==="responsable").concat(P.jefes.filter(j=>j.rol==="empleado"));
   const card = el("div",{class:"card"}, el("h2",{text:"🔐 Permisos de jefes y empleados"}),
-    el("p",{class:"lead",text:"Un interruptor por sección. Lo que una persona no tiene habilitado no aparece en su menú y el servidor no le envía esos datos. Un empleado arranca sin ninguna sección (solo fichar y vacaciones); si le habilitás una, entra por «Jefes y Administración» con su mismo usuario y PIN."}));
+    el("p",{class:"lead",text:"Un interruptor por sección. Lo que una persona no tiene habilitado no aparece en su menú y el servidor no le envía esos datos. Un empleado arranca sin ninguna sección (solo fichar); si le habilitás una, entra por «Jefes y Administración» con su mismo usuario y PIN."}));
   if (!jefes.length) card.append(el("p",{class:"hint",text:"Cuando des de alta a una persona en Personal, aparece acá."}));
   const head = el("tr",{}, el("th",{text:"Jefe"}), ...P.secciones.map(s=>el("th",{class:"vert",text:s.nombre})));
   const tb = el("tbody",{}, jefes.map(j=>el("tr",{}, el("th",{scope:"row"}, j.nombre, el("small",{class:"hint",text:j.rol==="empleado"?" · empleado":" · jefe"})), ...P.secciones.map(s=>{
@@ -4350,7 +4352,7 @@ function vCierre(main){
     const al = r.alertas||[];
     const confirmarF = (fecha, est) => async e => { const b=e.currentTarget; spinBtn(b); try{ await apiS("confirmarFeriado", fecha, est); toast(est==="cerrado"?"Marcado: estuvo cerrado":"Marcado: abrió (cierre pendiente de carga)"); cargar(); }catch(x){ unspin(b); toast(msgErr(x)); } };
     body.append(el("div",{class:"card"}, el("h3",{text:"🔎 Alertas para revisión"}),
-      el("p",{class:"hint",text:"Un cierre de ventas no demuestra quién estuvo presente. Estas diferencias son para revisar, no conclusiones de incumplimiento. Quien está de vacaciones aprobadas no figura como falta."}),
+      el("p",{class:"hint",text:"Un cierre de ventas no demuestra quién estuvo presente. Estas diferencias son para revisar, no conclusiones de incumplimiento."+(vacOK()?" Quien está de vacaciones aprobadas no figura como falta.":"")}),
       al.length ? el("ul",{class:"action"}, al.map(a=>el("li",{class:a.tipo}, el("span",{class:"mono",text:fmtF(a.fecha)}), el("span",{}, el("b",{text:(ALERTA_TXT[a.tipo]||a.tipo)+": "}), a.detalle,
         a.tipo==="feriado_confirmar" ? el("span",{class:"row",style:"margin-top:6px"}, el("button",{class:"btn sm",type:"button",text:"Estuvo cerrado",onclick:confirmarF(a.fecha,"cerrado")}), el("button",{class:"btn sm primary",type:"button",text:"Abrió",onclick:confirmarF(a.fecha,"abierto")})) : null)))) : el("p",{class:"lead",text:"Sin alertas en el período."})));
   };
@@ -4454,7 +4456,7 @@ async function vConfig(main){
   body.append(el("div",{class:"card"}, el("h2",{text:"🕘 Fichada, fotos y conservación"}), el("h3",{text:"Días de apertura generales (los usa cada sucursal que no tenga los suyos)"}), el("div",{class:"chkgrid"},dias),
     el("label",{class:"chk"},fo," Foto obligatoria al fichar"),
     el("label",{class:"chk"},ub," Ubicación obligatoria al fichar (sin ubicación o fuera del radio, la fichada se rechaza y se ofrece el fichaje manual)"),
-    el("label",{class:"f"},"Cómo se cuentan los días de vacaciones",vd),
+    vacOK() ? el("label",{class:"f"},"Cómo se cuentan los días de vacaciones",vd) : null,
     el("div",{class:"grid2"}, el("label",{class:"f"},"Conservar fotos de fichada (días)",ri), el("label",{class:"f"},"Conservar fotos de auditoría (meses)",ra)),
     el("label",{class:"f"},"Aviso al personal sobre el uso de fotos",av),
     el("p",{class:"hint",text:`Al vencer el plazo las fotos van a la papelera de Drive. Los registros (fecha, hora, estado) se conservan. Última limpieza automática: ${c.ultimaPurga?fmtF(c.ultimaPurga):"todavía no"}.`}), bF));
@@ -4526,7 +4528,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz";
+const APP_V = "3.9zz4";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
