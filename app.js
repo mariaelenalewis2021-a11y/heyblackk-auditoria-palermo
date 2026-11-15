@@ -2896,7 +2896,8 @@ function tabVerifIS(C){
     el("tbody",{}, L.map(fila)))), nota ? el("p",{class:"hint",text:nota}) : null];
   return [el("div",{class:"card"}, el("h2",{text:"✅ Verificación final: ingreso ↔ Contabilium"}),
     el("p",{class:"lead",text:`Por modelo: lo que llegó según INGRESO tendría que ser igual a lo vendido en Contabilium desde el ${fmtF(C.ventasDesde).slice(0,5)} más el stock de HB Lima. Diferencia = llegó − vendido − stock.`}),
-    C.ventasIncompletas ? el("div",{class:"notice warn",text:"Las ventas todavía se están sumando (se completan en la próxima actualización): las diferencias positivas pueden achicarse."}) : null,
+    C.ventasIncompletas ? el("div",{class:"notice warn",text:`Faltan sumar ${C.pendientes||"algunos"} comprobantes de Contabilium (se completan solos cada hora): las diferencias positivas pueden achicarse.`}) : null,
+    C.filasSinSku ? el("div",{class:"notice warn",text:`${C.filasSinSku} fila(s) de INGRESO con mercadería llegada no tienen código SS27: no entran en esta verificación.`}) : null,
     el("div",{class:"hkpis"}, hk("Cuadran", String(ok.length), "diferencia menor a 10 u", "pos"), hk("Falta cargar en INGRESO", String(faltaIng.length), "Contabilium tiene más", faltaIng.length?"neg":null), hk("No figuran en Contabilium", String(faltaCtb.length), "INGRESO dice más", faltaCtb.length?"neg":null))),
     faltaIng.length ? el("div",{class:"card"}, el("h3",{text:"📥 Llegó pero no está cargado en INGRESO"}), tabla(faltaIng, "Contabilium vendió o tiene en stock más de lo que figura como llegado. Revisá en INGRESO: filas «Pendiente» que ya llegaron, o entregas sin cargar.")) : null,
     faltaCtb.length ? el("div",{class:"card"}, el("h3",{text:"🧾 Figura en INGRESO pero no aparece en Contabilium"}), tabla(faltaCtb, "Llegó más de lo que se vendió y queda en stock. Revisá: ingreso incompleto en Contabilium, traslados sin registrar, o la misma entrega cargada dos veces en INGRESO.")) : null,
@@ -2985,11 +2986,11 @@ function pintarProduccion(body, D, recargar){
   if (kp.length || al.length) body.append(el("div",{class:"card"}, el("h2",{text:"🧵 Producción hoy"}), kp.length?el("div",{class:"hkpis"}, kp):null,
     al.length ? el("ul",{class:"alertas-rrhh",style:"margin-top:10px"}, al.map(([i,c,t])=>el("li",{class:c}, el("span",{class:"sem",text:i}), el("div",{text:t})))) : null));
   // 3.9zz6 · De dónde salen INGRESO y PRODUCCIÓN (planilla de María)
-  body.append(el("p",{class:"hint",text: D.fuenteIP ? `📄 Ingreso y producción: ${D.fuenteIP.archivo} (modificada ${fmtF(String(D.fuenteIP.modificado).slice(0,10))}). Verificación final con la hoja Stock de Contabilium.` : "⚠️ No se pudo leer la planilla de María: ingreso y producción salen de la planilla de Google."}));
+  body.append(el("p",{class:"hint",text: D.fuenteIP ? `📄 Ingreso y producción: ${D.fuenteIP.archivo} (modificada ${fmtF(String(D.fuenteIP.modificado).slice(0,10))}).${D.concil?" Verificación final con la hoja Stock de Contabilium (pestaña «✅ Verificación con Stock»).":""}` : "⚠️ No se pudo leer la planilla de María: ingreso y producción salen de la planilla de Google."}));
   const tabs = [];
-  if (D.concil && (D.concil.filas||[]).length) tabs.push(["verif","✅ Verificación con Stock", ()=>tabVerifIS(D.concil)]);
   // ---- 3.9q · Distribución SS27 (primera pestaña: responde qué ingresó, qué reservar y cuánto se puede repartir)
   if (R.distribucion) tabs.push(["dist","📦 Distribución SS27", ()=>tabDistribucion(R.distribucion)]);
+  if (D.concil && (D.concil.filas||[]).length) tabs.push(["verif","✅ Verificación con Stock", ()=>tabVerifIS(D.concil)]);   // 3.9zz7
   // ---- Ingresos del mes
   if (T) tabs.push(["ingresos","📥 Qué ingresó", ()=>[el("div",{class:"card"},
     DM && DM.productos ? [el("h3",{text:`Ingresó en ${MES39(DM.mes)}: ${u36(DM.unidades)} en ${DM.productos} productos`}),
@@ -4547,7 +4548,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz6";
+const APP_V = "3.9zz7";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
