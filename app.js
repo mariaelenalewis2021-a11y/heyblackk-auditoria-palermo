@@ -2725,9 +2725,19 @@ function filaActualizacion(D, recargar){
   if (D.cierreSync && D.cierreSync.ts) items.push(el("span",{class:"pill "+(D.cierreSync.ok?"":"bad"),text:`📘 Ventas Palermo: ${tsTxt(D.cierreSync.ts)}${D.cierreSync.ok?"":" · error"}`}));
   const b = el("button",{class:"btn sm",type:"button",text:"🔄 Actualizar datos"});
   b.onclick = async ()=>{ spinBtn(b,"Leyendo las planillas…");
-    try{ const r = await apiS("actualizarPlanillas"); toast(r.map(x=>`${x.ok?"✅":"⚠️"} ${x.planilla.replace(/\.xlsx$/,"")}: ${x.ok?fechaHora(x.ts):x.error}`).join(" · ")); recargar(); }
+    try{ const r = await apiS("actualizarPlanillas"), mal = r.filter(x=>!x.ok); toast(mal.length ? `⚠️ ${mal.length} fuente(s) con problema: ${mal.map(x=>x.planilla.replace(/\.xlsx$/,"")).join(", ")} · el detalle está en «Estado de los datos»` : "✅ Todo al día"); recargar(); }   // 3.9zz8 · toast corto
     catch(e){ unspin(b); toast(msgErr(e)); } };
-  return el("div",{class:"card row act36"}, ...items, el("span",{class:"spacer"}), b);
+  return el("div",{}, el("div",{class:"card row act36"}, ...items, el("span",{class:"spacer"}), b), D.act ? estadoDatos(D.act) : null);
+}
+/** 3.9zz8 · «Estado de los datos»: semáforo por fuente de la última actualización (incluye pasos salteados por tiempo). */
+function estadoDatos(A){
+  const F = A.fuentes||[], mal = F.filter(f=>!f.ok), om = F.filter(f=>f.om), X = A.extra||{};
+  const res = mal.length ? `⚠️ ${mal.length} con problema` : om.length ? `🕒 ${om.length} quedó para la próxima` : "✅ todo al día";
+  const fila = f => el("tr",{}, el("td",{text:(f.ok?(f.om?"🕒":"✅"):"⚠️")+" "+f.p.replace(/\.xlsx$/,"")}), el("td",{class:"n",text:f.seg!=null?f.seg+" s":""}), el("td",{text: f.err || f.nota || (f.mod?"archivo del "+fechaHora(f.mod):"")}));
+  const extra = [X.planillaMaria?`Planilla de María leída (versión del ${fechaHora(X.planillaMaria)})`:null, X.verificacion?`Verificación con Stock: ${fechaHora(X.verificacion.ts)}${X.verificacion.incompleta?" (ventas todavía sumándose)":""}`:null, X.aCuenta?`Lista de cobros «a cuenta» de Contabilium: ${fechaHora(X.aCuenta)}${(Date.now()-new Date(X.aCuenta).getTime())>864e5?" — vieja: los saldos «a cuenta» no se descuentan hasta que se vuelva a leer":""}`:null].filter(Boolean);
+  return el("details",{class:"card mas39"}, el("summary",{text:`📡 Estado de los datos · ${A.boton?"actualización manual":"actualización automática"} del ${fechaHora(A.ts)}${A.total?` (${A.total} s)`:""} · ${res}`}),
+    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("tbody",{}, F.map(fila)))),
+    extra.length ? el("ul",{class:"hint"}, extra.map(x=>el("li",{text:x}))) : null);
 }
 const hk = (k,v,s,cls) => el("div",{class:"hk"+(cls?" "+cls:"")}, el("span",{class:"k",text:k}), el("b",{text:v}), s?el("span",{class:"hint",text:s}):null);
 
@@ -3164,6 +3174,7 @@ function pintarFinanzas(body, D, recargar){
   // 3.9zw · Las alertas ROJAS (datos viejos, planilla que no se pudo leer, importes ilegibles) se muestran siempre arriba: antes no aparecían en ninguna pantalla
   const rojas = (R.alertas||[]).filter(a=>a.nivel==="rojo");
   if (rojas.length) body.append(el("div",{class:"card notice bad"}, el("b",{text:"🔴 Antes de usar estos números"}), el("ul",{class:"alertas-rrhh"}, rojas.map(a=>el("li",{text:a.texto})))));
+  if (D.act && typeof estadoDatos==="function") body.append(estadoDatos(D.act));   // 3.9zz8 · qué fuentes están al día
 
   // ===== 0 · 3.9s · Pantallazo del mes que cerró (se muestra los primeros 10 días del mes siguiente)
   if (R.resumenMes){ const RM = R.resumenMes, hoyAR = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Argentina/Buenos_Aires"}).format(new Date());
@@ -4548,7 +4559,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz7";
+const APP_V = "3.9zz8";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
