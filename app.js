@@ -2906,7 +2906,7 @@ function tabVerifIS(C){
     el("tbody",{}, L.map(fila)))), nota ? el("p",{class:"hint",text:nota}) : null];
   return [el("div",{class:"card"}, el("h2",{text:"✅ Verificación final: ingreso ↔ Contabilium"}),
     el("p",{class:"lead",text:`Por modelo: lo que llegó según INGRESO tendría que ser igual a lo vendido en Contabilium desde el ${fmtF(C.ventasDesde).slice(0,5)} más el stock de HB Lima. Diferencia = llegó − vendido − stock.`}),
-    C.ventasIncompletas ? el("div",{class:"notice warn",text:`Faltan sumar ${C.pendientes||"algunos"} comprobantes de Contabilium (se completan solos cada hora): las diferencias positivas pueden achicarse.`}) : null,
+    C.ventasIncompletas ? el("div",{class:"notice warn",text:`Faltan sumar ${C.pendientes||"algunos"} comprobantes de Contabilium (se completan solos después de cada actualización de las 10 y 14 h): las diferencias positivas pueden achicarse.`}) : null,
     C.filasSinSku ? el("div",{class:"notice warn",text:`${C.filasSinSku} fila(s) de INGRESO con mercadería llegada no tienen código SS27: no entran en esta verificación.`}) : null,
     el("div",{class:"hkpis"}, hk("Cuadran", String(ok.length), "diferencia menor a 10 u", "pos"), hk("Falta cargar en INGRESO", String(faltaIng.length), "Contabilium tiene más", faltaIng.length?"neg":null), hk("No figuran en Contabilium", String(faltaCtb.length), "INGRESO dice más", faltaCtb.length?"neg":null))),
     faltaIng.length ? el("div",{class:"card"}, el("h3",{text:"📥 Llegó pero no está cargado en INGRESO"}), tabla(faltaIng, "Contabilium vendió o tiene en stock más de lo que figura como llegado. Revisá en INGRESO: filas «Pendiente» que ya llegaron, o entregas sin cargar.")) : null,
@@ -3248,7 +3248,7 @@ function tabVentas(R, PR, K){
     const lista = L => el("ol",{class:"top5 prod38"}, L.map(x=>el("li",{}, el("b",{text:x.nombre||x.codigo}), ` · ${x.unidades} u`, el("span",{class:"hint",text:" · "+x.codigo}))));
     const bloque = (t, L, vacio) => el("div",{class:"prod39"}, el("h3",{text:t}), L && L.length ? lista(L.slice(0,5)) : el("p",{class:"hint",text:vacio}));
     const card = el("div",{class:"card"}, el("h2",{text:"🔥 Lo que más se vende"}));
-    if (!PR) card.append(el("p",{class:"hint",text:"Todavía no se calculó: tocá «🔄 Actualizar» (o esperá a la actualización de las 7 h)."}));
+    if (!PR) card.append(el("p",{class:"hint",text:"Todavía no se calculó: tocá «🔄 Actualizar» (o esperá a la actualización de las 10 h)."}));
     else {
       const ss27 = PR.ss27 || (PR.todos||[]).filter(x=>x.temporada==="SS27"), fuera = PR.fuera || (PR.todos||[]).filter(x=>x.temporada!=="SS27");
       card.append(el("p",{class:"hint",text:`Unidades vendidas del ${fmtF(PR.desde)} al ${fmtF(PR.hasta)} (Contabilium, ya restadas las devoluciones).`}),
@@ -4559,7 +4559,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz8";
+const APP_V = "3.9zz9";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
