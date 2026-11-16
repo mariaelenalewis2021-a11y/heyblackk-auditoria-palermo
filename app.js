@@ -40,7 +40,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","fotoCorreccion","actualizarTodoEstado","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaParaTemplete","descargaCyber","verCertificado"]);
+const LECTURAS = new Set(["canjesPanel","descargaCanjes","descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","fotoCorreccion","actualizarTodoEstado","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaParaTemplete","descargaCyber","verCertificado"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -282,7 +282,7 @@ function pintarVista(id){
   if (id==="otros") return vOtros(main);
   if (!S.user) return loginCard(main, "Ingresá con tu usuario y PIN para abrir este módulo.");
   if (!puedeVer(m) || (id==="vacaciones" && !vacOK())) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
-  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, produccion:vProduccion, finanzas:vFinanzas}[id];
+  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, canjes:vCanjes, produccion:vProduccion, finanzas:vFinanzas}[id];
   V(main);
 }
 addEventListener("hashchange", route);
@@ -432,6 +432,7 @@ const ICONOS = {
   salir: '<path d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10"/><path d="M15 8l4 4-4 4M19 12H9"/>',
   vacaciones: '<path d="M3 20h18"/><path d="M12 20V9"/><path d="M4.5 9.5a7.5 7.5 0 0 1 15 0z"/><path d="M12 2.5V4"/><path d="M12 20c0 0-3 .5-4 2"/>',
   feriado: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/><path d="m10.5 16 1.5-3 1.5 3M10 15.5h4"/>',
+  canjes: '<rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18"/><path d="M12 8c-2-4-6-4-6-1s4 1 6 1zM12 8c2-4 6-4 6-1s-4 1-6 1z"/>',
   clientes: '<path d="M3 8l9-4 9 4-9 4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/>',
   finanzas: '<path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/><path d="M19 6.5c0-1-1-1.6-2.2-1.6S14.6 5.5 14.6 6.4s1 1.2 2.2 1.4 2.2.6 2.2 1.5-1 1.5-2.2 1.5-2.4-.5-2.4-1.5M16.8 4v1M16.8 10.4v1"/>',
   produccion: '<path d="M4 20V10l5 3V10l5 3V6h6v14z"/><path d="M8 17h2M13 17h2"/>',
@@ -456,6 +457,7 @@ const MODULOS = [
   {id:"vacaciones",t:"Vacaciones", d:"Solicitudes del equipo.", c:"#0891B2", perm:"vacaciones"},
   {id:"finanzas",  t:"Administración y Finanzas", d:"Pagos, cobros e ingresos por ventas: qué entró, qué salió, a dónde se fue y qué hacer. Explicado simple.", c:"#15803D", perm:"finanzas"},
   {id:"clientes",  t:"Clientes y pedidos", d:"Qué pidió cada cliente, qué se entregó y qué falta.", c:"#B45309", perm:"clientes"},
+  {id:"canjes",    t:"Canjes", d:"Lo que se llevaron las influencers por mes, a costo, y lo que devolvieron.", c:"#BE185D", perm:"canjes"},
   {id:"produccion",t:"Producción", d:"Planificado, ingresado, talleres y lo que falta fabricar.", c:"#4F46E5", perm:"produccion"},
   {id:"otros",     t:"Otros", d:"Instalar la app y cambiar tu PIN.", c:"#CA8A04", perm:null},
   {id:"config",    t:"Configuración", d:"Ubicación, objetivos y alertas.", c:"#111113", perm:"config"}
@@ -850,7 +852,7 @@ function editarSectores(x, recargar){
     catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
 function editarPermisos(x, recargar){
-  const NOM = {finanzas:"Administración y Finanzas",clientes:"Clientes y pedidos",produccion:"Producción",ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
+  const NOM = {finanzas:"Administración y Finanzas",clientes:"Clientes y pedidos",canjes:"Canjes (influencers)",produccion:"Producción",ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
   const rol = el("select",{}, ...["empleado","responsable","admin"].map(r=>el("option",{value:r,text:{empleado:"Empleado",responsable:"Jefe / Responsable",admin:"Administración"}[r],selected:x.rol===r})));
   const checks = Object.keys(NOM).filter(k=>k!=="vacaciones" || /^maria$/i.test(String(x.legajo||""))).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:x.permisos.includes(k)}); return el("label",{class:"chk"},c," "+NOM[k]); });
   const pers = el("input",{type:"checkbox",checked:x.permisosPersonalizados});
@@ -3074,55 +3076,54 @@ function cardSS27Stock(R){
       x.stock==null ? null : x.stock<5 ? el("span",{class:"pill bad",text:x.stock<=0?"⚠️ sin stock":`⚠️ quedan ${x.stock} u`}) : el("span",{class:"hint",text:` · stock ${x.stock} u`})))),
     el("p",{class:"hint",text:"Alerta cuando quedan menos de 5 unidades. Ventas de la última semana; stock total de Contabilium (se lee en cada actualización)."}));
 }
+/* 3.9zz12 · Pedido de María (16/11): Producción compacta. Lo que ingresó, lo que falta producir (con taller y estado si no entró)
+   y el costo de cada cosa (Contabilium · Productos y servicios → costo interno). Distribución, verificación y stock quedan en pestañas. */
 function pintarProduccion(body, D, recargar){
-  const R = D.resumen, S = R.stock, F = R.falta, T = R.taller, DM = T && T.delMes, E = T && T.estados;
+  const R = D.resumen, S = R.stock, F = R.falta, T = R.taller, P = R.prod, E = T && T.estados;
   body.append(filaActualizacion(D, recargar));
   const ba = barraSeccion(D.audio, "Producción"); if (ba) body.append(ba);
-  // ---- Producción hoy: lo justo, en una tarjeta
-  const kp = [DM && DM.productos ? hk("📥 Ingresó en "+MES39(DM.mes), u36(DM.unidades), DM.productos+" productos", "pos") : null,
-    S ? hk("🏬 Stock libre en Lima", u36(S.libre), "para vender") : null,
-    F ? hk("🧵 Falta producir", u36(F.total), F.paraPedidos?u36(F.paraPedidos)+" son para pedidos":"", "neg") : null,
-    E && E.atrasado.pedidos ? hk("🔴 Atrasados", E.atrasado.pedidos+(E.atrasado.pedidos===1?" pedido":" pedidos"), u36(E.atrasado.unidades)+" sin llegar", "neg")
-      : E && E.en_produccion.unidades ? hk("🟡 En producción", u36(E.en_produccion.unidades), E.en_produccion.pedidos+" pedidos") : null].filter(Boolean);
-  const al = [].concat((R.alertas||[]).slice(0,(R.ss27Bajo||[]).length?3:2).map(a=>[a.nivel==="rojo"?"🔴":"🟡", "al-"+(a.nivel==="rojo"?"rojo":"amarillo"), a.texto]), (R.recomendaciones||[]).slice(0,1).map(t=>["👉","al-verde",t]));
-  if (kp.length || al.length) body.append(el("div",{class:"card"}, el("h2",{text:"🧵 Producción hoy"}), kp.length?el("div",{class:"hkpis"}, kp):null,
-    al.length ? el("ul",{class:"alertas-rrhh",style:"margin-top:10px"}, al.map(([i,c,t])=>el("li",{class:c}, el("span",{class:"sem",text:i}), el("div",{text:t})))) : null));
-  // 3.9zz6 · De dónde salen INGRESO y PRODUCCIÓN (planilla de María)
-  body.append(el("p",{class:"hint",text: D.fuenteIP ? `📄 Ingreso y producción: ${D.fuenteIP.archivo} (modificada ${fmtF(String(D.fuenteIP.modificado).slice(0,10))}).${D.concil?" Verificación final con la hoja Stock de Contabilium (pestaña «✅ Verificación con Stock»).":""}` : "⚠️ No se pudo leer la planilla de María: ingreso y producción salen de la planilla de Google."}));
+  const n0 = v => Math.round(v||0).toLocaleString("es-AR"), cst = v => v==null ? "–" : moneyK(v);
+  const plan = R.planificado||0, ing = R.ingresado||0, falta = P ? P.faltaTotal : (R.enProceso||0)+(R.sinIniciar||0);   // jurado: igual que la tabla «Falta entrar»
+  body.append(el("div",{class:"card"}, el("h2",{style:"margin:0 0 8px",text:"🧵 Producción"}),
+    el("div",{class:"hkpis"},
+      hk("Planificado", u36(plan), (R.articulos||0)+" artículos"),
+      hk("Ingresó", u36(ing), (R.avance||0)+" %"+(P&&P.conCostos?" · costo "+moneyK(P.costoIngresado):""), "pos"),
+      hk("Falta producir", u36(falta), P&&P.conCostos?"costo "+moneyK(P.costoFalta):"", falta?"neg":null),
+      E && E.atrasado.pedidos ? hk("Atrasado", u36(E.atrasado.unidades), E.atrasado.pedidos+(E.atrasado.pedidos===1?" pedido":" pedidos"), "neg") : null,
+      E && E.por_llegar.unidades ? hk("Sin taller", u36(E.por_llegar.unidades), E.por_llegar.pedidos+" pedidos") : null),
+    E ? barraPartes([{t:"Ingresó",v:ing,c:"#16A34A"},{t:"En taller",v:E.en_produccion.unidades,c:"#D97706"},{t:"Atrasado",v:E.atrasado.unidades,c:"#DC2626"},{t:"Sin taller",v:E.por_llegar.unidades,c:"#9CA3AF"}]) : null,
+    P && P.sinCosto ? el("p",{class:"hint",text:`${P.sinCosto} artículo(s) sin costo en Contabilium (no suman en los costos).`}) : null,
+    P && !P.conCostos ? el("p",{class:"hint",text:"Los costos de Contabilium se leen todos los días en el control de las 12 h."}) : P && P.costosAl ? el("p",{class:"hint",text:"Costos de Contabilium al "+fmtF(String(P.costosAl).slice(0,10))+"."}) : null));
+  if (!document.getElementById("css-ped12")) document.head.append(el("style",{id:"css-ped12",text:".ped12{white-space:nowrap;font-size:13px}.ped12 th,.ped12 td{padding:6px 7px}.ped12 td:first-child button{padding:2px 4px;font-weight:600;text-align:left;white-space:nowrap}"}));
+  const tabla = (cols, filas, tot) => el("div",{class:"tablewrap"}, el("table",{class:"compact ped12"}, el("thead",{}, el("tr",{}, ...cols.map((x,i)=>el("th",{class:i?"n":null,text:x})))), el("tbody",{}, filas, tot||null)));
+  if (P){
+    // Lo que falta entrar: taller, estado y costo
+    const L = P.faltan, ver = L.slice(0,15);
+    body.append(el("div",{class:"card"}, el("h3",{text:`✂️ Falta entrar · ${u36(L.reduce((a,x)=>a+x.falta,0))}`}),
+      tabla(["Producto","Falta","Estado","Costo","Taller","Prometida"], ver.map(x=>el("tr",{}, el("td",{style:"white-space:normal;min-width:130px",text:x.producto}), el("td",{class:"n neg",text:n0(x.falta)}),
+        el("td",{class:"n"}, el("span",{class:"pill "+(x.atrasado?"bad":x.estado==="Sin taller"?"":"warn"),text:x.estado})), el("td",{class:"n",text:cst(x.costo)}), el("td",{class:"n",text:x.taller}), el("td",{class:"n",text:x.prometida?fmtF(x.prometida).slice(0,5):"–"})))),
+      L.length>15 ? el("p",{class:"hint",text:`Y ${L.length-15} más en la descarga.`}) : null, botonesDescarga("falta","modelo, talle, cantidad y taller")));
+    // Lo que ingresó este mes
+    const I = P.ingreso;
+    body.append(el("div",{class:"card"}, el("h3",{text:`📥 Ingresó en ${MES39(P.mes)} · ${u36(I.reduce((a,x)=>a+x.u,0))}`+(I.some(x=>x.costo!=null)?" · "+moneyK(I.reduce((a,x)=>a+(x.costo||0),0)):"")}),
+      I.length ? tabla(["Producto","Unidades","Fecha","Taller","Costo"], I.slice(0,12).map(x=>el("tr",{}, el("td",{style:"white-space:normal;min-width:150px",text:x.producto+(x.completo?" ✅":"")}), el("td",{class:"n",text:n0(x.u)}), el("td",{class:"n",text:fmtF(x.fecha).slice(0,5)}), el("td",{class:"n",text:x.taller}), el("td",{class:"n",text:cst(x.costo)})))) : el("p",{class:"hint",text:"Todavía no ingresó mercadería este mes."}),
+      I.length>12 ? el("p",{class:"hint",text:`Y ${I.length-12} más en la descarga.`}) : null, botonesDescarga("taller","todo lo que ingresó y los pedidos de taller")));
+    // Talleres
+    body.append(el("div",{class:"card"}, el("h3",{text:"🚚 Talleres"}),
+      tabla(["Taller","Pedido","Llegó","Falta","Atrasados","Costo de lo que falta"], P.talleres.filter(t=>t.pedido).map(t=>el("tr",{}, el("td",{}, el("button",{class:"btn ghost sm",type:"button",onclick:()=>detalleTallerUI(t.taller),text:t.taller+" ›"})),
+        el("td",{class:"n",text:n0(t.pedido)}), el("td",{class:"n",text:n0(t.llego)}), el("td",{class:"n"+(t.falta?" neg":""),text:t.falta?n0(t.falta):"✓"}), el("td",{class:"n"+(t.atrasados?" neg":""),text:t.atrasados?String(t.atrasados):"–"}), el("td",{class:"n",text:t.costoFalta?moneyK(t.costoFalta):"–"}))))));
+  }
+  const rojas = (R.alertas||[]).filter(a=>a.nivel==="rojo").slice(0,2);
+  if (rojas.length) body.append(el("div",{class:"card"}, el("ul",{class:"alertas-rrhh"}, rojas.map(a=>el("li",{class:"al-rojo"}, el("span",{class:"sem",text:"🔴"}), el("div",{text:a.texto}))))));
   const tabs = [];
-  // ---- 3.9q · Distribución SS27 (primera pestaña: responde qué ingresó, qué reservar y cuánto se puede repartir)
   if (R.distribucion) tabs.push(["dist","📦 Distribución SS27", ()=>tabDistribucion(R.distribucion)]);
-  if (D.concil && (D.concil.filas||[]).length) tabs.push(["verif","✅ Verificación con Stock", ()=>tabVerifIS(D.concil)]);   // 3.9zz7
-  // ---- Ingresos del mes
-  if (T) tabs.push(["ingresos","📥 Qué ingresó", ()=>[el("div",{class:"card"},
-    DM && DM.productos ? [el("h3",{text:`Ingresó en ${MES39(DM.mes)}: ${u36(DM.unidades)} en ${DM.productos} productos`}),
-        el("ol",{class:"lista39"}, DM.lista.slice(0,10).map(x=>el("li",{}, el("b",{text:x.modelo}), ` · ${u36(x.cantidad)}`, el("span",{class:"hint",text:` · ${x.taller} · ${fmtF(x.fecha).slice(0,5)}${x.completo?" · ✅ completo":""}`})))),
-        DM.lista.length>10 ? el("p",{class:"hint",text:`Y ${DM.lista.length-10} productos más en la descarga (hoja «Ingresó en el mes»).`}) : null]
-      : el("p",{class:"hint",text:"Todavía no ingresó mercadería de talleres este mes."}),
-    T.proximos.length ? [el("h3",{text:"⏭️ Lo próximo que llega"}), el("ol",{class:"top5"}, T.proximos.slice(0,5).map(x=>{ const [ic,t,c]=EST_T[x.estado]; return el("li",{}, el("b",{text:x.modelo}), ` · faltan ${u36(x.pendiente)}`, el("span",{class:"hint",text:` · ${x.taller}${x.fecha?" · "+fmtF(x.fecha).slice(0,5):""} `}), el("span",{class:"pill "+c,text:ic+" "+t})); }))] : null,
-    botonesDescarga("taller","todo lo que ingresó y los pedidos de taller"))]]);
-  // ---- Stock real de Lima
+  if (D.concil && (D.concil.filas||[]).length) tabs.push(["verif","✅ Verificación con Stock", ()=>tabVerifIS(D.concil)]);
   if (S) tabs.push(["stock","🏬 Stock Lima", ()=>[el("div",{class:"card"},
     el("div",{class:"hkpis"}, hk("Hay", u36(S.fisico), "stock físico"), hk("Comprometido", u36(S.comprometido), "para pedidos"), hk("Libre", u36(S.libre), "para vender", "pos"), S.faltante ? hk("Falta para pedidos", u36(S.faltante), "", "neg") : null),
-    barraPartes([{t:"Libre",v:S.libre,c:"#16A34A"},{t:"Comprometido",v:S.comprometido,c:"#D97706"}]),
-    el("div",{class:"split"},
-      S.topLibre.length ? el("div",{}, el("h3",{text:"Más stock libre"}), el("ol",{class:"top5"}, S.topLibre.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.libre)}`)))) : null,
-      S.topMenos.length ? el("div",{}, el("h3",{text:"Menos stock libre"}), el("ol",{class:"top5"}, S.topMenos.map(m=>el("li",{}, el("b",{text:m.modelo}), m.faltante ? ` · faltan ${u36(m.faltante)}` : ` · ${u36(m.libre)}`)))) : null),
-    botonesDescarga("stock","por modelo, color y talle"))]]);
-  // ---- Qué falta producir
-  if (F) tabs.push(["falta","✂️ Falta producir", ()=>[el("div",{class:"card"},
-    el("div",{class:"hkpis"}, hk("Total", u36(F.total), (F.pctPlanificado||0)+" % de lo planificado", "neg"), hk("Para pedidos", u36(F.paraPedidos)), hk("Para stock mínimo", u36(F.paraMinimo)), F.sinOt ? hk("Talles sin OT", String(F.sinOt), "", "neg") : null),
-    F.top.length ? [el("h3",{text:"Lo más urgente"}), el("ol",{class:"top5"}, F.top.map(m=>el("li",{}, el("b",{text:m.modelo}), ` · ${u36(m.pedidos+m.minimo)}`, m.urgente?el("span",{class:"pill bad",text:"urgente"}):null, m.taller?el("span",{class:"hint",text:" · "+m.taller}):null)))] : null,
-    botonesDescarga("falta","modelo, talle, cantidad y taller")), cardSS27Stock(R)]]);
-  // ---- Talleres
-  if (T) tabs.push(["talleres","🚚 Talleres", ()=>[el("div",{class:"card"},
-    el("div",{class:"hkpis"}, hk("Llegaron", u36(T.llegadas), `${T.conLlegada} pedidos`), E.en_produccion.unidades ? hk("En producción", u36(E.en_produccion.unidades), `${E.en_produccion.pedidos} pedidos`) : null,
-      E.por_llegar.unidades ? hk("Sin taller asignado", u36(E.por_llegar.unidades), `${E.por_llegar.pedidos} pedidos`) : null, E.atrasado.pedidos ? hk("Atrasados", String(E.atrasado.pedidos), u36(E.atrasado.unidades)+" sin llegar", "neg") : null),
-    barraPartes([{t:"Llegado",v:T.llegadas,c:"#16A34A"},{t:"En producción",v:E.en_produccion.unidades,c:"#D97706"},{t:"Atrasado",v:E.atrasado.unidades,c:"#DC2626"},{t:"Sin taller",v:E.por_llegar.unidades,c:"#9CA3AF"}]),
-    el("h3",{text:"Tocá un taller para ver su detalle"}),
-    el("div",{class:"row chips-taller"}, T.talleres.filter(t=>t.pedido).slice(0,10).map(t=>el("button",{class:"btn sm"+(t.atrasados?" danger":""),type:"button",onclick:()=>detalleTallerUI(t.taller)}, `${t.taller} · ${t.pedido?Math.round(t.llegado/t.pedido*100):0} %${t.falta?" · faltan "+t.falta:""}`))),
-    botonesDescarga("taller","todos los pedidos de taller"))]]);
+    botonesDescarga("stock","por modelo, color y talle")), cardSS27Stock(R)]]);
+  if (!P && F) tabs.push(["falta","✂️ Falta producir", ()=>[el("div",{class:"card"}, el("div",{class:"hkpis"}, hk("Total", u36(F.total), "", "neg"), hk("Para pedidos", u36(F.paraPedidos)), hk("Para stock mínimo", u36(F.paraMinimo))), botonesDescarga("falta","modelo, talle, cantidad y taller"))]]);
   if (tabs.length) body.append(pestanas39("prod", tabs));
+  body.append(el("p",{class:"hint",text: D.fuenteIP ? `📄 ${D.fuenteIP.archivo} (modificada ${fmtF(String(D.fuenteIP.modificado).slice(0,10))}) · costos: Contabilium.` : "⚠️ No se pudo leer la planilla de ingreso y producción."}));
 }
 async function detalleTallerUI(taller){
   let d; try{ d = await apiS("detalleTaller", taller); }catch(e){ return toast(msgErr(e)); }
@@ -3169,6 +3170,65 @@ function cardsControlResumen(K){
       P.taller?hk("Taller: llegó",u36(P.taller.llegado)):null, P.taller&&P.taller.enProduccion?hk("En producción",u36(P.taller.enProduccion)):null, P.taller&&P.taller.porLlegar?hk("Por llegar",u36(P.taller.porLlegar)):null),
     (P.alertas||[]).length ? el("ul",{class:"lista-avisos"}, P.alertas.slice(0,3).map(a=>el("li",{text:(a.nivel==="rojo"?"🔴 ":"🟡 ")+a.texto}))) : null));
   return out;
+}
+
+/* ---------------- 3.9zz12 · CANJES (influencers) ----------------
+   Pedido de María (16/11): lo que sale de HB Lima / HB Palermo al depósito «Canjes influencers» de Contabilium, por mes, con el costo
+   de cada producto. Florencia marca lo que devuelven (se descuenta del total). Descarga en PDF y Excel. */
+const MES_CJ = m => { const [y,mm] = String(m).split("-"); return ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][Number(mm)-1]+" "+y; };
+async function vCanjes(main){
+  const body = el("div",{class:"stack"}); main.append(body);
+  let desde = null, hasta = null;
+  const cargar = async ()=>{
+    body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Leyendo canjes…"));
+    let D; try{ D = await apiS("canjesPanel", desde||"", hasta||""); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    desde = D.desde; hasta = D.hasta; body.textContent=""; pintarCanjes(body, D, (a,b)=>{ desde=a; hasta=b; cargar(); }, cargar);
+  };
+  cargar();
+}
+function pintarCanjes(body, D, cambiarRango, recargar){
+  if (!document.getElementById("css-ped12")) document.head.append(el("style",{id:"css-ped12",text:".ped12{white-space:nowrap;font-size:13px}.ped12 th,.ped12 td{padding:6px 7px}.ped12 td:first-child button{padding:2px 4px;font-weight:600;text-align:left;white-space:nowrap}"}));
+  const T = D.total, meses = D.mesesDisp.length ? D.mesesDisp : [D.hasta];
+  const selD = el("select",{"aria-label":"Desde"}, meses.map(m=>el("option",{value:m,text:MES_CJ(m),selected:m===D.desde})));
+  const selH = el("select",{"aria-label":"Hasta"}, meses.map(m=>el("option",{value:m,text:MES_CJ(m),selected:m===D.hasta})));
+  const ir = el("button",{class:"btn sm",type:"button",text:"Ver"}); ir.onclick = ()=>{ let a=selD.value, b=selH.value; if (a>b) [a,b]=[b,a]; cambiarRango(a,b); };
+  const bajar = fmt => { const b = el("button",{class:"btn sm",type:"button",text:"⬇️ "+(fmt==="pdf"?"PDF":"Excel")}); b.onclick = async ()=>{ spinBtn(b, fmt==="pdf"?"Armando el PDF…":"Armando el Excel…");
+      try{ const X = await apiS("descargaCanjes", D.desde, D.hasta); await (fmt==="pdf" ? exportarPDF37(X) : exportarXLSX37(X)); }catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); }; return b; };
+  body.append(el("div",{class:"card"},
+    el("div",{class:"row"}, el("h2",{style:"margin:0",text:"🎁 Canjes · influencers"}), el("span",{class:"spacer"}), bajar("pdf"), bajar("xlsx")),
+    el("div",{class:"row",style:"margin-top:8px"}, el("label",{class:"f"},"Desde",selD), el("label",{class:"f"},"Hasta",selH), ir),
+    el("div",{class:"hkpis",style:"margin-top:10px"}, hk("Unidades", String(T.unidades), T.productos+" movimientos"), hk("Se llevaron", money(T.importe), "a costo"),
+      hk("Devolvieron", money(T.devueltoImp), T.devueltas+" u validadas", T.devueltoImp?"pos":null), hk("Total", money(T.neto), "costo de lo que no volvió", "neg")),
+    D.sinCosto ? el("p",{class:"notice warn",text:`${D.sinCosto} producto(s) sin costo en Contabilium (Productos y servicios): cuentan $ 0 hasta que se cargue.`}) : null,
+    el("p",{class:"hint",text:"Fuente: Contabilium, movimientos de HB Lima / HB Palermo al depósito «Canjes influencers». Costo = costo interno del producto. Desde el 17/11 lo nuevo se detecta por diferencia de stock del depósito: completá quién se lo llevó; la devolución que sugiere Contabilium es orientativa."+(D.ultimaLectura?" Última lectura: "+fmtF(String(D.ultimaLectura).slice(0,10))+" "+String(new Date(D.ultimaLectura).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"}))+".":"")})));
+  if (!D.meses.length) return body.append(el("div",{class:"card empty",text:"No hay canjes en este período."}));
+  body.append(el("div",{class:"card"}, el("h3",{text:"Por mes"}), el("div",{class:"tablewrap"}, el("table",{class:"compact ped12"},
+    el("thead",{}, el("tr",{}, ...["Mes","Unidades","Se llevaron","Devuelto","Total"].map((x,i)=>el("th",{class:i?"n":null,text:x})))),
+    el("tbody",{}, D.meses.map(m=>el("tr",{}, el("td",{text:MES_CJ(m.mes)}), el("td",{class:"n",text:String(m.unidades)}), el("td",{class:"n",text:money(m.importe)}), el("td",{class:"n",text:m.devueltoImp?money(m.devueltoImp):"–"}), el("td",{class:"n",text:money(m.neto)}))),
+      el("tr",{class:"tot"}, el("td",{text:"Total"}), el("td",{class:"n",text:String(T.unidades)}), el("td",{class:"n",text:money(T.importe)}), el("td",{class:"n",text:money(T.devueltoImp)}), el("td",{class:"n",text:money(T.neto)})))))));
+  // Detalle por mes → por influencer, con la validación de devoluciones
+  D.meses.forEach((m,ix)=>{
+    const its = D.items.filter(i=>i.mes===m.mes), grupos = {};
+    its.forEach(i=>{ (grupos[i.influencer||"—"] = grupos[i.influencer||"—"] || []).push(i); });
+    const det = el("details",{class:"card",open:ix===0}, el("summary",{}, el("b",{text:MES_CJ(m.mes)}), ` · ${m.unidades} productos · total ${money(m.neto)}`));
+    Object.entries(grupos).sort((a,b)=>b[1].reduce((s,x)=>s+x.importe,0)-a[1].reduce((s,x)=>s+x.importe,0)).forEach(([inf, L])=>{
+      det.append(el("h4",{style:"margin:12px 0 4px",text:`${inf} · ${money(L.reduce((s,x)=>s+x.neto,0))}`}));
+      L.forEach(i=>det.append(filaCanje(i, D.puedeValidar, recargar)));
+    });
+    body.append(det);
+  });
+}
+function filaCanje(i, puede, recargar){
+  const sel = el("select",{"aria-label":"Devueltas de "+i.producto,disabled:!puede}, Array.from({length:i.u+1},(_,k)=>el("option",{value:k,text:k===0?"No volvió":k===i.u&&i.u===1?"Volvió":"Volvieron "+k,selected:k===i.devuelto})));
+  const est = el("span",{class:"hint",text:i.validadoPor?"✓ "+i.validadoPor:""});
+  const guardar = async (dev, inf)=>{ est.textContent="Guardando…"; try{ const r = await apiS("canjesValidar", i.id, dev, inf); i.devuelto = r.devuelto; est.textContent="✓ guardado"; recargar(); }catch(e){ est.textContent=""; toast(msgErr(e)); } };
+  sel.onchange = ()=>guardar(Number(sel.value), null);
+  const sug = i.ctbDevuelto && i.ctbDevuelto!==i.devuelto && puede ? el("button",{class:"btn ghost sm",type:"button",text:`Contabilium registró que volvió ${i.ctbDevuelto} (orientativo) · usar`,onclick:()=>guardar(i.ctbDevuelto, null)}) : null;
+  const nom = puede && (i.fuente==="auto" || !i.influencer) ? el("input",{type:"text",value:i.influencer||"",placeholder:"¿Quién se lo llevó?",style:"max-width:180px","aria-label":"Influencer"}) : null;
+  if (nom) nom.onchange = ()=>{ if (nom.value.trim()!==(i.influencer||"")) guardar(null, nom.value.trim()); };
+  return el("div",{class:"row",style:"gap:8px;padding:6px 0;border-top:1px solid var(--line,#e5e5ea);flex-wrap:wrap"},
+    el("span",{style:"flex:1 1 220px;min-width:0"}, el("b",{text:i.producto}), el("span",{class:"hint",text:` · ${i.sku} · ${fmtF(i.fecha).slice(0,5)}${i.deposito?" · "+i.deposito:""}`})),
+    el("span",{class:"mono",text:`${i.u} × ${i.sinCosto?"sin costo":money(i.costo)}`}), sel, sug, nom, est);
 }
 const CYB38 = { D:null, t:0 };
 /* ===================== 3.8 · Finanzas Hey Blackk (planilla «Templete registro actividades» en Dropbox, solo lectura) =====================
@@ -3294,7 +3354,7 @@ function pintarFinanzas(body, D, recargar){
           el("p",{class:"lead",text:`Lo cargado en el Templete hasta ${S.ultimaCarga?fmtF(S.ultimaCarga):"hoy"}. Los pagos del mes (sueldos, alquileres) se cargan después: lo que salió va a subir.`}))),
       el("div",{class:"hkpis"},
         hk("💵 Entró", moneyK(cajaC), "cobrado y cargado en el Templete"+((C.ajusteGC||0)<-1?` (ya sin ${moneyK(-C.ajusteGC)} de grandes cuentas contados dos veces)`:""), "pos"),
-        C.facturadoSinCargar>1 ? hk("🧾 Facturado sin cargar", moneyK(C.facturadoSinCargar), "Contabilium: falta cargarlo en el Templete (no se suma a lo que entró)") : null,
+        D.maria && C.facturadoSinCargar>1 ? hk("🧾 Facturado sin cargar", moneyK(C.facturadoSinCargar), "Contabilium: falta cargarlo en el Templete (no se suma a lo que entró)") : null,
         hk("💸 Salió", moneyK(C.egresos), "en lo que va del mes", "neg"),
         U && !(R.resumenMes && R.resumenMes.mes===U.mes && R.resumenMes._card) ? hk("📆 "+capi(MESL(U.mes))+((R.resumenMes&&R.resumenMes.provisorio)?" (provisorio)":" cerró"), (U.neto>=0?"+":"−")+moneyK(Math.abs(U.neto)), U.neto>=0?"a favor":"en contra", U.neto<0?"neg":"pos") : null),
       E ? el("div",{}, el("p",{class:"hint",style:"margin:10px 0 4px",text:`🎯 Para no perder plata hay que vender ${moneyK(E.necesario)} en el mes${vC<E.necesario&&dia<dm?` · van ${moneyK(vC)}, faltan ${moneyK(E.necesario-vC)} en ${dm-dia} días`:""}.`}), medidorVenta(vC, E.necesario)) : null));
@@ -3316,7 +3376,7 @@ function pintarFinanzas(body, D, recargar){
   // 3.9za · Panorama claro: ventas (Contabilium ↔ Templete), a dónde se fue la plata por sector y pagos del mes
   if (R.panorama && !R.panorama.error){ const cp = cardPanorama39(R.panorama); if (cp) body.append(cp); const cq = cardPagos39(R.panorama.pagos); if (cq) body.append(cq); }
   // Qué hacer (máx. 3, siempre a la vista)
-  const recs = R.recomendaciones.slice(0,2), pal = t => new Set((String(t).toLowerCase().match(/[a-záéíóúñ]{7,}/g)||[]));
+  const recs = R.recomendaciones.slice(0,D.maria?2:1), pal = t => new Set((String(t).toLowerCase().match(/[a-záéíóúñ]{7,}/g)||[]));
   const yaDicho = t => { const w = pal(t); return recs.some(r=>[...pal(r)].some(x=>w.has(x) && !/septiembre|octubre|noviembre|diciembre|necesario/.test(x))); };
   const hacer = [].concat(recs.map(t=>["👉","al-verde",t]), R.alertas.filter(a=>a.nivel!=="rojo" && !yaDicho(a.texto)).slice(0,1).map(a=>["🟡","al-amarillo",a.texto]));
   if (hacer.length) body.append(el("div",{class:"card"}, el("h3",{text:"✅ Lo que conviene hacer ahora"}),
@@ -3330,8 +3390,23 @@ function pintarFinanzas(body, D, recargar){
     ["plata","💵 La plata", ()=>tabPlata(R, U, S)],
     D.maria && (R.gcSS27 || R.cobranzas || R.anticipos || R.cuentasCorrientes) ? ["gc","🤝 Grandes cuentas", ()=>tabGrandes(R)] : null,
     // 3.9zm · «Cobranzas a validar» pasó adentro de Mi cierre, ordenada por pasos
-    ["control","🔎 Control", ()=>tabControl(D, R, K, recargar)]].filter(Boolean);
+    D.maria ? ["control","🔎 Control", ()=>tabControl(D, R, K, recargar)] : null].filter(Boolean);   // 3.9zz12 · el control del Templete es solo de María
   body.append(pestanas39("fin", tabs));
+  if (!D.maria) sinTemplete(body);
+}
+/* 3.9zz12 · Pedido de María (16/11): a Thomas y a los dueños no les interesa nada del Templete (cargas, correcciones, controles).
+   Para quien no es María se quita cada bloque que habla del Templete (también lo que se dibuja después, al cambiar de pestaña). */
+function sinTemplete(root){
+  if (root._stpl) return; root._stpl = 1;   // un solo observador por pantalla
+  const limpiar = () => {
+    root.querySelectorAll("details, li, p, .hk, .notice, .card, h3, span.hint").forEach(n=>{
+      if (!n.isConnected || !/templete/i.test(n.textContent)) return;
+      if (n.matches(".card") && !/templete/i.test((n.querySelector("h2,h3,summary")||{}).textContent||"")) return;   // la tarjeta queda; se quita solo la parte del Templete
+      if (n.matches("h3")) { const c = n.closest(".card"); if (c) c.remove(); return; }
+      if ([...n.querySelectorAll("details, li, p, .hk, .notice, span.hint")].some(x=>/templete/i.test(x.textContent))) return;   // se quita el pedazo más chico
+      n.remove(); });
+  };
+  limpiar(); try{ new MutationObserver(()=>limpiar()).observe(root,{childList:true,subtree:true}); }catch(e){}
 }
 /** Pestaña Ventas: facturado por canal + lo más vendido (Palermo · SS27 · fuera de temporada) + Excel fuera de temporada. */
 function tabVentas(R, PR, K){
@@ -4651,7 +4726,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz12";
+const APP_V = "3.9zz13";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
