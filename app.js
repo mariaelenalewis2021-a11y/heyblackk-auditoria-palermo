@@ -871,7 +871,7 @@ const estadoDiaTxt = {trabajado:"Trabajado", incompleto:"Incompleto", en_curso:"
 const estadoDiaCls = {trabajado:"ok", incompleto:"warn", en_curso:"", vacaciones:"ok", libre:"", feriado:"fer-l", sin_fichaje:"bad"};
 const hm = m => m==null ? "–" : Math.floor(Math.abs(m)/60)+":"+String(Math.abs(m)%60).padStart(2,"0");
 const difTxt = m => m==null ? "–" : (m<0?"−":"+")+hm(m);
-const paresTxt = P => (P||[]).map(p=>(p.entrada||"¿?")+"–"+(p.salida||(p.enCurso?"…":"¿?"))).join(" · ");
+const paresTxt = P => (P||[]).map(p=>(p.extra?"🏠 ":"")+(p.entrada||"¿?")+"–"+(p.salida||(p.enCurso?"…":"¿?"))).join(" · ");   // 3.9zz11 · 🏠 = desde casa (horas extra)
 /** Reinicia el cierre automático de la sesión de fichada (3 min sin uso). */
 function vigilarF(body){ clearTimeout(F.t); F.t = setTimeout(()=>{ finFichada(); body.textContent=""; vFichar(body); toast("Sesión de fichada cerrada"); }, 3*60*1000); }
 
@@ -894,7 +894,7 @@ async function jornada(body, j){
   // Estado actual, grande y claro
   card.append(el("div",{class:"estado-actual "+(j.estado.tipo==="entrada"?"adentro":j.estado.tipo==="salida"?"afuera":"")}, el("span",{class:"k",text:"Estado actual"}), el("b",{text:j.estado.texto})));
   if (j.pares && j.pares.length) card.append(el("div",{class:"pares"}, el("span",{class:"k",text:"Hoy"}),
-    el("span",{class:"mono",text:paresTxt(j.pares)}), j.minutosHoy ? el("b",{text:"Total "+horas(j.minutosHoy)}) : null));
+    el("span",{class:"mono",text:paresTxt(j.pares)}), j.minutosHoy || j.minutosExtraHoy ? el("b",{text:"Total "+horas(j.minutosHoy||0)+(j.minutosExtraHoy?` + 🏠 ${horas(j.minutosExtraHoy)} extra`:"")}) : null));
   if (j.contrato){ const c = j.contrato, M = c.mes || {};   // 3.7: su horario, lo de hoy y el avance del mes contra su carga
     card.append(el("div",{class:"contrato-hoy"},
       el("span",{class:"k",text:c.hoyLeToca ? `Hoy te toca de ${c.entrada} a ${c.salida} (${hm(c.minDia)} h)` : `Hoy no te toca · tu horario: ${c.diasTxt} de ${c.entrada} a ${c.salida}`}),
@@ -1097,7 +1097,8 @@ function pasoFoto(body, tipo, geo, v){
   body.textContent="";
   const b = el("button",{class:"btn fichar-btn "+tipo+" foto-btn",type:"button"}, el("span",{text:"📸"}), el("span",{text:"Sacar la foto"}));
   b.onclick = async ()=>{ spinBtn(b,"Abriendo la cámara…"); const foto = await fotoEnVivo(); if (!foto){ unspin(b); return; } confirmarFichada(body, tipo, geo, foto); };
-  body.append(el("div",{class:"card fichar"}, el("div",{class:"bigok",text:"✅"}), el("h2",{text:`Ubicación validada en ${v.sucursal}`}),
+  body.append(el("div",{class:"card fichar"}, el("div",{class:"bigok",text:"✅"}), el("h2",{text: v.casa ? "🏠 Fichada desde casa" : `Ubicación validada en ${v.sucursal}`}),
+    v.casa ? el("p",{class:"notice ok",text:"Este tramo se registra como trabajo desde casa y cuenta como HORAS EXTRA."}) : null,
     el("p",{class:"lead",text:`Ahora sacate la foto para registrar tu ${tipo}.`}), b,
     el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
 }
@@ -1117,8 +1118,8 @@ async function enviarFichada(body, tipo, geo, foto, boton){
     body.append(el("div",{class:"card fichar done "+tipo},
       el("div",{class:"bigok",text:"✅"}), el("h2",{text:(tipo==="entrada"?"Entrada":"Salida")+" registrada"}),
       el("div",{class:"big mono",text:r.hora.slice(0,5)}), el("p",{class:"lead",text:fmtF(r.fecha)+" · hora del servidor · "+r.sucursal}),
-      r.precisionBaja ? el("p",{class:"notice warn",text:"El GPS tenía poca precisión: el registro queda «para revisar» por un jefe."}) : el("p",{class:"lead",text:"📍 Ubicación validada en tu sucursal"+(r.fotoGuardada?" · 📷 foto guardada":"")}),
-      tipo==="salida" || r.minutosHoy ? el("p",{class:"lead",text:"⏱️ Hoy llevás "+horas(r.minutosHoy||0)}) : null,
+      r.casa ? el("p",{class:"notice ok",text:"🏠 Desde casa: cuenta como horas extra"+(r.fotoGuardada?" · 📷 foto guardada":"")}) : r.precisionBaja ? el("p",{class:"notice warn",text:"El GPS tenía poca precisión: el registro queda «para revisar» por un jefe."}) : el("p",{class:"lead",text:"📍 Ubicación validada en tu sucursal"+(r.fotoGuardada?" · 📷 foto guardada":"")}),
+      tipo==="salida" || r.minutosHoy ? el("p",{class:"lead",text:"⏱️ Hoy llevás "+horas(r.minutosHoy||0)+(r.minutosExtraHoy?` (${horas(r.minutosExtraHoy)} de horas extra)`:"")}) : null,
       r.tardanza ? el("div",{class:"tard39-c"}, el("h3",{text:`⏰ Llegaste ${r.tardanza.minutos} min tarde`}), el("p",{class:"hint",text:`Tu horario es ${r.tardanza.horario}. Contanos qué pasó: va directo a RR. HH.`}),
         formTardanza39(Object.assign({ respuesta:"pendiente" }, r.tardanza), { llamar:(fn,...a)=>api(fn, F.token, ...a), vigilar:()=>vigilarF(body), alListo:()=>{} })) : null,
       el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
@@ -1183,7 +1184,7 @@ async function misHoras(body, mes){
 function tablaHorasEmpleado(e, r, jefe, onCorregir){
   const box = el("div",{class:"grid"});
   const kpi = (k,v,cls) => el("div",{class:"hk "+(cls||"")}, el("span",{class:"k",text:k}), el("b",{text:v}));
-  box.append(el("div",{class:"hkpis"}, kpi("Total", hm(e.total)+" h"), kpi("Días trabajados", String(e.diasTrabajados)), kpi("Promedio diario", e.promedio==null?"–":hm(e.promedio)+" h"),
+  box.append(el("div",{class:"hkpis"}, kpi("Total", hm(e.total)+" h"), e.totalExtra ? kpi("🏠 Horas extra", hm(e.totalExtra)+" h", "pos") : null, kpi("Días trabajados", String(e.diasTrabajados)), kpi("Promedio diario", e.promedio==null?"–":hm(e.promedio)+" h"),
     e.esperado!=null ? kpi("Esperado", hm(e.esperado)+" h") : null, e.diferencia!=null ? kpi("Diferencia", difTxt(e.diferencia)+" h", e.diferencia<0?"neg":"pos") : null));
   const avisos = [];
   if (e.incompletos) avisos.push(`${e.incompletos} día(s) incompleto(s): no se suman hasta que se corrijan.`);
@@ -1199,7 +1200,7 @@ function tablaHorasEmpleado(e, r, jefe, onCorregir){
   const td = el("tbody");
   e.dias.slice().reverse().forEach(x=>td.append(el("tr",{}, el("td",{class:"mono",text:fmtF(x.fecha).slice(0,5)+" "+x.dia}),
     el("td",{}, el("span",{class:"pill "+(estadoDiaCls[x.estado]||""),text:estadoDiaTxt[x.estado]||x.estado}), x.feriado && x.estado!=="feriado" ? el("span",{class:"pill fer-l",text:"🎉"}) : null, jefe && x.revisar ? el("span",{class:"pill warn",text:"revisar"}) : null, x.manual ? el("span",{class:"pill",text:"manual"}) : null),
-    el("td",{class:"mono",text: x.estado==="feriado" ? x.feriado : paresTxt(x.pares)}), el("td",{class:"n",text:x.minutos==null?(x.minutosParciales&&x.estado==="en_curso"?hm(x.minutosParciales)+"…":"–"):hm(x.minutos)}),
+    el("td",{class:"mono",text: x.estado==="feriado" ? x.feriado : paresTxt(x.pares)}), el("td",{class:"n",text:x.minutos==null?(x.minutosParciales&&x.estado==="en_curso"?hm(x.minutosParciales)+"…":"–"):hm(x.minutos)+(x.minutosExtra?" + "+hm(x.minutosExtra)+" extra":"")}),
     jefe ? el("td",{}, x.estado==="incompleto" && onCorregir ? el("button",{class:"btn sm",type:"button",text:"Corregir",onclick:()=>onCorregir(e, x)}) : null) : null)));
   if (!e.dias.length) td.append(el("tr",{},el("td",{colspan:jefe?"5":"4",class:"empty",text:"Sin días en el período."})));
   box.append(el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Día","Estado","Entradas y salidas","Horas"].concat(jefe?[""]:[]).map((x,i)=>el("th",{class:i===3?"n":null,text:x})))), td)));
@@ -1459,13 +1460,13 @@ async function vHorasJefes(body){
     if (!R.empleados.length) return res.append(el("div",{class:"card empty",text:"Sin personal que fiche con estos filtros."}));
     // Resumen general
     const tb = el("tbody");
-    R.empleados.forEach(x=>tb.append(el("tr",{}, el("td",{text:x.nombre}), el("td",{text:x.sucursal}), el("td",{class:"n",text:String(x.diasTrabajados)}), el("td",{class:"n",text:hm(x.total)}),
+    R.empleados.forEach(x=>tb.append(el("tr",{}, el("td",{text:x.nombre}), el("td",{text:x.sucursal}), el("td",{class:"n",text:String(x.diasTrabajados)}), el("td",{class:"n",text:hm(x.total)}), el("td",{class:"n",text:x.totalExtra?hm(x.totalExtra):"–"}),
       el("td",{class:"n",text:x.promedio==null?"–":hm(x.promedio)}), el("td",{class:"n",text:x.esperado==null?"–":hm(x.esperado)}), el("td",{class:"n "+(x.diferencia<0?"neg":""),text:difTxt(x.diferencia)}),
       el("td",{}, x.incompletos?el("span",{class:"pill warn",text:x.incompletos+" incompl."}):null, x.sinFichaje?el("span",{class:"pill bad",text:x.sinFichaje+" sin fichaje"}):null, x.revisar?el("span",{class:"pill warn",text:x.revisar+" revisar"}):null))));
     res.append(el("div",{class:"card"}, el("h2",{text:`Resumen del ${fmtF(R.desde)} al ${fmtF(R.hasta)}`}),
-      el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Persona","Sucursal","Días","Total","Promedio","Esperado","Diferencia","Revisar"].map((x,i)=>el("th",{class:i>=2&&i<=6?"n":null,text:x})))), tb)),
+      el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Persona","Sucursal","Días","Total","Extra 🏠","Promedio","Esperado","Diferencia","Revisar"].map((x,i)=>el("th",{class:i>=2&&i<=7?"n":null,text:x})))), tb)),
       el("p",{class:"hint",text:(vacOK()?"Vacaciones aprobadas y feriados":"Los feriados")+" no cuentan como ausencia. La diferencia con lo esperado es informativa: no calcula pagos ni horas extra legales."+(R.redondeo>1?` Redondeo: ${R.redondeo} min por día.`:"")})));
-    R.empleados.forEach(x=>res.append(el("details",{class:"card"}, el("summary",{}, el("b",{text:x.nombre}), ` · ${x.sucursal} · ${hm(x.total)} h`), tablaHorasEmpleado(x, R, true, (e,d)=>cargarFaltante(e, d, cargar)))));
+    R.empleados.forEach(x=>res.append(el("details",{class:"card"}, el("summary",{}, el("b",{text:x.nombre}), ` · ${x.sucursal} · ${hm(x.total)} h${x.totalExtra?` + ${hm(x.totalExtra)} h extra`:""}`), tablaHorasEmpleado(x, R, true, (e,d)=>cargarFaltante(e, d, cargar)))));
   };
   const bx = el("button",{class:"btn primary",type:"button",text:"⬆️ Exportar a la planilla (hoja «Horas»)"});
   bx.onclick = async ()=>{ spinBtn(bx,"Exportando…"); try{ const r = await apiS("exportarHoras", {desde:de.value, hasta:ha.value, sucursal:su.value||null, uid:em.value||null});
@@ -1508,12 +1509,12 @@ const h2d39 = m => m==null ? null : Math.round(m/60*100)/100;
 function hojasHoras39(R){
   const E = R.empleados || [];
   return [
-    { nombre:"Resumen", columnas:["Persona","Sucursal","Días trabajados","Total (h)","Promedio por día (h)","Pactado (h)","Diferencia (h)","Días incompletos","Días sin fichaje","Para revisar"],
-      filas: E.map(x=>[x.nombre, x.sucursal, x.diasTrabajados, h2d39(x.total), h2d39(x.promedio), h2d39(x.esperado), h2d39(x.diferencia), x.incompletos||0, x.sinFichaje||0, x.revisar||0]),
-      totales:[2,3,5,6,7,8,9], formatos:{3:"0.00",4:"0.00",5:"0.00",6:"+0.00;-0.00;0.00"} },
-    { nombre:"Detalle por día", columnas:["Persona","Fecha","Día","Estado","Entradas y salidas","Horas (h)"],
-      filas: E.flatMap(x=>(x.dias||[]).map(d=>[x.nombre, fmtF(d.fecha), d.dia||"", (estadoDiaTxt[d.estado]||d.estado)+(d.manual?" · manual":"")+(d.revisar?" · revisar":""), d.estado==="feriado" ? (d.feriado||"Feriado") : paresTxt(d.pares||[]), h2d39(d.minutos)])),
-      totales:[5], formatos:{5:"0.00"} },
+    { nombre:"Resumen", columnas:["Persona","Sucursal","Días trabajados","Total (h)","Promedio por día (h)","Pactado (h)","Diferencia (h)","Días incompletos","Días sin fichaje","Para revisar","Horas extra desde casa (h)"],
+      filas: E.map(x=>[x.nombre, x.sucursal, x.diasTrabajados, h2d39(x.total), h2d39(x.promedio), h2d39(x.esperado), h2d39(x.diferencia), x.incompletos||0, x.sinFichaje||0, x.revisar||0, h2d39(x.totalExtra||0)]),
+      totales:[2,3,5,6,7,8,9,10], formatos:{3:"0.00",4:"0.00",5:"0.00",6:"+0.00;-0.00;0.00",10:"0.00"} },
+    { nombre:"Detalle por día", columnas:["Persona","Fecha","Día","Estado","Entradas y salidas","Horas (h)","Horas extra desde casa (h)"],
+      filas: E.flatMap(x=>(x.dias||[]).map(d=>[x.nombre, fmtF(d.fecha), d.dia||"", (estadoDiaTxt[d.estado]||d.estado)+(d.manual?" · manual":"")+(d.revisar?" · revisar":""), d.estado==="feriado" ? (d.feriado||"Feriado") : paresTxt(d.pares||[]), h2d39(d.minutos), d.minutosExtra?h2d39(d.minutosExtra):null])),
+      totales:[5,6], formatos:{5:"0.00",6:"0.00"} },
     { nombre:"Por semana", columnas:["Persona","Semana del","Horas (h)","Pactado (h)","Diferencia (h)"],
       filas: E.flatMap(x=>(x.semanas||[]).map(w=>[x.nombre, fmtF(w.semana), h2d39(w.minutos), h2d39(w.esperado), w.esperado==null?null:h2d39(w.minutos-w.esperado)])),
       totales:[2,3,4], formatos:{2:"0.00",3:"0.00",4:"+0.00;-0.00;0.00"} } ];
@@ -4483,7 +4484,7 @@ function vHistorial(main){
 }
 
 /* ===================== Novedades de RR. HH. ===================== */
-const TIPO_RH = {llegada_tarde:"Llegada tarde",inasistencia:"Inasistencia",salida_anticipada:"Salida anticipada",otra:"Otra"};
+const TIPO_RH = {llegada_tarde:"Llegada tarde",inasistencia:"Inasistencia",salida_anticipada:"Salida anticipada",horas_extra:"Horas extra (desde casa)",otra:"Otra"};
 async function vRRHH(main){
   const body = el("div",{class:"stack"}); main.append(body);
   body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
@@ -4632,7 +4633,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz10";
+const APP_V = "3.9zz11";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
