@@ -2920,46 +2920,65 @@ async function vClientes(main){
   };
   cargar();
 }
+/* 3.9zz12 · Pedido de María (16/11): bloque Pedidos compacto. Mercadería (pedido · enviado · falta), plata (pagó · debe) y las planillas de separación, sin textos de más. */
+function botonSep(t, c, fmt){
+  const b = el("button",{class:"btn sm",type:"button",text:t+(fmt==="pdf"?" · PDF":" · Excel")});
+  b.onclick = async ()=>{ spinBtn(b, fmt==="pdf"?"Armando el PDF…":"Armando el Excel…");
+    try{ const D = await apiS("descargaControl","separacion",c||""); await (fmt==="pdf" ? exportarPDF37(D) : exportarXLSX37(D)); }
+    catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); };
+  return b;
+}
 function pintarClientes(body, D, recargar){
-  const R = D.resumen;
+  if (!document.getElementById("css-ped12")) document.head.append(el("style",{id:"css-ped12",text:".ped12{white-space:nowrap;font-size:13px}.ped12 th,.ped12 td{padding:6px 7px}.ped12 td:first-child button{padding:2px 4px;font-weight:600;text-align:left;white-space:nowrap}"}));
+  const R = D.resumen, falta = R.pendiente||0;
   body.append(filaActualizacion(D, recargar));
-  const ba = barraSeccion(D.audio, "Clientes y pedidos"); if (ba) body.append(ba);
+  const ba = barraSeccion(D.audio, "Pedidos"); if (ba) body.append(ba);
   if (!R.clientes) return;
-  body.append(el("div",{class:"card"}, el("div",{class:"hkpis"},
-    hk("Pedido", u36(R.pedido), R.monto?moneyK(R.monto):""), hk("Se llevó / despachado", u36(R.despachado), (R.avance||0)+" % del pedido"),
-    R.separado ? hk("Separado", u36(R.separado), "en sus depósitos") : null, R.pendiente ? hk("Pendiente", u36(R.pendiente), "", "neg") : null,
-    R.pagado!=null ? hk("Pagó", moneyK(R.pagado), R.pctPagado!=null?R.pctPagado+" % del total":"") : null, R.faltaPagar ? hk("Falta pagar", moneyK(R.faltaPagar), "de lo que corresponde a hoy", "neg") : null),
-    el("h3",{style:"margin:12px 0 6px",text:"Avance de despacho"}),
-    barraPartes([{t:"Despachado",v:R.despachado,c:"#16A34A"},{t:"Separado",v:R.separado,c:"#2563EB"},{t:"Pendiente",v:Math.max(0,R.pendiente-R.separado),c:"#D97706"}]),
-    R.pagado!=null && R.clientesConPago.length < R.clientes ? el("p",{class:"hint",text:"Pagos: solo se suman los clientes que tienen «Abonado» cargado en su hoja ("+R.clientesConPago.join(", ")+")."}) : null));
-  // Clientes (son pocos: una fila compacta por cliente; tocá para ver el detalle resumido)
+  const verPlata = R.pagado!=null;
+  body.append(el("div",{class:"card"}, el("h2",{style:"margin:0 0 8px",text:"📦 Pedidos"}),
+    el("div",{class:"hkpis"},
+      hk("Pedido", u36(R.pedido), R.monto?moneyK(R.monto):""), hk("Enviado", u36(R.despachado), (R.avance||0)+" %", "pos"),
+      hk("Falta enviar", u36(falta), R.separado?u36(R.separado)+" ya separado":"", falta?"neg":null),
+      verPlata ? hk("Pagó", moneyK(R.pagado), R.pctPagado!=null?R.pctPagado+" %":"", "pos") : null,
+      verPlata ? hk("Falta pagar", moneyK(R.faltaPagar||0), "a hoy", R.faltaPagar?"neg":null) : null),
+    barraPartes([{t:"Enviado",v:R.despachado,c:"#16A34A"},{t:"Separado",v:R.separado,c:"#2563EB"},{t:"Falta",v:Math.max(0,falta-(R.separado||0)),c:"#D97706"}])));
+  // Tabla única por cliente: tocá el nombre para el detalle
+  const L = D.clientes.filter(c=>c.seCuenta).sort((a,b)=>(b.pendiente||0)-(a.pendiente||0) || (b.faltaPagar||0)-(a.faltaPagar||0)), n0 = v => Math.round(v||0).toLocaleString("es-AR"), mk = v => moneyK(v).replace("$ ",""), sum = k => L.reduce((a,c)=>a+(Number(c[k])||0),0);
+  const tb = el("tbody",{}, L.map(c=>{ const [ic] = SEM36[c.estado]||[""]; const f = c.pendiente||0;   // orden: lo urgente primero (falta y debe)
+    return el("tr",{}, el("td",{}, el("button",{class:"btn ghost sm",type:"button",onclick:()=>detalleCliente(c),text:(ic?ic+" ":"")+c.nombre+" ›"})),
+      el("td",{class:"n"+(f?" neg":""),text:f?n0(f):"✓"}),
+      verPlata ? el("td",{class:"n"+(c.faltaPagar?" neg":""),text:c.faltaPagar?mk(c.faltaPagar):(c.pagado!=null?"✓":"–")}) : null,
+      el("td",{class:"n",text:n0(c.pedido)}), el("td",{class:"n",text:n0(c.despachado)}),
+      verPlata ? el("td",{class:"n",text:c.pagado!=null?mk(c.pagado):"–"}) : null); }));
+  tb.append(el("tr",{class:"tot"}, el("td",{text:"Total"}), el("td",{class:"n",text:n0(sum("pendiente"))}), verPlata ? el("td",{class:"n",text:mk(sum("faltaPagar"))}) : null,
+    el("td",{class:"n",text:n0(sum("pedido"))}), el("td",{class:"n",text:n0(sum("despachado"))}), verPlata ? el("td",{class:"n",text:mk(sum("pagado"))}) : null));
   body.append(el("div",{class:"card"}, el("h3",{text:"Por cliente"}),
-    el("div",{class:"lista-cli"}, D.clientes.filter(c=>c.seCuenta).map(c=>{ const [ic,txt,cls] = SEM36[c.estado]||["","",""];
-      return el("button",{class:"cli37",type:"button",onclick:()=>detalleCliente(c)},
-        el("b",{text:c.nombre}), el("span",{class:"pill "+cls,text:ic+" "+txt}),
-        el("span",{class:"mini-barra","aria-hidden":"true"}, el("i",{style:`width:${Math.min(100,c.avance||0)}%`})),
-        el("span",{class:"hint",text:`${u36(c.despachado)} de ${u36(c.pedido)} · faltan ${u36(c.pendiente)}${c.faltaPagar?" · debe "+moneyK(c.faltaPagar):""}`})); }))));
-  body.append(top5("📦 Top 5 · más mercadería pendiente", R.topPendiente.map(c=>el("li",{}, el("b",{text:c.nombre}), ` · ${u36(c.pendiente)} de ${u36(c.pedido)}`))));
-  const ts = top5("💰 Top 5 · más saldo por pagar", R.topSaldo.map(c=>el("li",{}, el("b",{text:c.nombre}), ` · falta ${moneyK(c.faltaPagar)} · pagó ${moneyK(c.pagado)}${c.pctPagado!=null?" ("+c.pctPagado+" %)":""}`)));
-  if (ts) body.append(ts);
-  if ((R.alertas||[]).length || (R.recomendaciones||[]).length) body.append(el("div",{class:"card"}, el("h3",{text:"🚨 Alertas y prioridades"}),
-    el("ul",{class:"alertas-rrhh"}, R.alertas.slice(0,5).map(a=>el("li",{class:"al-"+(a.nivel==="rojo"?"rojo":"amarillo")}, el("span",{class:"sem",text:a.nivel==="rojo"?"🔴":"🟡"}), el("div",{text:a.texto}))),
-      R.recomendaciones.slice(0,3).map(t=>el("li",{class:"al-verde"}, el("span",{class:"sem",text:"👉"}), el("div",{text:t}))))));
+    el("div",{class:"tablewrap"}, el("table",{class:"compact ped12"},
+      el("thead",{}, el("tr",{}, ...["Cliente","Falta u", ...(verPlata?["Debe $"]:[]), "Pedido u","Envió u", ...(verPlata?["Pagó $"]:[])].map((x,i)=>el("th",{class:i?"n":null,text:x})))), tb)),
+    verPlata && R.clientesConPago && R.clientesConPago.length < R.clientes ? el("p",{class:"hint",text:"Sin «Abonado» cargado: "+L.filter(c=>c.pagado==null).map(c=>c.nombre).join(", ")+"."}) : null));
+  // Lo que se puede separar + planillas
+  const X = D.separacion;
+  if (X) body.append(el("div",{class:"card"}, el("h3",{text:"📋 Para separar · grandes cuentas"}),
+    el("div",{class:"hkpis"}, hk("Falta separar", u36(X.pendiente), "según «STOCK vs Pedidos»"+(X.clientes.some(c=>c.bloqueado)?" · sin las bloqueadas":""), X.pendiente?"neg":null), hk("Se puede separar hoy", u36(X.separar), `deja ${X.minimoLima} u en Lima`, "pos")),
+    el("div",{class:"row descargas37"}, botonSep("⬇️ Todas","","xlsx"), botonSep("⬇️ Todas","","pdf")),
+    X.clientes.filter(c=>!c.bloqueado && (c.pendiente||c.separar)).map(c=>el("div",{class:"row descargas37"}, el("b",{style:"min-width:110px",text:c.cliente}), el("span",{class:"hint",text:`hoy ${u36(c.separar)} de ${u36(c.pendiente)}`}), botonSep("⬇️",c.cliente,"xlsx"), botonSep("⬇️",c.cliente,"pdf"))),
+    X.clientes.some(c=>c.bloqueado) ? el("p",{class:"notice bad",text:"⛔ No separar hasta confirmar el pago: "+X.clientes.filter(c=>c.bloqueado).map(c=>c.cliente).join(", ")+"."}) : null));
+  const rojas = (R.alertas||[]).filter(a=>a.nivel==="rojo").slice(0,3);
+  if (rojas.length) body.append(el("div",{class:"card"}, el("ul",{class:"alertas-rrhh"}, rojas.map(a=>el("li",{class:"al-rojo"}, el("span",{class:"sem",text:"🔴"}), el("div",{text:a.texto}))))));
   body.append(el("div",{class:"card"}, botonesDescarga("clientes","todos los clientes, por modelo y remitos")));
   if (S.user && S.user.rol==="admin") body.append(editorTipos(D.clientes, recargar));
 }
 function detalleCliente(c){
-  const [ic,txt,cls] = SEM36[c.estado]||["","",""];
+  const [ic,txt,cls] = SEM36[c.estado]||["","",""], f = c.pendiente||0;
   const m = modal(el("div",{class:"grid"},
     el("div",{class:"row"}, el("h2",{style:"margin:0",text:c.nombre}), el("span",{class:"pill "+cls,text:ic+" "+txt}), el("span",{class:"pill",text:c.tipo})),
-    el("div",{class:"hkpis"}, hk("Pedido",u36(c.pedido), c.montoTotal?moneyK(c.montoTotal):""), hk("Se llevó",u36(c.despachado), c.montoDespachado?moneyK(c.montoDespachado):""),
-      c.separado?hk("Separado",u36(c.separado)):null, c.pendiente?hk("Pendiente",u36(c.pendiente),"","neg"):null,
-      c.pagado!=null?hk("Pagó",moneyK(c.pagado),c.pctPagado!=null?c.pctPagado+" % del total":""):null, c.faltaPagar?hk("Falta pagar",moneyK(c.faltaPagar),c.exigible?"a hoy corresponde "+moneyK(c.exigible):"","neg"):null),
-    c.entregaEstimada && c.pendiente ? el("p",{class:"lead",text:`Entrega total estimada: ${fmtF(c.entregaEstimada)}${c.queHacer?" · "+c.queHacer:""}`}) : null,
-    c.separableYa ? el("div",{class:"notice ok",text:`👉 Hay ${u36(c.separableYa)} de lo pendiente con stock en HB Lima: se pueden separar ya.`}) : null,
-    (c.remitos||[]).length ? el("p",{class:"hint",text:"Se llevó: "+c.remitos.map(r=>`${r.fecha?fmtF(r.fecha).slice(0,5)+" · ":""}${u36(r.unidades)}`).join(" · ")}) : null,
-    (c.topModelos||[]).length ? el("div",{}, el("h3",{text:"Top 5 modelos pendientes"}), el("ol",{class:"top5"}, c.topModelos.map(x=>el("li",{}, el("b",{text:x.producto || [x.modelo,x.talle].filter(Boolean).join(" ")}), ` · faltan ${u36(x.pendiente)} de ${u36(x.pedido)}`)))) : null,
-    el("p",{class:"hint",text:"El detalle completo de todos los modelos está en «Descargar Excel / PDF»."}),
+    el("div",{class:"hkpis"}, hk("Pedido",u36(c.pedido), c.montoTotal?moneyK(c.montoTotal):""), hk("Enviado",u36(c.despachado), c.montoDespachado?moneyK(c.montoDespachado):"", "pos"),
+      hk("Falta",u36(f), c.separado?u36(c.separado)+" separado":"", f?"neg":null),
+      c.pagado!=null?hk("Pagó",moneyK(c.pagado),c.pctPagado!=null?c.pctPagado+" %":"","pos"):null, c.faltaPagar?hk("Debe",moneyK(c.faltaPagar),c.exigible?"a hoy "+moneyK(c.exigible):"","neg"):null),
+    c.entregaEstimada && f ? el("p",{class:"hint",text:"Entrega estimada: "+fmtF(c.entregaEstimada)}) : null,
+    c.separableYa ? el("p",{class:"notice ok",text:`👉 ${u36(c.separableYa)} se pueden separar ya (hay stock en Lima).`}) : null,
+    (c.remitos||[]).length ? el("p",{class:"hint",text:"Envíos: "+c.remitos.map(r=>`${r.fecha?fmtF(r.fecha).slice(0,5)+" ":""}${u36(r.unidades)}`).join(" · ")}) : null,
+    (c.topModelos||[]).length ? el("div",{}, el("h3",{text:"Lo que más falta"}), el("ol",{class:"top5"}, c.topModelos.map(x=>el("li",{}, el("b",{text:x.producto || [x.modelo,x.talle].filter(Boolean).join(" ")}), ` · ${u36(x.pendiente)} de ${u36(x.pedido)}`)))) : null,
     el("button",{class:"btn",type:"button",text:"Cerrar",onclick:()=>m.cerrar()})));
 }
 function editorTipos(L, recargar){
@@ -3024,8 +3043,7 @@ function tabDistribucion(X){
   if (X.ingresos.length) out.push(el("div",{class:"card"}, el("h3",{text:"📥 Últimos ingresos · SS27"}),
     el("ol",{class:"lista39"}, X.ingresos.slice(0,8).map(i=>el("li",{}, el("b",{text:i.producto}), ` · ingresaron ${u36(i.cantidad)} el ${fmtF(i.fecha).slice(0,5)}`,
       el("span",{class:"hint",text: i.comprometido==null ? " · ⚠️ sin cruce con «STOCK vs Pedidos»: validar" : ` · comprometido ${u36(i.comprometido)} · separar hoy ${u36(i.separar)} · quedaría en Lima ${i.quedaLima==null?"sin dato":u36(i.quedaLima)}${i.validar?" · validar":""}`})))) ));
-  const bx1 = (t, c, fmt) => { const b = el("button",{class:"btn sm",type:"button",text:t+(fmt==="pdf"?" · PDF":" · Excel")}); b.onclick = async ()=>{ spinBtn(b, fmt==="pdf"?"Armando el PDF…":"Armando el Excel…");
-      try{ const D = await apiS("descargaControl","separacion",c||""); await (fmt==="pdf" ? exportarPDF37(D) : exportarXLSX37(D)); }catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos." : msgErr(e)); } unspin(b); }; return b; };
+  const bx1 = botonSep;   // 3.9zz12
   out.push(el("div",{class:"card"}, el("h3",{text:"📋 Planillas de separación (Excel y PDF)"}),
     el("p",{class:"hint",text:"Solo lo que realmente falta separar: pendiente de «STOCK vs Pedidos» menos lo que se llevó, lo separado y lo ya confirmado. Cada archivo trae las hojas «Falta separar», «Movimientos» e «Inconsistencias», con la fuente de cada cantidad. Miami no lleva mercadería hasta confirmar el pago."}),
     el("div",{class:"row descargas37"}, bx1("⬇️ Consolidado (todas)","","xlsx"), bx1("⬇️ Consolidado (todas)","","pdf")),
@@ -4633,7 +4651,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz11";
+const APP_V = "3.9zz12";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
