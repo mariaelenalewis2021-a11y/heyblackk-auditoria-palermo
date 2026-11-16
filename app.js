@@ -40,7 +40,7 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaParaTemplete","descargaCyber","verCertificado"]);
+const LECTURAS = new Set(["descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","fotoCorreccion","actualizarTodoEstado","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaParaTemplete","descargaCyber","verCertificado"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
 const SENSIBLES = new Set(["detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
@@ -183,6 +183,33 @@ function elegirFoto(camaraFrontal){
     i.addEventListener("cancel", ()=>fin(null));
     if (!("oncancel" in i)) addEventListener("focus", alVolver);   // respaldo solo para navegadores sin evento "cancel"
     document.body.append(i); i.click();
+  });
+}
+/* 3.9zz10 · Foto EN VIVO para fichar: abre la cámara dentro de la app y saca la foto ahí (no deja elegir una imagen guardada).
+   La foto lleva la fecha y hora impresas. En una computadora sin cámara no se puede fichar: se ficha desde el celular. */
+/* Safari puede agregar un bloque EXIF (APP1) técnico a la JPEG del canvas: se quita para que el servidor no la confunda con una foto de galería. */
+function sinApp1(durl){ try{ const b = atob(String(durl).split(",")[1]); let o = b.slice(0,2), i = 2;
+  while (i+4 <= b.length && b.charCodeAt(i)===0xFF){ const m = b.charCodeAt(i+1); if (m===0xDA) break; const len = (b.charCodeAt(i+2)<<8) | b.charCodeAt(i+3); if (len < 2) break; if (m!==0xE1) o += b.slice(i, i+2+len); i += 2+len; }
+  return "data:image/jpeg;base64," + btoa(o + b.slice(i)); }catch(e){ return durl; } }
+function fotoEnVivo(){
+  return new Promise(async res=>{
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Este equipo no deja usar la cámara desde la app. Fichá desde tu celular."); return res(null); }
+    let st; try{ st = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:960},height:{ideal:1280}},audio:false}); }
+    catch(e){ toast(e && e.name==="NotAllowedError" ? "Permití la cámara para poder fichar (tocá el candado junto a la dirección → Cámara → Permitir)." : "No se encontró una cámara en este equipo. Fichá desde tu celular."); return res(null); }
+    const v = el("video",{style:"width:min(420px,90vw);max-height:62vh;border-radius:14px;background:#000;transform:scaleX(-1)"});
+    v.autoplay = true; v.muted = true; v.playsInline = true; v.setAttribute("playsinline",""); v.srcObject = st;
+    const sacar = el("button",{class:"btn primary big-btn",type:"button",text:"📸 Sacar la foto"});
+    let ov = null; const fin = x=>{ try{ st.getTracks().forEach(t=>t.stop()); }catch(e){} if (ov) ov.remove(); res(x); };
+    ov = el("div",{role:"dialog","aria-label":"Cámara",style:"position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.9);display:grid;place-items:center;align-content:center;gap:14px;padding:16px"},
+      el("p",{style:"color:#fff;margin:0;font-weight:700",text:"Mirá a la cámara"}), v,
+      el("div",{class:"row",style:"justify-content:center;gap:10px"}, sacar, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>fin(null)})));
+    document.body.append(ov); try{ await v.play(); }catch(e){}
+    sacar.onclick = ()=>{ const w = v.videoWidth, h = v.videoHeight; if (!w || !h) return toast("La cámara todavía está arrancando: esperá un segundo.");
+      const k = Math.min(1, 960/Math.max(w,h)), c = document.createElement("canvas"); c.width = Math.round(w*k); c.height = Math.round(h*k);
+      const x = c.getContext("2d"); x.translate(c.width,0); x.scale(-1,1); x.drawImage(v,0,0,c.width,c.height); x.setTransform(1,0,0,1,0,0);
+      const fs = Math.max(14, Math.round(c.width/24)), t = new Date().toLocaleString("es-AR",{timeZone:"America/Argentina/Buenos_Aires"});
+      x.fillStyle = "rgba(0,0,0,.55)"; x.fillRect(0, c.height-fs*1.8, c.width, fs*1.8); x.fillStyle = "#fff"; x.font = fs+"px sans-serif"; x.fillText("Hey Blackk · "+t, Math.round(fs/2), c.height-Math.round(fs*0.6));
+      fin(sinApp1(c.toDataURL("image/jpeg", 0.82))); };
   });
 }
 /* 3.5 · Ubicación. IMPORTANTE: se llama de forma SINCRÓNICA dentro del toque del botón (gesto de la persona), antes de cualquier await,
@@ -940,7 +967,7 @@ async function seguirFichar(body, tipo, pGeo, boton){
   let v; try{ v = await api("verificarUbicacion", F.token, tipo, geo); }
   catch(e){ return errorFichada(body, tipo, e, geo); }
   if (!v.ok) return pantallaRechazo(body, tipo, v, geo);
-  if (F.j && F.j.fotoObligatoria) pasoFoto(body, tipo, geo, v); else enviarFichada(body, tipo, geo, null);
+  pasoFoto(body, tipo, geo, v);   // 3.9zz10 · la foto es siempre obligatoria
 }
 /* «Probar mi ubicación»: pide la ubicación y la valida contra la sucursal SIN registrar ningún fichaje. */
 function botonProbar(body){
@@ -1046,8 +1073,13 @@ function formManual(body, tipo, v, geo){
   body.textContent="";
   const m = el("textarea",{maxlength:"300",placeholder:"Ej.: estoy en el local, el GPS marca a otra cuadra","aria-label":"Motivo",required:true});
   const b = el("button",{class:"btn fichar-btn "+tipo,type:"submit",text:`Enviar ${tipo} manual`});
-  body.append(el("form",{class:"card fichar",onsubmit:async e=>{ e.preventDefault(); if (m.value.trim().length<5) return toast("Contá brevemente el motivo."); spinBtn(b,"Enviando…");
-      try{ const r = await api("solicitarFichajeManual", F.token, tipo, m.value, geo && !geo.error ? geo : (geo||{error:"no_disponible"}));
+  // 3.9zz10 · El fichaje manual también lleva foto sacada en el momento
+  let foto = null; const prev = el("div",{});
+  const bFoto = el("button",{class:"btn",type:"button",text:"📸 Sacar la foto (obligatoria)"});
+  bFoto.onclick = async ()=>{ spinBtn(bFoto,"Abriendo la cámara…"); const f = await fotoEnVivo(); unspin(bFoto); if (!f) return; foto = f; prev.textContent=""; prev.append(el("img",{src:f,alt:"Tu foto",class:"selfie"})); bFoto.textContent="📸 Sacar otra foto"; };
+  body.append(el("form",{class:"card fichar",onsubmit:async e=>{ e.preventDefault(); if (m.value.trim().length<5) return toast("Contá brevemente el motivo."); if (!foto) return toast("Sacate la foto para enviar el fichaje manual."); spinBtn(b,"Enviando…");
+      const g = Object.assign({}, geo && !geo.error ? geo : (geo||{error:"no_disponible"}), { ua: navigator.userAgent.slice(0,120), fotoOrigen: "camara", tactil: (navigator.maxTouchPoints||0) > 1 });
+      try{ const r = await api("solicitarFichajeManual", F.token, tipo, m.value, g, foto);
         body.textContent="";
         body.append(el("div",{class:"card fichar done "+tipo}, el("div",{class:"bigok",text:"✋"}), el("h2",{text:`${tipo==="entrada"?"Entrada":"Salida"} manual enviada`}),
           el("div",{class:"big mono",text:r.hora.slice(0,5)}), el("p",{class:"lead",text:`${fmtF(r.fecha)} · hora del servidor · ${r.sucursal}`}),
@@ -1056,7 +1088,7 @@ function formManual(body, tipo, v, geo){
       }catch(x){ unspin(b); errorFichada(body, tipo, x, geo); } }},
     el("h2",{text:`Fichaje manual de ${tipo}`}),
     el("p",{class:"lead",text:"Se registra la hora del servidor de este momento y queda pendiente de aprobación de un jefe."}),
-    el("label",{class:"f"},"Motivo (obligatorio)",m), b, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
+    el("label",{class:"f"},"Motivo (obligatorio)",m), bFoto, prev, b, el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
   setTimeout(()=>m.focus(),60);
 }
 /* Paso de la foto (si la configuración la exige): la cámara se abre con un toque propio de la persona. */
@@ -1064,7 +1096,7 @@ function pasoFoto(body, tipo, geo, v){
   vigilarF(body);
   body.textContent="";
   const b = el("button",{class:"btn fichar-btn "+tipo+" foto-btn",type:"button"}, el("span",{text:"📸"}), el("span",{text:"Sacar la foto"}));
-  b.onclick = async ()=>{ spinBtn(b,"Abriendo la cámara…"); const foto = await elegirFoto(true); if (!foto){ unspin(b); return toast("Necesitás sacarte la foto para fichar."); } confirmarFichada(body, tipo, geo, foto); };
+  b.onclick = async ()=>{ spinBtn(b,"Abriendo la cámara…"); const foto = await fotoEnVivo(); if (!foto){ unspin(b); return; } confirmarFichada(body, tipo, geo, foto); };
   body.append(el("div",{class:"card fichar"}, el("div",{class:"bigok",text:"✅"}), el("h2",{text:`Ubicación validada en ${v.sucursal}`}),
     el("p",{class:"lead",text:`Ahora sacate la foto para registrar tu ${tipo}.`}), b,
     el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
@@ -1072,13 +1104,13 @@ function pasoFoto(body, tipo, geo, v){
 function confirmarFichada(body, tipo, geo, foto){
   body.textContent="";
   const b = el("button",{class:"btn fichar-btn "+tipo,type:"button",text:"Confirmar "+tipo});
-  const otra = el("button",{class:"btn",type:"button",text:"Sacar otra foto",onclick:async()=>{ spinBtn(otra,"Abriendo la cámara…"); const f2 = await elegirFoto(true); unspin(otra); if (f2) confirmarFichada(body, tipo, geo, f2); }});
+  const otra = el("button",{class:"btn",type:"button",text:"Sacar otra foto",onclick:async()=>{ spinBtn(otra,"Abriendo la cámara…"); const f2 = await fotoEnVivo(); unspin(otra); if (f2) confirmarFichada(body, tipo, geo, f2); }});
   body.append(el("div",{class:"card fichar"}, el("h2",{text:"Confirmá tu "+tipo}), el("img",{src:foto,alt:"Tu foto",class:"selfie"}), b, otra,
     el("button",{class:"btn",type:"button",text:"Cancelar",onclick:()=>jornada(body)})));
   b.onclick = ()=>{ spinBtn(b,"Registrando…"); enviarFichada(body, tipo, geo, foto, b); };
 }
 async function enviarFichada(body, tipo, geo, foto, boton){
-  geo.ua = navigator.userAgent.slice(0,120);
+  geo.ua = navigator.userAgent.slice(0,120); geo.fotoOrigen = "camara"; geo.tactil = (navigator.maxTouchPoints||0) > 1;   // 3.9zz10 · la foto salió de la cámara de la app
   try{
     const r = await api("registrarFichada", F.token, tipo, foto, geo);
     body.textContent="";
@@ -1181,16 +1213,19 @@ function vFichadas(main){
   const de = el("input",{type:"date",value:lunes}), ha = el("input",{type:"date",value:hoy()});
   const emp = el("select",{}, el("option",{value:"",text:"Todo el personal"})), est = el("select",{}, el("option",{value:"",text:"Todos los estados"}), ...["valido","revisar","corregido","anulado"].map(x=>el("option",{value:x,text:x})));
   const q = el("input",{type:"search",placeholder:"Búsqueda rápida"});
+  const suc = el("select",{}, el("option",{value:"",text:"Todas las sucursales"}));   // 3.9zz10
   const body = el("div",{class:"stack"});
-  let D = null;
+  let D = null, abrirFotos = false;
   const cargar = async ()=>{ body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
-    try{ D = await apiS("listarIngresos", de.value, ha.value); }catch(e){ body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+    try{ D = await apiS("listarIngresos", de.value, ha.value); }catch(e){ delete suc.dataset.quiero; abrirFotos = false; body.textContent=""; return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
     const nombres = [...new Map(D.lista.map(x=>[x.uid,x.nombre])).entries()].sort((a,b)=>a[1].localeCompare(b[1]));
     const cur = emp.value; emp.textContent=""; emp.append(el("option",{value:"",text:"Todo el personal"}), ...nombres.map(([id,n])=>el("option",{value:id,text:n,selected:id===cur})));
+    const sucs = [...new Set(D.lista.map(x=>x.sucursal).filter(Boolean))].sort(), cs = suc.dataset.quiero || suc.value; suc.textContent="";
+    suc.append(el("option",{value:"",text:"Todas las sucursales"}), ...sucs.map(n=>el("option",{value:n,text:n,selected:n===cs || (cs==="palermo" && /palermo/i.test(n))}))); delete suc.dataset.quiero;
     pintar(); };
   const pintar = ()=>{ body.textContent=""; if (!D) return;
     const t=q.value.trim().toLowerCase();
-    const L = D.lista.filter(x=>(!emp.value||x.uid===emp.value)&&(!est.value||x.estado===est.value)&&(!t||(x.nombre+" "+x.legajo+" "+(x.observacion||"")).toLowerCase().includes(t)));
+    const L = D.lista.filter(x=>(!suc.value||x.sucursal===suc.value)&&(!emp.value||x.uid===emp.value)&&(!est.value||x.estado===est.value)&&(!t||(x.nombre+" "+x.legajo+" "+(x.observacion||"")).toLowerCase().includes(t)));
     // Alertas para revisión (no son conclusiones)
     const al = el("div",{class:"alerts"});
     const pend = D.correcciones.filter(c=>c.estado==="pendiente");
@@ -1201,8 +1236,10 @@ function vFichadas(main){
     const dup = L.filter(x=>x.duplicado).length; if (dup) al.append(el("div",{class:"notice bad",text:`⚠️ ${dup} registro(s) con la secuencia entrada/salida rota (dos entradas seguidas o salida sin entrada): revisar.`}));
     const pb = L.filter(x=>x.precisionBaja && x.estado==="revisar").length; if (pb) al.append(el("div",{class:"notice warn",text:`📡 ${pb} fichaje(s) con precisión baja del GPS, marcados para revisar (la ubicación del celular puede alterarse).`}));
     if (al.children.length) body.append(al);
+    // 3.9zz10 · Fotos de las fichadas: galería para revisar quién fichó y cómo
+    if (L.length) body.append(galeriaFotos(L, D, abrirFotos)); abrirFotos = false;
     // Jornadas
-    const J = D.jornadas.filter(j=>(!emp.value||j.uid===emp.value)&&(!t||(j.nombre+" "+j.legajo).toLowerCase().includes(t)));
+    const J = D.jornadas.filter(j=>(!suc.value||j.sucursal===suc.value)&&(!emp.value||j.uid===emp.value)&&(!t||(j.nombre+" "+j.legajo).toLowerCase().includes(t)));
     const tj = el("tbody"); J.forEach(j=>tj.append(el("tr",{}, el("td",{class:"mono",text:fmtF(j.fecha)}), el("td",{text:j.nombre}), el("td",{text:j.sucursal||""}), el("td",{class:"mono",text:paresTxt(j.pares)}),
       el("td",{class:"n",text:horas(j.minutos)}), el("td",{}, j.incompleto?el("span",{class:"pill warn",text:j.sinSalida?"Sin salida":"Incompleto"}):j.enCurso?el("span",{class:"pill",text:"En curso"}):null))));
     if (!J.length) tj.append(el("tr",{},el("td",{colspan:"6",class:"empty",text:"Sin jornadas en el período."})));
@@ -1230,7 +1267,7 @@ function vFichadas(main){
         el("button",{class:"btn sm",type:"button",text:"✔ Aprobar",onclick:async()=>{ try{ await apiS("resolverCorreccion",c.id,true,""); toast("Corrección aprobada"); cargar(); }catch(e){ toast(msgErr(e)); } }}),
         el("button",{class:"btn sm danger",type:"button",text:"✖ Rechazar",onclick:()=>rechazarSolicitud(c, cargar)})) : el("span",{text:(c.resueltoPor||"")+(c.comentario?" · "+c.comentario:"")});
       tc.append(el("tr",{}, el("td",{class:"mono",text:fmtF(c.fecha)}), el("td",{text:c.nombre}), el("td",{text:(c.clase==="manual"?"Manual · ":"")+(c.tipo||"entrada")}), el("td",{class:"mono",text: c.clase==="manual" ? (c.horaSolicitada||c.horaPropuesta||"").slice(0,5)+" (hora del pedido)" : (c.horaOriginal||"sin registro").slice(0,5)+" → "+c.horaPropuesta}),
-        el("td",{text:c.motivo}), el("td",{},el("span",{class:"pill "+(c.estado==="aprobada"?"ok":c.estado==="rechazada"?"bad":"warn"),text:c.estado})), el("td",{},acc)));
+        el("td",{}, c.motivo||"", c.foto ? el("button",{class:"btn sm",type:"button",text:"📷 Foto",style:"margin-left:6px",onclick:async ev=>{ const bt=ev.currentTarget; spinBtn(bt,"…"); try{ const src = await apiS("fotoCorreccion", c.id); if(!okImg(src)) throw 0; verFoto(src, `${c.nombre} · manual ${c.tipo||""} ${fmtF(c.fecha)}`); }catch(e){ toast("No se pudo cargar la foto."); } finally{ unspin(bt); } }}) : null), el("td",{},el("span",{class:"pill "+(c.estado==="aprobada"?"ok":c.estado==="rechazada"?"bad":"warn"),text:c.estado})), el("td",{},acc)));
     });
     if (!D.correcciones.length) tc.append(el("tr",{},el("td",{colspan:"7",class:"empty",text:"Sin solicitudes de corrección."})));
     body.append(el("div",{class:"card"}, el("h2",{text:"Solicitudes (correcciones y fichajes manuales)"}), el("div",{class:"tablewrap"}, el("table",{}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Tipo","Cambio","Motivo","Estado",""].map(x=>el("th",{text:x})))), tc))));
@@ -1240,15 +1277,35 @@ function vFichadas(main){
     if ((D.deVacaciones||[]).length && vacOK()){ const tv=el("tbody"); D.deVacaciones.forEach(p=>tv.append(el("tr",{}, el("td",{class:"mono",text:fmtF(p.fecha)}), el("td",{text:p.nombre}), el("td",{},el("span",{class:"pill ok",text:"🏖️ De vacaciones"})))));
       body.append(el("div",{class:"card"}, el("h2",{text:"De vacaciones (aprobadas)"}), el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{},el("tr",{}, ...["Fecha","Empleado","Estado"].map(x=>el("th",{text:x})))), tv)))); }
   };
-  [emp,est].forEach(x=>x.onchange=pintar); q.oninput=pintar; [de,ha].forEach(x=>x.onchange=cargar);
+  [emp,est,suc].forEach(x=>x.onchange=pintar); q.oninput=pintar; [de,ha].forEach(x=>x.onchange=cargar);
   const bx = el("button",{class:"btn xl",type:"button",text:"⬇️ Excel"}), bpd = el("button",{class:"btn pdf",type:"button",text:"⬇️ PDF"});
   bx.onclick = async ()=>{ spinBtn(bx,"Preparando…"); try{ const r = await apiS("exportarIngresos", de.value, ha.value); await loadLibs("xlsx"); guardar(`HeyBlackk_Ingresos_${de.value}_a_${ha.value}.xlsx`, new Blob([await xlsxIngresos(r)],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})); }catch(e){ toast(msgErr(e)); } finally{ unspin(bx); } };
   bpd.onclick = async ()=>{ spinBtn(bpd,"Armando el PDF…"); try{ const r = await apiS("exportarIngresos", de.value, ha.value);
       await exportarPDF37({ titulo:`Ingresos del ${fmtF(de.value)} al ${fmtF(ha.value)}`, archivo:`HeyBlackk_Ingresos_${de.value}_a_${ha.value}`, actualizado:new Date().toISOString(), generado:new Date().toISOString(), por:(S.user&&S.user.nombre)||"", hojas: hojasIngresos(r) }); }
     catch(e){ toast(e && e.message==="load" ? "No se pudo cargar el generador de archivos. Revisá internet y probá de nuevo." : msgErr(e)); } finally{ unspin(bpd); } };
-  main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Empleado",emp), el("label",{class:"f"},"Estado",est)),
-    el("div",{class:"row"}, q, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}), bx, bpd)), body);
+  main.append(el("div",{class:"card filters"}, el("div",{class:"grid2"}, el("label",{class:"f"},"Desde",de), el("label",{class:"f"},"Hasta",ha), el("label",{class:"f"},"Empleado",emp), el("label",{class:"f"},"Estado",est), el("label",{class:"f"},"Sucursal",suc)),
+    el("div",{class:"row"}, q, el("button",{class:"btn",type:"button",text:"↻ Actualizar",onclick:cargar}),
+      el("button",{class:"btn",type:"button",text:"📷 Fotos de ayer · Palermo",onclick:()=>{ const d=new Date(); d.setDate(d.getDate()-1); de.value=ha.value=fechaLocal(d); suc.dataset.quiero="palermo"; abrirFotos=true; cargar(); }}), bx, bpd)), body);
   cargar();
+}
+/* 3.9zz10 · Galería de fotos de fichadas del período/sucursal filtrados. Las fotos se cargan recién al abrirla (de a una, como en el detalle). */
+function galeriaFotos(L, D, abrir){
+  const con = L.filter(x=>x.tieneFoto).length, pc = L.filter(x=>x.equipo==="computadora").length, sin = L.filter(x=>!x.tieneFoto && !x.fotoPurgada).length;
+  const det = el("details",{class:"card"}), grid = el("div",{style:"display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:10px"});
+  det.append(el("summary",{style:"cursor:pointer;font-weight:700",text:`📷 Fotos de las fichadas · ${con} con foto${sin?` · ⚠️ ${sin} sin foto`:""}${pc?` · 💻 ${pc} desde computadora`:""}`}),
+    el("p",{class:"hint",text:`Las fotos se guardan ${D.retencion||90} días y después se borran solas. Desde ahora solo se puede fichar sacándose la foto en el momento con la cámara de la app.`}), grid);
+  let hecho = false; const pintarG = ()=>{ if (hecho) return; hecho = true;
+    const M = L.slice().sort((a,b)=>(b.fecha+b.hora).localeCompare(a.fecha+a.hora)).slice(0,60);
+    M.forEach(x=>{ const tit = `${x.nombre} · ${x.tipo==="salida"?"Salida":"Entrada"} ${fmtF(x.fecha)} ${(x.horaCorregida||x.hora||"").slice(0,5)}`;
+      grid.append(el("div",{style:"display:grid;gap:4px;justify-items:center;text-align:center"},
+        x.tieneFoto ? miniFoto("fotoIngreso", x.id, tit) : el("div",{class:"foto",style:"display:grid;place-items:center;font-size:12px",text:x.fotoPurgada?"(vencida)":"Sin foto"}),
+        el("b",{style:"font-size:13px",text:x.nombre}), el("span",{class:"hint",text:`${x.tipo==="salida"?"Salida":"Entrada"} ${fmtF(x.fecha)} ${(x.horaCorregida||x.hora||"").slice(0,5)}${x.modo==="manual"?" · manual":""}`}),
+        x.equipo==="computadora" ? el("span",{class:"pill warn",text:"💻 computadora"}) : x.equipo==="celular" ? el("span",{class:"hint",text:"📱 celular"}) : null,
+        x.sucursal ? el("span",{class:"hint",text:x.sucursal}) : null)); });
+    if (L.length > 60) grid.append(el("p",{class:"hint",text:`Se muestran las 60 más recientes de ${L.length}. Acotá las fechas o la sucursal para ver el resto.`})); };
+  det.addEventListener("toggle", ()=>{ if (det.open) pintarG(); });
+  if (abrir){ det.open = true; pintarG(); setTimeout(()=>det.scrollIntoView({behavior:"smooth",block:"start"}),50); }
+  return det;
 }
 function detalleIngreso(x, recargar){
   const obs = el("input",{type:"text",maxlength:"300",value:x.observacion||"",placeholder:"Observación"});
@@ -2727,7 +2784,23 @@ function filaActualizacion(D, recargar){
   b.onclick = async ()=>{ spinBtn(b,"Leyendo las planillas…");
     try{ const r = await apiS("actualizarPlanillas"), mal = r.filter(x=>!x.ok); toast(mal.length ? `⚠️ ${mal.length} fuente(s) con problema: ${mal.map(x=>x.planilla.replace(/\.xlsx$/,"")).join(", ")} · el detalle está en «Estado de los datos»` : "✅ Todo al día"); recargar(); }   // 3.9zz8 · toast corto
     catch(e){ unspin(b); toast(msgErr(e)); } };
-  return el("div",{}, el("div",{class:"card row act36"}, ...items, el("span",{class:"spacer"}), b), D.act ? estadoDatos(D.act) : null);
+  return el("div",{}, el("div",{class:"card row act36"}, ...items, el("span",{class:"spacer"}), D.todo ? botonTodo(recargar) : null, b), D.act ? estadoDatos(D.act) : null);
+}
+/* 3.9zz10 · «⚡ Actualizar TODO» — solo lo ve María (el servidor manda D.todo solo para ella y además rechaza a cualquier otro usuario).
+   Corre la actualización completa (planillas, Contabilium, Templete, cuenta corriente, hoja Stock, cobranzas y verificación) en segundo plano. */
+let TODO_T = null;
+function botonTodo(recargar){
+  const b = el("button",{class:"btn sm primary",type:"button",text:"⚡ Actualizar TODO"});
+  const seguir = (desde)=>{ clearInterval(TODO_T); const t0 = Date.now(); b.disabled = true; b.textContent = "⏳ Actualizando todo…";
+    TODO_T = setInterval(async ()=>{ if (Date.now()-t0 > 16*60000){ clearInterval(TODO_T); TODO_T = null; b.disabled = false; b.textContent = "⚡ Actualizar TODO"; toast("La actualización completa sigue sin confirmar: mirá «Estado de los datos» en un rato."); return; }
+      try{ const e = await apiS("actualizarTodoEstado");
+        if (!e.enCurso){ clearInterval(TODO_T); TODO_T = null; const F = (e.act&&e.act.fuentes)||[], mal = F.filter(f=>!f.ok);
+          toast(mal.length ? `⚠️ Actualización completa terminada: ${mal.length} fuente(s) con problema (detalle en «Estado de los datos»)` : "✅ Actualización completa terminada: todo al día"); try{ recargar(); }catch(x){} } }catch(x){} }, 30000); };
+  b.onclick = async ()=>{ spinBtn(b,"Iniciando…");
+    try{ const r = await apiS("actualizarTodo"); unspin(b); toast(r.enCurso ? "Ya hay una actualización completa en marcha: te aviso cuando termine." : "⚡ Actualización completa en marcha (6–8 min). Podés seguir usando la app: te aviso al terminar."); seguir(r.desde); }
+    catch(e){ unspin(b); toast(msgErr(e)); } };
+  if (TODO_T){ b.disabled = true; b.textContent = "⏳ Actualizando todo…"; }
+  return b;
 }
 /** 3.9zz8 · «Estado de los datos»: semáforo por fuente de la última actualización (incluye pasos salteados por tiempo). */
 function estadoDatos(A){
@@ -3169,7 +3242,7 @@ function pintarFinanzas(body, D, recargar){
   const bAct = el("button",{class:"btn sm",type:"button",text:"🔄 Actualizar"});
   bAct.onclick = ()=>{ spinBtn(bAct,"Leyendo la planilla…"); recargar(true); };
   body.append(el("div",{class:"row act36 act39m"},
-    el("span",{class:"hint",text:`Datos al ${fechaHora(R.leida)}${S.ultimaCarga?" · último movimiento cargado "+fmtF(S.ultimaCarga):""}`}), el("span",{class:"spacer"}), bAct));
+    el("span",{class:"hint",text:`Datos al ${fechaHora(R.leida)}${S.ultimaCarga?" · último movimiento cargado "+fmtF(S.ultimaCarga):""}`}), el("span",{class:"spacer"}), D.todo && typeof botonTodo==="function" ? botonTodo(()=>recargar(false)) : null, bAct));   // 3.9zz10 · solo María
   const ba = barraSeccion(D.audio, "Administración y Finanzas"); if (ba) body.append(ba);
   // 3.9zw · Las alertas ROJAS (datos viejos, planilla que no se pudo leer, importes ilegibles) se muestran siempre arriba: antes no aparecían en ninguna pantalla
   const rojas = (R.alertas||[]).filter(a=>a.nivel==="rojo");
@@ -4479,13 +4552,13 @@ async function vConfig(main){
     el("label",{class:"f"},"Aviso de ubicación (se muestra la primera vez que alguien ficha)",au), bU));
   // Fichada y retención
   const dias = [1,2,3,4,5,6,0].map(d=>{ const x=el("input",{type:"checkbox",value:d,checked:c.diasOperativos.includes(d)}); return el("label",{class:"chk"},x," "+["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"][d]); });
-  const fo = el("input",{type:"checkbox",checked:c.fotoIngresoObligatoria}), ub = el("input",{type:"checkbox",checked:c.ubicacionObligatoria!==false}), ri = el("input",{type:"number",min:"7",max:"3650",value:c.retencionIngresosDias}), ra = el("input",{type:"number",min:"1",max:"120",value:c.retencionAuditoriasMeses});
+  const fo = el("input",{type:"checkbox",checked:true,disabled:true}),   /* 3.9zz10 · siempre obligatoria */ ub = el("input",{type:"checkbox",checked:c.ubicacionObligatoria!==false}), ri = el("input",{type:"number",min:"7",max:"3650",value:c.retencionIngresosDias}), ra = el("input",{type:"number",min:"1",max:"120",value:c.retencionAuditoriasMeses});
   const vd = el("select",{}, el("option",{value:"corridos",text:"Días corridos",selected:c.vacacionesDias!=="apertura"}), el("option",{value:"apertura",text:"Solo días de apertura (sin feriados)",selected:c.vacacionesDias==="apertura"}));
   const av = el("textarea",{maxlength:"600"}); av.value=c.avisoFotos;
   const bF = el("button",{class:"btn primary",type:"button",text:"Guardar"});
   bF.onclick = ()=>guardar({diasOperativos:dias.map(l=>l.querySelector("input")).filter(x=>x.checked).map(x=>Number(x.value)), fotoIngresoObligatoria:fo.checked, ubicacionObligatoria:ub.checked, vacacionesDias:vd.value, retencionIngresosDias:Number(ri.value), retencionAuditoriasMeses:Number(ra.value), avisoFotos:av.value}, bF);
   body.append(el("div",{class:"card"}, el("h2",{text:"🕘 Fichada, fotos y conservación"}), el("h3",{text:"Días de apertura generales (los usa cada sucursal que no tenga los suyos)"}), el("div",{class:"chkgrid"},dias),
-    el("label",{class:"chk"},fo," Foto obligatoria al fichar"),
+    el("label",{class:"chk"},fo," Foto obligatoria al fichar (siempre: se saca en el momento con la cámara de la app)"),
     el("label",{class:"chk"},ub," Ubicación obligatoria al fichar (sin ubicación o fuera del radio, la fichada se rechaza y se ofrece el fichaje manual)"),
     vacOK() ? el("label",{class:"f"},"Cómo se cuentan los días de vacaciones",vd) : null,
     el("div",{class:"grid2"}, el("label",{class:"f"},"Conservar fotos de fichada (días)",ri), el("label",{class:"f"},"Conservar fotos de auditoría (meses)",ra)),
@@ -4559,7 +4632,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz9";
+const APP_V = "3.9zz10";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
