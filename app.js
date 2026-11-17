@@ -40,9 +40,9 @@ const SESSION_KEY = "hb3_t", USER_KEY = "hb3_u", ACT_KEY = "hb3_a";
    y cortarla antes de tiempo haría que la persona la reenvíe por duplicado). */
 const TOPE_MS = { lectura: 40000, escritura: 150000 };
 /* Lecturas: si la red falla o el servidor no responde, se reintentan una vez solas (no duplican nada). */
-const LECTURAS = new Set(["canjesPanel","descargaCanjes","descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","fotoCorreccion","actualizarTodoEstado","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaParaTemplete","descargaCyber","verCertificado"]);
+const LECTURAS = new Set(["trelloPanel","descargaTrelloIngreso","canjesPanel","descargaCanjes","descargaCanales","auditoriaSorteo10","estado","inicio","yo","miJornada","misIngresos","listarPersonal","listarIngresos","fotoIngreso","fotoCorreccion","actualizarTodoEstado","getRegistro","getFoto","hojaUrl","listarAcciones","getCierre","getKPIs","listarHistorial","verificarHistorial","listarNovedades","getConfig","getParams","getFeriados","misVacaciones","listarVacaciones","verificarUbicacion","resumenHoras","panelFichajesHoy","listarSucursales","misSolicitudes","probarUbicacion","previaBorrado","panoramaRRHH","clientesPedidos","produccionPanel","permisosJefes","descargaControl","detalleTaller","vozNeural","contratoSugerido","finanzasPanel","descargaFinanzas","descargaParaTemplete","descargaCyber","verCertificado"]);
 /* Operaciones que el servidor exige confirmar con el PIN (vale 5 min): se pide antes de llamar para ahorrar un viaje. */
-const SENSIBLES = new Set(["detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
+const SENSIBLES = new Set(["conectarTrello","trelloAceptarLectura","trelloConfirmar","detalleControl","cobranzasValidar","cobranzaMarcar","conectarContabilium","altaEmpleado","bajaEmpleado","reactivarEmpleado","resetPin","cambiarRol","cerrarSesionesDe","resolverCorreccion","exportarIngresos","eliminarAuditoria","vaciarRegistro","setConfig","setParams","agregarExcepcion","quitarExcepcion","guardarSucursal","exportarHoras","corregirFichaje","cargarFichajeJefe","borrarFichajes","borrarFichaje","setUmbralesRRHH","setPermisoJefe","setTipoCliente"]);
 const ELEV_VIGENCIA_MS = 4.5*60*1000;
 const espera = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -3115,6 +3115,7 @@ function pintarProduccion(body, D, recargar){
   }
   const rojas = (R.alertas||[]).filter(a=>a.nivel==="rojo").slice(0,2);
   if (rojas.length) body.append(el("div",{class:"card"}, el("ul",{class:"alertas-rrhh"}, rojas.map(a=>el("li",{class:"al-rojo"}, el("span",{class:"sem",text:"🔴"}), el("div",{text:a.texto}))))));
+  if (R.trello || vacOK()) body.append(cardTrello(R, recargar));   // 3.9zz14
   const tabs = [];
   if (R.distribucion) tabs.push(["dist","📦 Distribución SS27", ()=>tabDistribucion(R.distribucion)]);
   if (D.concil && (D.concil.filas||[]).length) tabs.push(["verif","✅ Verificación con Stock", ()=>tabVerifIS(D.concil)]);
@@ -3229,6 +3230,70 @@ function filaCanje(i, puede, recargar){
   return el("div",{class:"row",style:"gap:8px;padding:6px 0;border-top:1px solid var(--line,#e5e5ea);flex-wrap:wrap"},
     el("span",{style:"flex:1 1 220px;min-width:0"}, el("b",{text:i.producto}), el("span",{class:"hint",text:` · ${i.sku} · ${fmtF(i.fecha).slice(0,5)}${i.deposito?" · "+i.deposito:""}`})),
     el("span",{class:"mono",text:`${i.u} × ${i.sinCosto?"sin costo":money(i.costo)}`}), sel, sug, nom, est);
+}
+
+/* ---------------- 3.9zz14 · TRELLO PRODUCCIÓN (blindado) ----------------
+   Muestra qué tarjetas de Trello tienen datos para corregir (la app usa el último dato bueno), avisos, tarjetas borradas y
+   el historial de cambios. María conecta el tablero (solo lectura) y puede forzar una lectura. */
+function cardTrello(R, recargar){
+  const T = R.trello, cuerpo = el("div",{class:"stack"});
+  const est = !T ? "sin conectar" : T.freno ? "⛔ en pausa" : T.error ? "⚠️ con error" : (T.revisar||T.confirmar) ? `⚠️ ${T.revisar||0} para corregir${T.confirmar?" · "+T.confirmar+" para confirmar":""}` : "✅ al día";
+  const det = el("details",{class:"card"}, el("summary",{}, el("b",{text:"🧩 Trello"}), ` · ${est}${T&&T.ts?" · leído "+fmtF(String(T.ts).slice(0,10)).slice(0,5)+" "+new Date(T.ts).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"}):""}`), cuerpo);
+  let cargado = false;
+  det.addEventListener("toggle", async ()=>{ if (!det.open || cargado) return; cargado = true; cuerpo.append(el("p",{class:"hint"}, el("span",{class:"spin"})," Leyendo…"));
+    try{ const D = await apiS("trelloPanel"); cuerpo.textContent=""; pintarTrello(cuerpo, D, recargar); }catch(e){ cuerpo.textContent=""; cuerpo.append(el("p",{class:"notice bad",text:msgErr(e)})); cargado = false; } });
+  return det;
+}
+function pintarTrello(box, D, recargar){
+  const S = D.sync;
+  if (D.conectado) box.append(el("p",{class:"hint",text:`Tablero «${S.tablero||"?"}» · ${S.tarjetas} tarjetas · ${D.ots} en uso · solo lectura (la app nunca cambia Trello).`}));
+  const accion = async (b, fn, args, txt)=>{ spinBtn(b,"…"); try{ await apiS(fn, ...args); toast(txt); recargar(true); }catch(e){ toast(msgErr(e)); } unspin(b); };
+  if (S.freno) box.append(el("div",{class:"notice bad"}, "⛔ Lectura en pausa: "+S.freno+" No se aplicó nada: la app sigue con los datos de antes. Revisá el tablero; si el cambio fue a propósito (por ejemplo, otro tablero), aceptá la lectura.",
+    D.maria ? (b=>{ b.onclick=()=>accion(b,"trelloAceptarLectura",[],"✅ Lectura aceptada"); return b; })(el("button",{class:"btn sm",type:"button",style:"margin-top:6px",text:"Aceptar esta lectura"})) : null));
+  else if (S.error) box.append(el("p",{class:"notice warn",text:"⚠️ Última lectura con error: "+S.error+(S.fallos>1?` (${S.fallos} veces seguidas)`:"")+". La app sigue con los últimos datos buenos."}));
+  // Para corregir (cuarentena)
+  if (D.revisar.length) box.append(el("div",{}, el("h3",{text:`🛑 Para corregir · ${D.revisar.length}`}),
+    el("p",{class:"hint",text:"Estas tarjetas tienen un dato imposible. Mientras no se corrijan, la app usa el último dato bueno (o no las usa, si nunca estuvieron bien)."}),
+    D.revisar.map(r=>el("div",{class:"notice warn",style:"margin:6px 0"},
+      el("b",{text:r.ot+" · "}), r.url ? el("a",{href:r.url,target:"_blank",rel:"noopener",text:r.titulo}) : r.titulo,
+      el("span",{class:"hint",text:r.usaAnterior?" · se usa el dato anterior":" · todavía no se usa"}),
+      el("ul",{style:"margin:6px 0 0 18px"}, r.problemas.map(p=>el("li",{}, `${p.txt} `, el("b",{text:"Qué hacer: "}), p.accion, el("span",{class:"pill",style:"margin-left:6px",text:p.sector}))))))));
+  else if (D.conectado) box.append(el("p",{class:"notice ok",text:"✅ Ninguna tarjeta con datos imposibles."}));
+  if (D.confirmar.length) box.append(el("div",{}, el("h3",{text:`✋ Esperan confirmación · ${D.confirmar.length}`}),
+    el("p",{class:"hint",text:"En estas tarjetas algo BAJÓ o cambió de identidad (llegadas, OT, SKU, curva). Hasta que María confirme, la app sigue con el dato anterior. Si fue un error, se deshace en Trello y esto desaparece solo."}),
+    D.confirmar.map(r=>el("div",{class:"notice warn",style:"margin:6px 0"}, el("b",{text:r.ot+" · "}), r.url ? el("a",{href:r.url,target:"_blank",rel:"noopener",text:r.titulo}) : r.titulo,
+      el("ul",{style:"margin:6px 0 0 18px"}, r.problemas.map(p=>el("li",{text:p.txt}))),
+      D.maria ? (b=>{ b.onclick=()=>accion(b,"trelloConfirmar",[r.cardId,"confirmar"],"✅ Cambio confirmado"); return b; })(el("button",{class:"btn sm",type:"button",text:"Confirmar el cambio"})) : null))));
+  if (D.borradas.length) box.append(el("div",{class:"notice warn"}, "🗑️ Tarjetas borradas en Trello (la app conserva su último dato). Si fue un error, se pueden rearmar desde el respaldo diario; si la tarjeta no tenía que existir, María la descarta:",
+    el("ul",{style:"margin:6px 0 0 18px"}, D.borradas.map(r=>el("li",{}, (r.ot||"")+" · "+r.titulo+" ", D.maria ? (b=>{ b.onclick=()=>accion(b,"trelloConfirmar",[r.cardId,"descartar"],"Tarjeta descartada"); return b; })(el("button",{class:"btn ghost sm",type:"button",text:"Descartar"})) : null)))));
+  if (D.avisos.length) box.append(el("details",{}, el("summary",{text:`Avisos (no frenan nada) · ${D.avisos.reduce((a,x)=>a+x.avisos.length,0)}`}),
+    el("ul",{}, D.avisos.flatMap(x=>x.avisos.map(p=>el("li",{}, el("b",{text:(x.ot||"")+" "}), p.txt+" ", el("span",{class:"hint",text:p.accion}), el("span",{class:"pill",style:"margin-left:6px",text:p.sector})))))));
+  if (D.maria && D.log.length) box.append(el("details",{}, el("summary",{text:"Historial de cambios (últimos 40)"}),
+    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Cuándo","OT","Quién","Qué","Antes","Ahora"].map(x=>el("th",{text:x})))),
+      el("tbody",{}, D.log.map(l=>el("tr",{}, el("td",{text:String(l.ts).slice(5,16).replace("T"," ")}), el("td",{text:l.ot}), el("td",{text:l.quien||"–"}), el("td",{text:l.campo}), el("td",{class:"mono",text:String(l.antes).slice(0,60)}), el("td",{class:"mono",text:String(l.despues).slice(0,60)}))))))));
+  const fila = el("div",{class:"row descargas37",style:"margin-top:8px"});
+  if (D.conectado){
+    const bx = fmt => { const b = el("button",{class:"btn sm",type:"button",text:"⬇️ Llegadas para INGRESO · "+(fmt==="pdf"?"PDF":"Excel")}); b.onclick = async ()=>{ spinBtn(b,"Armando…");
+      try{ const X = await apiS("descargaTrelloIngreso"); await (fmt==="pdf"?exportarPDF37(X):exportarXLSX37(X)); }catch(e){ toast(msgErr(e)); } unspin(b); }; return b; };
+    fila.append(bx("xlsx"), bx("pdf"));
+  }
+  if (D.maria && D.conectado){ const b = el("button",{class:"btn sm",type:"button",text:"🔄 Leer Trello ahora"}); b.onclick = async ()=>{ spinBtn(b,"Leyendo Trello…");
+    try{ const r = await apiS("trelloSincronizar"); toast(r.ok ? `✅ ${r.tarjetas} tarjetas · ${r.revisar} para corregir · ${r.cambios} cambios` : "⚠️ "+(r.freno||r.error)); recargar(true); }catch(e){ toast(msgErr(e)); } unspin(b); }; fila.append(b); }
+  box.append(fila);
+  if (D.maria) box.append(formTrello(D.conectado, recargar));
+}
+function formTrello(conectado, recargar){
+  const key = el("input",{type:"password",autocomplete:"off",placeholder:"API key (32 caracteres)","aria-label":"API key de Trello"});
+  const tk = el("input",{type:"password",autocomplete:"off",placeholder:"Token","aria-label":"Token de Trello"});
+  const tab = el("input",{type:"text",autocomplete:"off",placeholder:"Enlace del tablero (trello.com/b/…)","aria-label":"Enlace del tablero"});
+  const gen = el("a",{class:"btn ghost sm",target:"_blank",rel:"noopener",style:"display:none",text:"Generar token de SOLO LECTURA ↗"});
+  key.oninput = ()=>{ const k = key.value.trim(); if (/^[a-f0-9]{32}$/i.test(k)) { gen.href = "https://trello.com/1/authorize?expiration=never&scope=read&response_type=token&name=Hey%20Blackk%20App&key="+k; gen.style.display=""; } else gen.style.display="none"; };
+  const ok = el("button",{class:"btn sm",type:"button",text:"Conectar"});
+  ok.onclick = async ()=>{ spinBtn(ok,"Probando…"); try{ const r = await apiS("conectarTrello", key.value, tk.value, tab.value); key.value=""; tk.value=""; toast("✅ Trello conectado: «"+r.tablero+"» (solo lectura)."); recargar(true); }catch(e){ toast(msgErr(e)); } unspin(ok); };
+  return el("details",{open:!conectado,style:"margin-top:10px"}, el("summary",{text:conectado?"Cambiar la conexión con Trello":"Conectar el tablero de Trello"}),
+    el("ol",{class:"hint"}, el("li",{text:"Con la cuenta dueña del tablero, entrá a trello.com/power-ups/admin, creá un Power-Up y copiá la API key."}),
+      el("li",{text:"Pegala acá abajo y tocá «Generar token de SOLO LECTURA»: Trello te muestra el token; copialo."}), el("li",{text:"Pegá el token y el enlace del tablero y tocá Conectar. La clave queda guardada en el servidor y no se vuelve a mostrar."})),
+    el("div",{class:"stack"}, key, gen, tk, tab, ok));
 }
 const CYB38 = { D:null, t:0 };
 /* ===================== 3.8 · Finanzas Hey Blackk (planilla «Templete registro actividades» en Dropbox, solo lectura) =====================
@@ -4726,7 +4791,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz13";
+const APP_V = "3.9zz14";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
