@@ -693,15 +693,24 @@ function vEmpleados(main){
 }
 
 /* ----- Fichada (sesión propia del empleado; no toca la sesión de un jefe abierta en el mismo equipo) ----- */
-const F = { token:null, t:null };
-function finFichada(){ if (F.token) api("logout",F.token).catch(()=>{}); F.token=null; clearTimeout(F.t); }
+const F = { token:null, t:null, compartido:false };
+/* 3.9zz15 · Empleados con módulos habilitados (rol «empleado» con permisos personalizados: Canjes, Producción, Pedidos…): un solo ingreso.
+   Al identificarse para fichar quedan adentro de la app con sus módulos; la fichada usa esa misma sesión (no se cierra al terminar de fichar).
+   El resto de los empleados sigue igual (sesión de fichada aparte, que se cierra sola). */
+const empMods = u => !!u && u.rol==="empleado" && (u.permisos||[]).length>0;
+function finFichada(){ if (F.token && !F.compartido) api("logout",F.token).catch(()=>{}); F.token=null; F.compartido=false; clearTimeout(F.t); }
+/* Fin de la pantalla de fichada: el empleado con módulos vuelve al inicio (sigue con su sesión); el resto, a identificarse de nuevo. */
+function cerrarFichada(body){ const c = F.compartido; finFichada(); if (c && S.user) return ir("home"); body.textContent=""; vFichar(body); }
 function vFichar(body){
   finFichada();
+  if (S.user && empMods(S.user) && S.token){ F.token=S.token; F.compartido=true; F.nombre=S.user.nombre; return jornada(body); }
   const u = el("input",{type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",placeholder:"Tu usuario",maxlength:"20","aria-label":"Usuario"});
   const p = el("input",{type:"password",inputmode:"numeric",autocomplete:"current-password",maxlength:"6",placeholder:"Tu PIN (4 números)","aria-label":"PIN"});
   const err = el("div",{class:"notice bad",hidden:true}), b = el("button",{class:"btn primary big-btn",type:"submit",text:"Continuar"});
   body.append(el("form",{class:"card lockcard",onsubmit:async e=>{ e.preventDefault(); err.hidden=true; spinBtn(b,"Verificando…");
-      try{ const r = await api("login", u.value.trim(), p.value, {jornada:true}); p.value=""; F.token=r.token; F.nombre=r.user.nombre; body.textContent=""; jornada(body, r.jornada); }
+      try{ const r = await api("login", u.value.trim(), p.value, {jornada:true}); p.value=""; F.token=r.token; F.nombre=r.user.nombre;
+        if (empMods(r.user) && (!S.user || S.user.id===r.user.id)){ setUser(r); F.compartido=true; }   // 3.9zz15 · un solo ingreso (jurado: nunca pisa la sesión abierta de un jefe)
+        body.textContent=""; jornada(body, r.jornada); }
       catch(x){ unspin(b); err.textContent=msgErr(x); err.hidden=false; p.value=""; } }},
     el("div",{class:"lockicon",text:"👋"}), el("h2",{text:"Identificate para fichar"}),
     el("p",{class:"lead",text:"Usá el usuario y el PIN que te dio tu jefe. Nadie más puede ver tus registros."}), el("div",{class:"grid"}, u, p, err, b)));
@@ -875,18 +884,22 @@ const hm = m => m==null ? "–" : Math.floor(Math.abs(m)/60)+":"+String(Math.abs
 const difTxt = m => m==null ? "–" : (m<0?"−":"+")+hm(m);
 const paresTxt = P => (P||[]).map(p=>(p.extra?"🏠 ":"")+(p.entrada||"¿?")+"–"+(p.salida||(p.enCurso?"…":"¿?"))).join(" · ");   // 3.9zz11 · 🏠 = desde casa (horas extra)
 /** Reinicia el cierre automático de la sesión de fichada (3 min sin uso). */
-function vigilarF(body){ clearTimeout(F.t); F.t = setTimeout(()=>{ finFichada(); body.textContent=""; vFichar(body); toast("Sesión de fichada cerrada"); }, 3*60*1000); }
+function vigilarF(body){ clearTimeout(F.t); F.t = setTimeout(()=>{ if (F.compartido){ if (body.isConnected) cerrarFichada(body); return; } finFichada(); body.textContent=""; vFichar(body); toast("Sesión de fichada cerrada"); }, 3*60*1000); }
 
 /* j: jornada ya recibida junto con el login (ahorra una llamada); si no viene, se pide. */
 async function jornada(body, j){
   vigilarF(body);
   if (!j){
     body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
-    try{ j = await api("miJornada", F.token); }catch(e){ body.textContent=""; vFichar(body); return toast(msgErr(e)); }
+    try{ j = await api("miJornada", F.token); }catch(e){ body.textContent="";
+      if (F.compartido && !esAuth(e)) return body.append(el("div",{class:"card notice bad"}, msgErr(e)+" ", el("button",{class:"btn sm",type:"button",text:"Reintentar",onclick:()=>jornada(body)})));   // 3.9zz15 · sin bucle si falla la red
+      if (F.compartido) limpiarSesion(); vFichar(body); return toast(msgErr(e)); }
   }
   F.j = j; fichando = false; clearTimeout(liberarT);   // pantalla nueva: el bloqueo anti doble toque es solo para la pantalla anterior
   body.textContent="";
   const card = el("div",{class:"card fichar"});
+  // 3.9zz15 · Jurado: con la sesión ya abierta no se pide PIN, así que se muestra quién es y se puede salir si no es esa persona (equipo compartido)
+  if (F.compartido) card.append(el("div",{class:"notice"}, `Estás como ${j.nombre}. `, el("button",{class:"btn sm",type:"button",text:"No soy yo · cerrar sesión",onclick:()=>{ finFichada(); salir("Sesión cerrada"); }})));
   card.append(el("h2",{text:`Hola, ${j.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:`Hoy, ${fmtF(j.fecha)} · Sucursal ${j.sucursal.nombre}`}));
   // 3.9zj · cumpleaños: el cumpleañero ve su fiesta arriba; los cumples de la semana y el pedido de la fecha, abajo
   const cumpleOpts = { llamar:(fn,...a)=>api(fn, F.token, ...a), alCambiar:C=>{ F.j.cumple = C; jornada(body, F.j); }, vigilar:()=>vigilarF(body), nombre:j.nombre };
@@ -929,8 +942,13 @@ async function jornada(body, j){
     el("button",{class:"btn",type:"button",text:"⏱️ Mis horas",onclick:()=>misHoras(body)}),
     el("button",{class:"btn",type:"button",text:"🧾 Mis registros y correcciones",onclick:()=>misRegistros(body)}),
     j.vac ? el("button",{class:"btn",type:"button",text:"🏖️ Mis vacaciones",onclick:()=>{ clearTimeout(F.t); location.hash="#/empleados/vacaciones"; }}) : null,
-    el("span",{class:"spacer"}), el("button",{class:"btn",type:"button",text:"Terminar",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
+    el("span",{class:"spacer"}), F.compartido ? el("button",{class:"btn",type:"button",text:"Terminar y cerrar sesión",onclick:()=>{ finFichada(); salir("Sesión cerrada"); }}) : null,
+    el("button",{class:"btn",type:"button",text:F.compartido?"Ir al inicio":"Terminar",onclick:()=>cerrarFichada(body)})));
   body.append(card);
+  // 3.9zz15 · Empleado con módulos: sus secciones habilitadas, acá mismo (sin pasar por «Jefes y Administración»)
+  if (F.compartido && S.user){ const mods = MODULOS.filter(m=>m.perm && puedeVer(m));
+    if (mods.length) body.append(el("div",{class:"card"}, el("h2",{text:"Tus secciones"}),
+      el("div",{class:"mods"}, ...mods.map((m,i)=>tarjetaMod(m, i+1, S.resumen||null, false))))); }
 }
 /* Entrada abierta de un día anterior: antes de fichar hoy hay que decir a qué hora fue la salida (lo aprueba un jefe). */
 function formAbierta(body, ab){
@@ -1124,9 +1142,9 @@ async function enviarFichada(body, tipo, geo, foto, boton){
       tipo==="salida" || r.minutosHoy ? el("p",{class:"lead",text:"⏱️ Hoy llevás "+horas(r.minutosHoy||0)+(r.minutosExtraHoy?` (${horas(r.minutosExtraHoy)} de horas extra)`:"")}) : null,
       r.tardanza ? el("div",{class:"tard39-c"}, el("h3",{text:`⏰ Llegaste ${r.tardanza.minutos} min tarde`}), el("p",{class:"hint",text:`Tu horario es ${r.tardanza.horario}. Contanos qué pasó: va directo a RR. HH.`}),
         formTardanza39(Object.assign({ respuesta:"pendiente" }, r.tardanza), { llamar:(fn,...a)=>api(fn, F.token, ...a), vigilar:()=>vigilarF(body), alListo:()=>{} })) : null,
-      el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>{ finFichada(); body.textContent=""; vFichar(body); }})));
+      el("button",{class:"btn primary",type:"button",text:"Listo",onclick:()=>cerrarFichada(body)})));
     if (r.tardanza) vigilarF(body);   // 3.9zm · con llegada tarde no se cierra a los 20 s: tiene que poder contestar
-    else setTimeout(()=>{ if (F.token && body.querySelector(".fichar.done")){ finFichada(); body.textContent=""; vFichar(body); } }, 20000);
+    else setTimeout(()=>{ if (F.token && body.querySelector(".fichar.done")) cerrarFichada(body); }, 20000);
   }catch(e){ if (boton) unspin(boton); errorFichada(body, tipo, e, geo); }
 }
 function errorFichada(body, tipo, e, geo){
@@ -1138,7 +1156,7 @@ function errorFichada(body, tipo, e, geo){
   if (/^GEO:/.test(msg)){ let v={motivo:"no_disponible"}; try{ v = JSON.parse(msg.slice(4)); }catch(x){} return pantallaRechazo(body, tipo, v, geo); }
   if (/^RAPIDO:/.test(msg)) return toast(msg.slice(7));
   if (/^ABIERTA:/.test(msg)) return jornada(body);
-  if (esAuth(e)){ toast("La sesión venció. Volvé a identificarte."); body.textContent=""; return vFichar(body); }
+  if (esAuth(e)){ if (F.compartido) limpiarSesion(); toast("La sesión venció. Volvé a identificarte."); body.textContent=""; return vFichar(body); }
   toast("No se registró: "+msgErr(e));
 }
 async function misRegistros(body){
@@ -4385,7 +4403,7 @@ function loginEmpleado(body, texto, onOk){
   const p = el("input",{type:"password",inputmode:"numeric",autocomplete:"current-password",maxlength:"6",placeholder:"Tu PIN","aria-label":"PIN"});
   const err = el("div",{class:"notice bad",hidden:true}), b = el("button",{class:"btn primary big-btn",type:"submit",text:"Continuar"});
   body.append(el("form",{class:"card lockcard",onsubmit:async e=>{ e.preventDefault(); err.hidden=true; spinBtn(b,"Verificando…");
-      try{ const r = await api("login", u.value.trim(), p.value); p.value=""; F.token=r.token; F.nombre=r.user.nombre; onOk(r); }
+      try{ const r = await api("login", u.value.trim(), p.value); p.value=""; F.token=r.token; F.compartido=false; F.nombre=r.user.nombre; onOk(r); }
       catch(x){ unspin(b); err.textContent=msgErr(x); err.hidden=false; p.value=""; } }},
     el("div",{class:"lockicon",text:"🏖️"}), el("h2",{text:"Identificate"}), el("p",{class:"lead",text:texto}), el("div",{class:"grid"}, u, p, err, b)));
   setTimeout(()=>u.focus(),60);
@@ -4399,7 +4417,7 @@ function vVacacionesEmp(body){
 async function vacEmp(body){
   clearTimeout(F.t); F.t = setTimeout(()=>{ finFichada(); body.textContent=""; vVacacionesEmp(body); toast("Sesión cerrada por inactividad"); }, 5*60*1000);
   body.textContent=""; body.append(el("div",{class:"card empty"}, el("span",{class:"spin"})," Cargando…"));
-  let M; try{ M = await api("misVacaciones", F.token); }catch(e){ body.textContent=""; if (esAuth(e)){ F.token=null; return vVacacionesEmp(body); } return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
+  let M; try{ M = await api("misVacaciones", F.token); }catch(e){ body.textContent=""; if (esAuth(e)){ finFichada(); return vVacacionesEmp(body); } return body.append(el("div",{class:"card notice bad",text:msgErr(e)})); }
   body.textContent="";
   // Novedades: solicitudes resueltas que todavía no vi
   if (M.novedades.length){
@@ -4423,7 +4441,7 @@ async function vacEmp(body){
     onSel:f=>{ if (!sel.desde || sel.hasta){ sel.desde=f; sel.hasta=null; } else if (f<sel.desde){ sel.desde=f; } else { sel.hasta=f; } cuenta(); cal.repintar(); }});
   body.append(el("form",{class:"card",onsubmit:async e=>{ e.preventDefault(); spinBtn(bS,"Enviando…");
       try{ const rv = await api("solicitarVacaciones", F.token, sel.desde, sel.hasta||sel.desde, com.value); if (rv && rv.aviso) alert("✅ Solicitud enviada.\n\n⚠️ "+rv.aviso); else toast("✅ Solicitud enviada. La revisa un jefe."); vacEmp(body); }
-      catch(x){ unspin(bS); toast(msgErr(x)); if (esAuth(x)){ F.token=null; body.textContent=""; vVacacionesEmp(body); } } }},
+      catch(x){ unspin(bS); toast(msgErr(x)); if (esAuth(x)){ finFichada(); body.textContent=""; vVacacionesEmp(body); } } }},
     el("div",{class:"notice warn"}, el("b",{text:"⚠️ Febrero: no se pueden tomar vacaciones."}), " Ese mes estamos de SALE y necesitamos a todo el equipo."),
     M.sinSolape ? el("div",{class:"notice warn"}, el("b",{text:`⚠️ En ${M.sucursal} no se pueden pisar las vacaciones.`}), " Fijate en el calendario que nadie de tu equipo esté de vacaciones en esas fechas.") : null,
     el("h2",{text:`Pedir vacaciones · ${M.nombre.split(" ")[0]}`}), el("p",{class:"lead",text:"Elegí el primer y el último día en el calendario. Las fechas pasadas no se pueden pedir. Los puntos muestran vacaciones del equipo ya aprobadas (solo nombre y fechas)."}),
@@ -4791,7 +4809,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz14";
+const APP_V = "3.9zz15";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
