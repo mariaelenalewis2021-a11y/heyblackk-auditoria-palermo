@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hey Blackk · Ventas sin stock (prueba)</title>
+<style>
+:root{--ink:#0d0d0d;--mute:#6b6b6b;--line:#e6e3df;--bg:#f7f5f2;--card:#fff;
+--amarillo:#f2c230;--azul:#2f6fdc;--naranja:#ef7d22;--verde:#1f9d55;--rojo:#d63a3a;--gris:#9a9a9a}
+*{box-sizing:border-box}body{margin:0;font-family:"Plus Jakarta Sans","Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:15px}
+.bar{position:sticky;top:0;z-index:5}header{background:var(--ink);color:#fff;padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+header b{letter-spacing:.18em;font-size:13px}header small{opacity:.7;display:block;font-size:12px;letter-spacing:0}
+header select{background:#222;color:#fff;border:1px solid #444;border-radius:8px;padding:6px 8px;font:inherit;font-size:13px}
+nav{display:flex;gap:6px;overflow-x:auto;padding:10px 14px;background:#fff;border-bottom:1px solid var(--line)}
+nav button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 14px;font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}
+nav button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+main{max-width:1100px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+h2{font-size:17px;margin:0 0 12px}h3{font-size:14px;margin:14px 0 8px;color:var(--mute);text-transform:uppercase;letter-spacing:.08em}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+label{font-size:12px;color:var(--mute);display:block}input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;font:inherit;margin-top:3px;background:#fff}
+textarea{min-height:38px}
+.btn{background:var(--ink);color:#fff;border:0;border-radius:10px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer}
+.btn.sec{background:#fff;color:var(--ink);border:1px solid var(--ink)}.btn.sm{padding:6px 10px;font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}td.n,th.n{text-align:right}
+.tw{overflow-x:auto}
+.pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap}
+.amarillo{background:var(--amarillo);color:#222}.azul{background:var(--azul)}.naranja{background:var(--naranja)}.verde{background:var(--verde)}.rojo{background:var(--rojo)}.gris{background:var(--gris)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.kpi b{font-size:26px;display:block}.kpi span{font-size:12px;color:var(--mute)}
+.kpi.alert{border-color:var(--rojo)}.kpi.alert b{color:var(--rojo)}
+.msg{padding:10px 12px;border-radius:10px;margin:10px 0;font-size:14px}.msg.e{background:#fde8e8;color:#8a1f1f}.msg.o{background:#e6f5ec;color:#145c33}
+.hint{font-size:12px;color:var(--mute);margin-top:6px}
+.placas{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.placa{background:#fff;border-radius:14px;border:1px solid var(--line);overflow:hidden;break-inside:avoid;page-break-inside:avoid}
+.placa .top{padding:12px 14px;color:#fff;display:flex;justify-content:space-between;align-items:center}
+.placa .top b{letter-spacing:.12em;font-size:12px}.placa .top span{font-size:12px;font-weight:700}
+.placa .body{padding:14px}.placa .prod{font-size:16px;font-weight:700}.placa .cod{font-size:12px;color:var(--mute)}
+.big{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+.big div{border:1px solid var(--line);border-radius:10px;padding:8px}.big small{display:block;font-size:10px;letter-spacing:.08em;color:var(--mute);text-transform:uppercase}.big b{font-size:22px}
+.big .hl{border:2px solid var(--naranja)}.big .hl b{color:var(--naranja)}
+.warn{background:#fff6e5;border-left:4px solid var(--naranja);padding:8px 10px;font-size:12px;border-radius:6px}
+.ok{background:#e6f5ec;border-left:4px solid var(--verde);padding:8px 10px;font-size:12px;border-radius:6px}
+.meta{font-size:12px;color:var(--mute);margin-top:8px;line-height:1.5}
+.hide{display:none}
+@media print{.bar{position:static}header,nav,.noprint{display:none!important}body{background:#fff}main{padding:0}.placas{grid-template-columns:1fr 1fr}.placa{border:1px solid #999}
+.placa .top{-webkit-print-color-adjust:exact;print-color-adjust:exact}.pill{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<div class="bar"><header>
+  <div><b>HEY BLACKK</b><small>Ventas sin stock · <span style="background:#f2c230;color:#111;padding:1px 6px;border-radius:6px;font-weight:700">AMBIENTE DE PRUEBA</span> · no toca Contabilium</small></div>
+  <div>Entrar como&nbsp;<select id="rol" onchange="setRol(this.value)"></select></div>
+</header>
+<nav id="tabs"></nav></div>
+<main id="app"></main>
+<script src="sst-core.js"></script>
+<script>
+'use strict';
+var db=SST.nuevoEstado(), roles=[], rol='', tab='tablero', flash=null, filtros={}, TOKEN=null, BACKEND='', ocupado=false;
+var NOMROL={comercial:'Comercial',deposito:'Depósito',admin:'Administración'};
+/* La app (misma dirección) le pasa la sesión al anexo por mensaje; nunca va en la URL ni se guarda. */
+addEventListener('message',function(e){ if(e.origin!==location.origin||!e.data||e.data.tipo!=='hb-sesion')return; TOKEN=e.data.token; BACKEND=e.data.backend; cargar(); });
+function srv(fn,args){ if(!TOKEN)return Promise.reject(new Error('Abrí el anexo desde la app.'));
+  return fetch(BACKEND,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({fn:fn,args:[TOKEN].concat(args)}),redirect:'follow',credentials:'omit',cache:'no-store'})
+   .then(function(r){return r.json()}).then(function(j){ if(!j||!j.ok){var m=String((j&&j.error)||'Error del servidor.').replace(/^Exception:\s*/,''); if(/^AUTH$/.test(m))m='La sesión venció. Volvé a ingresar en la app.'; if(/^PERM$/.test(m))m='Tu usuario no tiene permiso para esta acción.'; throw new Error(m.replace(/^Exception:\s*/,''))} return j.data}); }
+function aplicar(v){ db=v.db; roles=v.roles; if(roles.indexOf(rol)<0)rol=roles[0]; }
+function cargar(){ srv('sstPanel',[]).then(function(v){aplicar(v);render()}).catch(function(e){flash={t:'e',m:e.message};render()}); }
+function u(){return {nombre:NOMROL[rol],rol:rol}}
+function esc(s){return String(s==null?'':s).replace(/[&<>"'`]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]})}
+function n(v){return Number(v||0).toLocaleString('es-AR')}
+function fch(s){if(!s)return'';var t=String(s).slice(0,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(t))return esc(t);var d=t.split('-');return d[2]+'/'+d[1]+'/'+d[0]}
+/* acc = [accion, a, b]: se valida primero con las mismas reglas en el teléfono (respuesta inmediata) y después manda el servidor. */
+function run(fn,okMsg,acc){ if(ocupado)return; try{ fn(); }catch(e){ flash={t:'e',m:e.usuario?e.message:'Error: '+e.message}; cargar(); return; }
+  ocupado=true; flash={t:'o',m:'Guardando…'}; render();
+  srv('sstAccion',[acc[0],rol,acc[1]==null?null:acc[1],acc[2]==null?null:acc[2]]).then(function(x){ aplicar(x.vista); flash={t:'o',m:okMsg(x.r)}; })
+   .catch(function(e){ flash={t:'e',m:e.message}; return srv('sstPanel',[]).then(aplicar).catch(function(){}); })
+   .then(function(){ ocupado=false; render(); }); }
+function copia(){ return JSON.parse(JSON.stringify(db)); }
+function val(id){var e=document.getElementById(id);return e?e.value:''}
+var TABS=[['tablero','📊 Tablero',['comercial','deposito','admin']],['sol','📝 Solicitudes',['comercial','admin']],['dep','✅ Validación Depósito',['deposito','admin']],
+['ing','📦 Ingresos reales',['deposito','admin']],['pla','🏷️ Placas',['comercial','deposito','admin']],['hist','🕓 Historial',['admin']]];
+function setRol(r){if(roles.indexOf(r)<0)return;rol=r;var ok=TABS.filter(function(t){return t[0]===tab&&t[2].indexOf(r)>=0}).length;if(!ok)tab='tablero';render()}
+function pill(c,t){return '<span class="pill '+c+'">'+esc(t)+'</span>'}
+function render(){
+  var sel=document.getElementById('rol'); sel.innerHTML=roles.map(function(r){return '<option value="'+r+'"'+(r===rol?' selected':'')+'>'+NOMROL[r]+'</option>'}).join(''); sel.disabled=roles.length<2;
+  if(!roles.length){document.getElementById('tabs').innerHTML='';document.getElementById('app').innerHTML=(flash?'<div class="msg '+flash.t+'">'+esc(flash.m)+'</div>':'')+'<div class="card"><p class="hint">Cargando…</p></div>';return}
+  document.getElementById('tabs').innerHTML=TABS.filter(function(t){return t[2].indexOf(rol)>=0}).map(function(t){
+    return '<button class="'+(t[0]===tab?'on':'')+'" onclick="tab=\''+t[0]+'\';flash=null;render()">'+t[1]+'</button>'}).join('');
+  var h=flash?'<div class="msg '+flash.t+'">'+esc(flash.m)+'</div>':'';
+  h+=({tablero:vTablero,sol:vSol,dep:vDep,ing:vIng,pla:vPla,hist:vHist})[tab]();
+  document.getElementById('app').innerHTML=h;
+}
+/* ---------- TABLERO ---------- */
+function opts(arr,sel){return '<option value="">Todos</option>'+arr.map(function(x){return '<option'+(x===sel?' selected':'')+'>'+esc(x)+'</option>'}).join('')}
+function uniq(k){return Array.from(new Set(db.solicitudes.map(function(s){return s[k]}).filter(Boolean))).sort()}
+function vTablero(){
+  var t=SST.tablero(db,filtros), dif=SST.diferencias(db);
+  var k=function(v,l,a){return '<div class="kpi'+(a&&v?' alert':'')+'"><b>'+n(v)+'</b><span>'+l+'</span></div>'};
+  var h='<div class="card noprint"><h2>Panel de control</h2><div class="grid">'+
+   '<div><label>Producto (código)</label><input id="f_codigo" value="'+esc(filtros.codigo||'')+'"></div>'+
+   '<div><label>Temporada</label><select id="f_temporada">'+opts(uniq('temporada'),filtros.temporada)+'</select></div>'+
+   '<div><label>Vendedor</label><select id="f_vendedor">'+opts(uniq('vendedor'),filtros.vendedor)+'</select></div>'+
+   '<div><label>Cliente</label><select id="f_cliente">'+opts(uniq('cliente'),filtros.cliente)+'</select></div>'+
+   '<div><label>Estado</label><select id="f_estado">'+opts(Object.keys(SST.EST).map(function(x){return SST.EST[x]}),filtros.estado)+'</select></div></div>'+
+   '<div class="row"><button class="btn sm" onclick="aplicarFiltros()">Filtrar</button><button class="btn sec sm" onclick="filtros={};render()">Limpiar</button>'+
+   '<button class="btn sec sm" onclick="excel()">⬇ Excel</button><button class="btn sec sm" onclick="window.print()">⬇ PDF</button></div></div>';
+  h+='<div class="kpis">'+k(t.total,'Solicitudes')+k(t.pendAprob,'Pendientes de aprobación')+k(t.aprobadas,'Aprobadas')+k(t.productosPendIngreso,'Productos pendientes de ingreso')+
+   k(t.uComprometidas,'Unidades comprometidas')+k(t.uRecibidas,'Unidades recibidas')+k(t.uPendIngreso,'Unidades por recibir')+k(t.uPendRegularizar,'Pendientes de regularizar en Contabilium',1)+
+   k(t.uRegularizadas,'Ya regularizadas')+k(t.uLibresIngresos,'Libres para vender (de ingresos)')+k(t.diferencias,'Diferencias detectadas',1)+k(t.vencidas,'Vencidas por fecha',1)+'</div>';
+  if(dif.length)h+='<div class="card"><h2>⚠️ Diferencias y vencidas (no se corrigen solas)</h2><table><tr><th>Tipo</th><th>Ref.</th><th>Detalle</th></tr>'+
+    dif.map(function(d){return '<tr><td>'+pill(d.tipo==='Vencida'?'amarillo':'rojo',d.tipo)+'</td><td>'+esc(d.ref)+'</td><td>'+esc(d.detalle)+'</td></tr>'}).join('')+'</table></div>';
+  h+='<div class="card"><h2>Solicitudes</h2>'+tablaSol(t.lista,false)+'</div>';
+  if(!db.solicitudes.length&&roles.indexOf('admin')>=0)h+='<div class="card noprint"><h2>¿Probás el circuito?</h2><p class="hint">Carga el caso del pedido: 20 u solicitadas → 20 aprobadas → ingresan 12 → placa por 12 → ingresan 8 → placa por 8. Las placas quedan pendientes para que Administración las marque.</p><button class="btn" onclick="demo()">Cargar caso de prueba</button></div>';
+  if(roles.indexOf('admin')>=0)h+='<div class="row noprint"><button class="btn sec sm" onclick="vaciar()">Vaciar ambiente de prueba</button><button class="btn sec sm" onclick="cargar()">↻ Actualizar</button></div>';else h+='<div class="row noprint"><button class="btn sec sm" onclick="cargar()">↻ Actualizar</button></div>';
+  return h;
+}
+function aplicarFiltros(){['codigo','temporada','vendedor','cliente','estado'].forEach(function(k){filtros[k]=val('f_'+k)});render()}
+function tablaSol(lista,acciones){
+  if(!lista.length)return '<p class="hint">No hay solicitudes.</p>';
+  return '<div class="tw"><table><tr><th>N°</th><th>Fecha</th><th>Cliente / vendedor</th><th>Producto</th><th class="n">Pedido</th><th class="n">Aprob.</th><th class="n">Recib.</th><th class="n">Falta</th><th>Estado</th>'+(acciones?'<th></th>':'')+'</tr>'+
+  lista.map(function(s){var ap=s.validacion?s.validacion.aprobada:'—';
+   return '<tr><td><b>'+esc(s.id)+'</b>'+(s.origen?'<br><span class="hint">rev. de '+esc(s.origen)+'</span>':'')+'</td><td>'+fch(s.fecha)+'</td><td>'+esc(s.cliente)+'<br><span class="hint">'+esc(s.vendedor)+' · '+esc(s.pedidoRef)+'</span></td>'+
+   '<td>'+esc(s.descripcion)+'<br><span class="hint">'+esc(s.codigo)+' · '+esc(s.temporada)+'</span></td><td class="n">'+n(s.cantidad)+'</td><td class="n">'+ap+'</td><td class="n">'+n(s.recibido)+'</td><td class="n">'+n(SST.pendienteDe(s))+'</td>'+
+   '<td>'+pill(SST.colorSolicitud(db,s),s.estado)+'</td>'+(acciones?'<td>'+acciones(s)+'</td>':'')+'</tr>'}).join('')+'</table></div>';
+}
+/* ---------- SOLICITUDES (Comercial) ---------- */
+function vSol(){
+  var h='<div class="card"><h2>Nueva solicitud de venta sin stock</h2><div class="grid">'+
+  ['fecha|Fecha|date|'+new Date().toISOString().slice(0,10),'vendedor|Vendedor / solicitante|text|','cliente|Cliente *|text|','codigo|Código del producto *|text|','descripcion|Descripción|text|','temporada|Temporada|text|SS27',
+   'cantidad|Cantidad *|number|','motivo|Motivo|text|','fechaEstimada|Fecha estimada de disponibilidad|date|','pedidoRef|N° de pedido / referencia|text|','observaciones|Observaciones|text|'].map(function(x){var p=x.split('|');
+   return '<div><label>'+p[1]+'</label><input id="s_'+p[0]+'" type="'+p[2]+'" value="'+p[3]+'"'+(p[2]==='number'?' min="1" step="1"':'')+'></div>'}).join('')+
+  '</div><div class="row"><button class="btn" onclick="crear()">Enviar a Depósito</button></div><p class="hint">Queda «Pendiente de validación de Depósito». No mueve stock en ningún sistema.</p></div>';
+  var mias=db.solicitudes.filter(function(s){return s.estado!==SST.EST.REEMPLAZADA});
+  h+='<div class="card"><h2>Mis solicitudes</h2>'+tablaSol(mias,function(s){
+    if(s.estado===SST.EST.REGULARIZADA||s.estado===SST.EST.RECHAZADA)return '';
+    return '<button class="btn sec sm" onclick="pedirRev(\''+s.id+'\')">'+(s.estado===SST.EST.PEND_VAL?'Cambiar cantidad':'Pedir revisión')+'</button>'})+
+    '<p class="hint">Una vez aprobada, la cantidad no se edita: se genera una revisión nueva (.R1, .R2…) que vuelve a Depósito y conserva el historial.</p></div>';
+  return h;
+}
+function crear(){var d={};['fecha','vendedor','cliente','codigo','descripcion','temporada','cantidad','motivo','fechaEstimada','pedidoRef','observaciones'].forEach(function(k){d[k]=val('s_'+k)});
+  run(function(){return SST.crearSolicitud(copia(),u(),d)},function(s){return 'Solicitud '+s.id+' creada: '+s.cantidad+' u de '+s.codigo+'. Quedó pendiente de Depósito.'},['crear',d])}
+function pedirRev(id){var c=prompt('Nueva cantidad total para '+id+':');if(c===null)return;var m=prompt('Motivo del cambio:');if(m===null)return;
+  run(function(){return SST.revisar(copia(),u(),id,{cantidad:c,motivoRevision:m})},function(s){return s.id===id?'Cantidad actualizada en '+id+'.':'Se creó la revisión '+s.id+' y volvió a Depósito.'},['revisar',id,{cantidad:c,motivoRevision:m}])}
+/* ---------- DEPÓSITO ---------- */
+function vDep(){
+  var pend=db.solicitudes.filter(function(s){return s.estado===SST.EST.PEND_VAL});
+  var h='<div class="card"><h2>Pendientes de validar ('+pend.length+')</h2>';
+  if(!pend.length)h+='<p class="hint">No hay solicitudes esperando.</p>';
+  pend.forEach(function(s){var p='v_'+s.id.replace(/\W/g,'_')+'_';
+    h+='<div class="card" style="background:#fbfaf8"><b>'+esc(s.id)+'</b> · '+esc(s.cliente)+' · '+esc(s.vendedor)+'<br><b>'+esc(s.descripcion||s.codigo)+'</b> <span class="hint">'+esc(s.codigo)+' · '+esc(s.temporada)+'</span> — pide <b>'+n(s.cantidad)+' u</b>'+(s.motivo?'<br><span class="hint">Motivo: '+esc(s.motivo)+'</span>':'')+
+    '<div class="grid" style="margin-top:10px">'+
+    '<div><label>Stock físico actual</label><input id="'+p+'stockFisico" type="number" min="0" value="0"></div>'+
+    '<div><label>De eso, se puede comprometer</label><input id="'+p+'comprometible" type="number" min="0" value="0"></div>'+
+    '<div><label>Pendiente de ingreso confirmado</label><input id="'+p+'pendienteIngreso" type="number" min="0" value="0"></div>'+
+    '<div><label>Respaldo (OT / orden de compra / remito previsto)</label><input id="'+p+'respaldo"></div>'+
+    '<div><label>Fecha estimada de recepción</label><input id="'+p+'fechaRecepcion" type="date" value="'+esc(s.fechaEstimada)+'"></div>'+
+    '<div><label>Cantidad a aprobar</label><input id="'+p+'aprobada" type="number" min="0" value="'+s.cantidad+'"></div>'+
+    '<div><label>Resultado</label><select id="'+p+'resultado"><option>APROBADO</option><option>APROBADO PARCIALMENTE</option><option>RECHAZADO</option></select></div>'+
+    '<div><label>Observaciones de Depósito</label><input id="'+p+'observaciones"></div></div>'+
+    '<div class="row"><button class="btn" onclick="validarSol(\''+s.id+'\',\''+p+'\')">Guardar validación</button></div>'+
+    '<p class="hint">Solo se aprueba lo que esté en stock libre o respaldado por un ingreso confirmado. La fecha y el responsable se registran solos.</p></div>'});
+  h+='</div><div class="card"><h2>Pendientes de ingreso</h2>'+tablaSol(db.solicitudes.filter(function(s){return SST.pendienteDe(s)>0&&(s.estado===SST.EST.APROBADA||s.estado===SST.EST.PARCIAL)}),false)+'</div>';
+  return h;
+}
+function validarSol(id,p){var d={};['stockFisico','comprometible','pendienteIngreso','respaldo','fechaRecepcion','aprobada','resultado','observaciones'].forEach(function(k){d[k]=val(p+k)});
+  run(function(){return SST.validar(copia(),u(),id,d)},function(s){return s.id+': '+s.validacion.resultado+(s.validacion.aprobada?' por '+s.validacion.aprobada+' u. Pasó a pendientes de ingreso.':'.')},['validar',id,d])}
+/* ---------- INGRESOS ---------- */
+function vIng(){
+  var h='<div class="card"><h2>Registrar recepción física</h2><div class="grid">'+
+  ['fecha|Fecha de recepción|date|'+new Date().toISOString().slice(0,10),'codigo|Código del producto *|text|','descripcion|Descripción|text|','temporada|Temporada|text|SS27','cantidad|Cantidad recibida *|number|','remito|N° de remito / documento *|text|','observaciones|Observaciones|text|'].map(function(x){var p=x.split('|');
+   return '<div><label>'+p[1]+'</label><input id="i_'+p[0]+'" type="'+p[2]+'" value="'+p[3]+'"></div>'}).join('')+
+  '</div><div class="row"><button class="btn" onclick="ingresar()">Registrar ingreso</button></div><p class="hint">Al guardar, la app cruza con las solicitudes aprobadas de ese código (la más vieja primero) y genera las placas. Un mismo remito no se puede cargar dos veces para el mismo código.</p></div>';
+  h+='<div class="card"><h2>Ingresos registrados</h2>'+(db.ingresos.length?'<div class="tw"><table><tr><th>N°</th><th>Fecha</th><th>Producto</th><th>Remito</th><th class="n">Recibido</th><th class="n">Comprometido</th><th class="n">Libre</th><th>Placas</th></tr>'+
+  db.ingresos.slice().reverse().map(function(i){return '<tr><td>'+esc(i.id)+'</td><td>'+fch(i.fecha)+'</td><td>'+esc(i.codigo)+'<br><span class="hint">'+esc(i.descripcion)+'</span></td><td>'+esc(i.remito)+'</td><td class="n">'+n(i.cantidad)+'</td><td class="n">'+n(i.asignado)+'</td><td class="n">'+n(i.libre)+'</td><td>'+esc(i.placas.join(', ')||'—')+'</td></tr>'}).join('')+'</table></div>':'<p class="hint">Todavía no hay ingresos.</p>')+'</div>';
+  return h;
+}
+function ingresar(){var d={};['fecha','codigo','descripcion','temporada','cantidad','remito','observaciones'].forEach(function(k){d[k]=val('i_'+k)});
+  run(function(){return SST.registrarIngreso(copia(),u(),d)},function(i){return i.id+' registrado: '+i.cantidad+' u. '+(i.placas.length?'Se generaron '+i.placas.length+' placa(s) por '+i.asignado+' u comprometidas.':'No había solicitudes pendientes de ese producto.')+(i.libre?' Quedan '+i.libre+' u libres para vender.':'');},['ingreso',d])}
+/* ---------- PLACAS ---------- */
+var fPla='pend';
+function vPla(){
+  var lista=db.placas.filter(function(p){return fPla==='todas'||(fPla==='pend'?p.estado!=='REGULARIZADA':p.estado==='REGULARIZADA')}).slice().reverse();
+  var h='<div class="card noprint"><h2>Placas de regularización de stock</h2><div class="row" style="margin-top:0">'+
+   [['pend','Pendientes en Contabilium'],['ok','Regularizadas'],['todas','Todas']].map(function(x){return '<button class="btn '+(fPla===x[0]?'':'sec')+' sm" onclick="fPla=\''+x[0]+'\';render()">'+x[1]+'</button>'}).join('')+
+   '<button class="btn sec sm" onclick="window.print()">🖨 Imprimir / PDF</button></div>'+
+   '<p class="hint">La placa es una instrucción para quien carga Contabilium. La app no descuenta stock: Administración hace el movimiento una sola vez y lo marca acá con su número.</p></div>';
+  if(!lista.length)return h+'<p class="hint">No hay placas en este filtro.</p>';
+  h+='<div class="placas">'+lista.map(placaHTML).join('')+'</div>';
+  return h;
+}
+function placaHTML(p){
+  var s=SST.vigente(db,db.solicitudes.find(function(x){return x.id===p.solicitudVigente}));
+  var dif=SST.diferencias(db).some(function(d){return d.ref===s.id&&d.tipo!=='Vencida'});
+  var c=dif?'rojo':p.estado==='REGULARIZADA'?'verde':p.pendiente>0?'azul':'naranja';
+  var et=dif?'DIFERENCIA DETECTADA':p.estado==='REGULARIZADA'?'REGULARIZADA':p.pendiente>0?'INGRESO PARCIAL · REGULARIZAR':'PENDIENTE EN CONTABILIUM';
+  var libre=p.ingresoTotal-db.placas.filter(function(x){return x.ingreso===p.ingreso}).reduce(function(a,x){return a+x.comprometido},0);
+  return '<div class="placa"><div class="top '+c+'"><b>PLACA '+esc(p.id)+'</b><span>'+et+'</span></div><div class="body">'+
+  '<div class="prod">'+esc(p.descripcion||p.codigo)+'</div><div class="cod">'+esc(p.codigo)+' · Solicitud '+esc(s.id)+' · '+esc(p.cliente)+' · '+fch(p.fecha)+'</div>'+
+  '<div class="big"><div><small>Stock ingresado</small><b>'+n(p.ingresoTotal)+'</b></div><div><small>Comprometido por ventas</small><b>'+n(p.comprometido)+'</b></div>'+
+  '<div><small>Disponible real</small><b>'+n(libre)+'</b></div><div class="hl"><small>Cantidad a regularizar</small><b>'+n(p.aRegularizar)+'</b></div></div>'+
+  '<table><tr><td>Solicitado originalmente</td><td class="n">'+n(p.solicitado)+'</td></tr><tr><td>Aprobado por Depósito</td><td class="n">'+n(p.aprobado)+'</td></tr>'+
+  '<tr><td>Recibido acumulado</td><td class="n">'+n(p.recibidoAcum)+'</td></tr><tr><td>Restante pendiente de ingreso</td><td class="n"><b>'+n(p.pendiente)+'</b></td></tr><tr><td>Remito</td><td class="n">'+esc(p.remito)+'</td></tr></table>'+
+  (p.estado==='REGULARIZADA'?'<div class="ok" style="margin-top:10px">✅ Regularizada en Contabilium · mov. <b>'+esc(p.ctbRef)+'</b> · '+esc(p.regularizadaPor)+' · '+fch(p.regularizadaEl)+'</div>':
+   '<div class="warn" style="margin-top:10px">Estas <b>'+n(p.aRegularizar)+' u</b> ya están vendidas: <b>no</b> están disponibles para nuevas ventas. Descontarlas del disponible en Contabilium una sola vez.</div>'+
+   (rol==='admin'?'<div class="row noprint"><input id="ctb_'+p.id+'" placeholder="N° de movimiento en Contabilium" style="flex:1"><button class="btn sm" onclick="regularizar(\''+p.id+'\')">Marcar hecha</button></div>':'<p class="hint noprint">Solo Administración la marca como hecha.</p>'))+
+  '</div></div>';
+}
+function regularizar(id){var r=val('ctb_'+id);run(function(){return SST.marcarRegularizada(copia(),u(),id,r)},function(p){var s=SST.vigente(db,db.solicitudes.find(function(x){return x.id===p.solicitudVigente}));return 'Placa '+p.id+' regularizada. '+(s.estado===SST.EST.REGULARIZADA?'La solicitud '+s.id+' quedó COMPLETAMENTE REGULARIZADA.':'Solicitud '+s.id+': '+s.estado+'.')},['regularizar',id,r])}
+/* ---------- HISTORIAL ---------- */
+function vHist(){return '<div class="card"><h2>Historial de movimientos</h2><p class="hint">Nada se borra: cada acción queda con fecha, hora y usuario.</p><div class="tw"><table><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Ref.</th><th>Detalle</th></tr>'+
+  db.log.slice().reverse().map(function(l){return '<tr><td>'+fch(l.ts)+' '+esc(String(l.ts).slice(11,16))+'</td><td>'+esc(l.usuario)+'</td><td>'+esc(l.accion)+'</td><td>'+esc(l.ref)+'</td><td>'+esc(l.detalle)+'</td></tr>'}).join('')+'</table></div></div>'}
+/* ---------- EXCEL (abre en Excel 365, varias hojas) ---------- */
+function excel(){
+  function hoja(nom,cab,filas){return '<Worksheet ss:Name="'+nom+'"><Table><Row>'+cab.map(function(c){return '<Cell ss:StyleID="h"><Data ss:Type="String">'+esc(c)+'</Data></Cell>'}).join('')+'</Row>'+
+   filas.map(function(f){return '<Row>'+f.map(function(v){return '<Cell><Data ss:Type="'+(typeof v==='number'?'Number':'String')+'">'+esc(v)+'</Data></Cell>'}).join('')+'</Row>'}).join('')+'</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><SplitHorizontal>1</SplitHorizontal><TopRowBottomPane>1</TopRowBottomPane></WorksheetOptions></Worksheet>'}
+  var x='<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="h"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#0D0D0D" ss:Pattern="Solid"/></Style></Styles>'+
+  hoja('Solicitudes',['N°','Revisión de','Fecha','Vendedor','Cliente','Código','Descripción','Temporada','Pedido','Aprobado','Recibido','Falta','Estado','Ref. comercial','Motivo','Validó','Respaldo'],db.solicitudes.map(function(s){var v=s.validacion||{};return [s.id,s.origen||'',s.fecha,s.vendedor,s.cliente,s.codigo,s.descripcion,s.temporada,s.cantidad,v.aprobada||0,s.recibido,SST.pendienteDe(s),s.estado,s.pedidoRef,s.motivo,v.responsable||'',v.respaldo||'']}))+
+  hoja('Ingresos',['N°','Fecha','Código','Descripción','Remito','Recibido','Comprometido','Libre','Responsable','Placas'],db.ingresos.map(function(i){return [i.id,i.fecha,i.codigo,i.descripcion,i.remito,i.cantidad,i.asignado,i.libre,i.responsable,i.placas.join(', ')]}))+
+  hoja('Placas',['N°','Fecha','Solicitud','Cliente','Código','Ingreso','Remito','Ingresado','Comprometido','A regularizar','Pendiente','Estado','Mov. Contabilium','Regularizó','El'],db.placas.map(function(p){return [p.id,p.fecha,p.solicitudVigente,p.cliente,p.codigo,p.ingreso,p.remito,p.ingresoTotal,p.comprometido,p.aRegularizar,p.pendiente,p.estado,p.ctbRef,p.regularizadaPor,p.regularizadaEl]}))+
+  hoja('Diferencias',['Tipo','Ref.','Detalle'],SST.diferencias(db).map(function(d){return [d.tipo,d.ref,d.detalle]}))+
+  hoja('Historial',['Fecha y hora','Usuario','Rol','Acción','Ref.','Detalle'],db.log.map(function(l){return [l.ts,l.usuario,l.rol,l.accion,l.ref,l.detalle]}))+'</Workbook>';
+  var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([x],{type:'application/vnd.ms-excel'}));
+  a.download='VentasSinStock-PRUEBA_'+new Date().toISOString().slice(0,16).replace(/[-:T]/g,'')+'.xls';document.body.appendChild(a);a.click();a.remove();
+}
+/* ---------- CASO DE PRUEBA (solo Administración, en el servidor) ---------- */
+function demo(){ run(function(){},function(){tab='pla';fPla='todas';if(roles.indexOf('admin')>=0)rol='admin';return 'Caso cargado: 2 placas (12 u y 8 u) pendientes. Como Administración, marcalas con un número de movimiento y la solicitud queda completamente regularizada.'},['casoPrueba']); }
+function vaciar(){ if(confirm('¿Borrar todos los datos del ambiente de prueba?')) run(function(){},function(){return 'Ambiente de prueba vacío.'},['vaciar']); }
+render();
+</script>
+</body>
+</html>

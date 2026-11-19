@@ -282,7 +282,7 @@ function pintarVista(id){
   if (id==="otros") return vOtros(main);
   if (!S.user) return loginCard(main, "Ingresá con tu usuario y PIN para abrir este módulo.");
   if (!puedeVer(m) || (id==="vacaciones" && !vacOK())) return main.append(el("div",{class:"card empty",text:"🔒 Tu usuario no tiene permiso para este módulo. Si lo necesitás, pedíselo a un administrador."}));
-  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, canjes:vCanjes, produccion:vProduccion, finanzas:vFinanzas}[id];
+  const V = {ingresos:vIngresos, auditoria:vAuditoria, kpi:vKPI, historial:vHistorial, cierre:vCierre, rrhh:vRRHH, config:vConfig, vacaciones:vVacaciones, clientes:vClientes, canjes:vCanjes, produccion:vProduccion, finanzas:vFinanzas, ventasstock:vVentasStock}[id];
   V(main);
 }
 addEventListener("hashchange", route);
@@ -458,13 +458,14 @@ const MODULOS = [
   {id:"finanzas",  t:"Administración y Finanzas", d:"Pagos, cobros e ingresos por ventas: qué entró, qué salió, a dónde se fue y qué hacer. Explicado simple.", c:"#15803D", perm:"finanzas"},
   {id:"clientes",  t:"Clientes y pedidos", d:"Qué pidió cada cliente, qué se entregó y qué falta.", c:"#B45309", perm:"clientes"},
   {id:"canjes",    t:"Canjes", d:"Lo que se llevaron las influencers por mes, a costo, y lo que devolvieron.", c:"#BE185D", perm:"canjes"},
+  {id:"ventasstock",t:"Ventas sin stock · prueba", d:"Anexo de prueba: solicitudes sin stock, validación de Depósito Lima, ingresos y placas de regularización.", c:"#0F172A", perm:"ventasstock"},
   {id:"produccion",t:"Producción", d:"Planificado, ingresado, talleres y lo que falta fabricar.", c:"#4F46E5", perm:"produccion"},
   {id:"otros",     t:"Otros", d:"Instalar la app y cambiar tu PIN.", c:"#CA8A04", perm:null},
   {id:"config",    t:"Configuración", d:"Ubicación, objetivos y alertas.", c:"#111113", perm:"config"}
 ];
 const PERSONAL = {id:"personal", t:"Personal", d:"Altas, bajas, PIN y permisos.", c:"#2563EB", perm:"personal", go:()=>{ location.hash="#/empleados/personal"; }};
 const modDe = id => MODULOS.find(m=>m.id===id);
-const puedeVer = m => !m.perm || m.perm.split("|").some(tiene);
+const puedeVer = m => m.id==="ventasstock" ? (vacOK() || tiene("ventasstock")) : (!m.perm || m.perm.split("|").some(tiene));
 
 const saludoHora = () => { const h=new Date().getHours(); return h<12 ? "Buen día" : h<19 ? "Buenas tardes" : "Buenas noches"; };
 const fechaLarga = () => { const s=new Date().toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long"}); return s.charAt(0).toUpperCase()+s.slice(1); };
@@ -861,7 +862,7 @@ function editarSectores(x, recargar){
     catch(e){ unspin(ok); toast(msgErr(e)); } };
 }
 function editarPermisos(x, recargar){
-  const NOM = {finanzas:"Administración y Finanzas",clientes:"Clientes y pedidos",canjes:"Canjes (influencers)",produccion:"Producción",ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
+  const NOM = {finanzas:"Administración y Finanzas",clientes:"Clientes y pedidos",canjes:"Canjes (influencers)",ventasstock:"Ventas sin stock · prueba (Depósito)",produccion:"Producción",ingresos:"Fichaje y horas (jefes)",auditar:"Auditar",auditoria:"Registro de auditorías",acciones:"Acciones correctivas",kpi:"KPIs",historial:"Historial",cierre:"Cierre diario",rrhh:"Novedades RR. HH.",vacaciones:"Vacaciones (resolver solicitudes)",otros:"Otros",personal:"Personal (altas y bajas)",config:"Configuración"};
   const rol = el("select",{}, ...["empleado","responsable","admin"].map(r=>el("option",{value:r,text:{empleado:"Empleado",responsable:"Jefe / Responsable",admin:"Administración"}[r],selected:x.rol===r})));
   const checks = Object.keys(NOM).filter(k=>k!=="vacaciones" || /^maria$/i.test(String(x.legajo||""))).map(k=>{ const c=el("input",{type:"checkbox",value:k,checked:x.permisos.includes(k)}); return el("label",{class:"chk"},c," "+NOM[k]); });
   const pers = el("input",{type:"checkbox",checked:x.permisosPersonalizados});
@@ -3195,6 +3196,14 @@ function cardsControlResumen(K){
    Pedido de María (16/11): lo que sale de HB Lima / HB Palermo al depósito «Canjes influencers» de Contabilium, por mes, con el costo
    de cada producto. Florencia marca lo que devuelven (se descuenta del total). Descarga en PDF y Excel. */
 const MES_CJ = m => { const [y,mm] = String(m).split("-"); return ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][Number(mm)-1]+" "+y; };
+/* Anexo «Ventas sin stock» (ambiente de prueba, 19/11/2026). Página aparte de la misma dirección; la sesión se le pasa por
+   postMessage solo a esta misma dirección (nunca por URL). El servidor decide los roles: María = Comercial + Administración;
+   permiso «ventasstock» = Depósito Lima. No toca Contabilium ni planillas de la empresa. */
+function vVentasStock(main){
+  const fr = el("iframe",{src:"anexo-ventas-sin-stock.html?v="+encodeURIComponent(String(APP_V||"")),title:"Ventas sin stock (prueba)",style:"width:100%;height:calc(100vh - 170px);min-height:620px;border:1px solid #e5e7eb;border-radius:14px;background:#fff"});
+  fr.addEventListener("load", ()=>{ try{ fr.contentWindow.postMessage({tipo:"hb-sesion", token:S.token, backend:BACKEND}, location.origin); }catch(e){} });
+  main.append(el("p",{class:"hint",text:"Ambiente de prueba: lo que se cargue acá no cambia el stock ni Contabilium."}), fr);
+}
 async function vCanjes(main){
   const body = el("div",{class:"stack"}); main.append(body);
   let desde = null, hasta = null;
@@ -4809,7 +4818,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz15";
+const APP_V = "3.9zz20";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
