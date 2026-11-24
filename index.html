@@ -677,6 +677,24 @@ body.is-home::after{opacity:.35}
 .meses39{overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}.meses39 .btn{flex:none}
 .pagt39{width:100%;border-collapse:collapse;margin-top:8px}.pagt39 td{padding:8px 4px;border-top:1px solid var(--line);vertical-align:top}.pagt39 td.d{width:34px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:center}.pagt39 td.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.pagt39 tr.pas39 td.d{color:var(--warn);font-weight:700}.pagt39 .pill{margin-left:6px}
 @media (max-width:520px){.pasos39 li{flex-wrap:wrap}}
+/* 3.9zz21 · Tus horas del mes (fichaje) */
+.horas-mes{display:grid;gap:8px;padding:12px 14px;border-radius:16px;border:1px solid var(--line);background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.horas-mes.cargando{color:var(--muted);font-size:14px}
+.horas-mes .hm-cab{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:space-between}
+.horas-mes .hm-cab .k{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.horas-mes .hm-titulo{font-size:18px} .horas-mes .hm-texto{margin:0;font-weight:600}
+.hm-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px}
+.hm-k{border:1px solid var(--line);border-radius:12px;padding:8px 10px;display:grid;gap:2px;background:var(--bg)}
+.hm-k .k{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em} .hm-k b{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+.hm-k.pos b{color:#0F766E}
+.horas-mes.felicito{border-color:#0D9488;background:linear-gradient(135deg,color-mix(in srgb,#0D9488 14%,transparent),color-mix(in srgb,#22C55E 10%,transparent))}
+.horas-mes.bonus{border-color:#D97706;background:linear-gradient(135deg,color-mix(in srgb,#F59E0B 22%,transparent),color-mix(in srgb,#EC4899 14%,transparent))}
+.horas-mes.bonus .hm-titulo{background:linear-gradient(90deg,#B45309,#DB2777);-webkit-background-clip:text;background-clip:text;color:transparent;font-size:20px;letter-spacing:.02em}
+.horas-mes.bonus{animation:hmBrillo 2.4s ease-in-out 2}
+@keyframes hmBrillo{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 6px color-mix(in srgb,#F59E0B 25%,transparent)}}
+@media (prefers-reduced-motion:reduce){.horas-mes.bonus{animation:none}}
+.horas-mes .hm-barra i{background:linear-gradient(90deg,#0D9488,#22C55E)} .horas-mes.bonus .hm-barra i{background:linear-gradient(90deg,#F59E0B,#EC4899)}
+.horas-mes .btn.sm{justify-self:start}
 </style>
 </head>
 <body>

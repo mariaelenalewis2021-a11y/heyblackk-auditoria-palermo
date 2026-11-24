@@ -946,6 +946,7 @@ async function jornada(body, j){
     el("span",{class:"spacer"}), F.compartido ? el("button",{class:"btn",type:"button",text:"Terminar y cerrar sesión",onclick:()=>{ finFichada(); salir("Sesión cerrada"); }}) : null,
     el("button",{class:"btn",type:"button",text:F.compartido?"Ir al inicio":"Terminar",onclick:()=>cerrarFichada(body)})));
   body.append(card);
+  bloqueHorasMes(card, j, body);   // 3.9zz21 · horas totales del mes, felicitación y «Bonus Extra»
   // 3.9zz15 · Empleado con módulos: sus secciones habilitadas, acá mismo (sin pasar por «Jefes y Administración»)
   if (F.compartido && S.user){ const mods = MODULOS.filter(m=>m.perm && puedeVer(m));
     if (mods.length) body.append(el("div",{class:"card"}, el("h2",{text:"Tus secciones"}),
@@ -1186,6 +1187,44 @@ async function misRegistros(body){
       el("div",{class:"grid2"}, el("label",{class:"f"},"Fecha",f), el("label",{class:"f"},"Tipo",t), el("label",{class:"f"},"Hora correcta",h)), el("label",{class:"f"},"Motivo",m),
       el("div",{class:"row"}, b, el("button",{class:"btn",type:"button",text:"Volver",onclick:()=>jornada(body)}))));
 }
+/* 3.9zz21 · Pedido de María: al fichar, cada persona ve cuántas horas TOTALES lleva en el mes, si cumplió lo pactado (felicitación)
+   y si lo superó («Bonus Extra»), con acceso al detalle de horas totales y horas de más. Solo lectura (resumenHoras propias).
+   Horas de más = lo trabajado por encima de lo pactado en los días que fichó (diferencia positiva) + horas extra desde casa.
+   Es un reconocimiento informativo: no calcula pagos. */
+async function bloqueHorasMes(card, j, body){
+  const box = el("div",{class:"horas-mes cargando","aria-live":"polite"}, el("span",{class:"spin"})," Sumando tus horas del mes…");
+  const fila = card.querySelector(".row:last-of-type");
+  if (fila) card.insertBefore(box, fila); else card.append(box);
+  const mes = hoy().slice(0,7);
+  let r; try{ r = await api("resumenHoras", F.token, {desde: mes+"-01", hasta: hoy()}); }catch(e){ box.remove(); return; }
+  if (!box.isConnected) return;
+  const e = r && r.empleados && r.empleados[0];
+  if (!e){ box.remove(); return; }
+  const extraCasa = e.totalExtra||0, total = (e.total||0) + extraCasa;
+  const M = (j.contrato && j.contrato.mes) || {};
+  const carga = e.cargaMes && e.cargaMes.minutos!=null ? e.cargaMes.minutos : (M.carga!=null ? M.carga : null);
+  const alDiaRef = M.esperadoHastaHoy!=null ? M.esperadoHastaHoy : (e.esperado!=null ? e.esperado : null);
+  const deMas = Math.max(0, e.diferencia||0) + extraCasa;
+  const cumplioMes = carga!=null && carga>0 && (e.total||0) >= carga;
+  const alDia = alDiaRef!=null && (e.total||0) >= alDiaRef;
+  const nombreMes = new Date().toLocaleDateString("es-AR",{month:"long"});
+  let tipo = "", titulo = "", texto = "";
+  if (cumplioMes && deMas>0){ tipo = "bonus"; titulo = "🏆 ¡BONUS EXTRA!"; texto = `Cumpliste el total de horas de ${nombreMes} y sumaste ${hm(deMas)} h de más. ¡Gracias por la garra!`; }
+  else if (cumplioMes){ tipo = "felicito"; titulo = "🎉 ¡Felicitaciones!"; texto = `Cumpliste el total de horas de ${nombreMes}. ¡Excelente trabajo!`; }
+  else if (deMas>0){ tipo = "bonus"; titulo = "🏆 ¡Bonus Extra!"; texto = `Este mes llevás ${hm(deMas)} h de más que lo pactado. ¡Gracias por el esfuerzo!`; }
+  else if (alDia && alDiaRef>0){ tipo = "felicito"; titulo = "👏 ¡Vas al día con tus horas!"; texto = "Cumpliste todo lo pactado hasta hoy. ¡Seguí así!"; }
+  else if (alDiaRef!=null && alDiaRef>(e.total||0)){ tipo = "falta"; titulo = "⏳ Tus horas al día de hoy"; texto = `Te faltan ${hm(alDiaRef-(e.total||0))} h para estar al día con lo pactado.`; }
+  box.className = "horas-mes "+tipo; box.textContent = "";
+  const kpi = (k,v,cls) => el("div",{class:"hm-k "+(cls||"")}, el("span",{class:"k",text:k}), el("b",{text:v}));
+  box.append(...[el("div",{class:"hm-cab"}, el("span",{class:"k",text:`⏱️ Tus horas de ${nombreMes}`}), titulo ? el("b",{class:"hm-titulo",text:titulo}) : null),
+    texto ? el("p",{class:"hm-texto",text:texto}) : null,
+    el("div",{class:"hm-kpis"}, kpi("Horas totales", hm(total)+" h"), carga!=null ? kpi("Pactado del mes", hm(carga)+" h") : null,
+      kpi("Horas de más", deMas>0 ? "+"+hm(deMas)+" h" : "0 h", deMas>0 ? "pos" : "")),
+    carga ? el("div",{class:"barra-hoy hm-barra",title:`${Math.round((e.total||0)/carga*100)} % de tu carga del mes`}, el("i",{style:`width:${Math.min(100, Math.round((e.total||0)/carga*100))}%`})) : null,
+    extraCasa ? el("p",{class:"hint",text:`Incluye ${hm(extraCasa)} h extra desde casa.`}) : null,
+    el("button",{class:"btn sm",type:"button",text:"Ver mis horas totales y horas de más →",onclick:()=>misHoras(body)}),
+    el("p",{class:"hint",text:"Es un reconocimiento informativo: no cambia tu liquidación."})].filter(Boolean));
+}
 /* "Mis horas": solo las propias, por mes, con días, semanas, total, promedio y diferencia con lo esperado (si está cargado). */
 async function misHoras(body, mes){
   vigilarF(body);
@@ -1205,7 +1244,9 @@ async function misHoras(body, mes){
 function tablaHorasEmpleado(e, r, jefe, onCorregir){
   const box = el("div",{class:"grid"});
   const kpi = (k,v,cls) => el("div",{class:"hk "+(cls||"")}, el("span",{class:"k",text:k}), el("b",{text:v}));
-  box.append(el("div",{class:"hkpis"}, kpi("Total", hm(e.total)+" h"), e.totalExtra ? kpi("🏠 Horas extra", hm(e.totalExtra)+" h", "pos") : null, kpi("Días trabajados", String(e.diasTrabajados)), kpi("Promedio diario", e.promedio==null?"–":hm(e.promedio)+" h"),
+  const deMas21 = Math.max(0, e.diferencia||0) + (e.totalExtra||0);   // 3.9zz21 · horas de más = por encima de lo pactado + extra desde casa
+  box.append(el("div",{class:"hkpis"}, kpi("Total", hm(e.total)+" h"), e.totalExtra ? kpi("🏠 Horas extra", hm(e.totalExtra)+" h", "pos") : null,
+    e.totalExtra ? kpi("Total con extra", hm((e.total||0)+e.totalExtra)+" h") : null, kpi("Horas de más", deMas21>0 ? "+"+hm(deMas21)+" h" : "0 h", deMas21>0 ? "pos" : ""), kpi("Días trabajados", String(e.diasTrabajados)), kpi("Promedio diario", e.promedio==null?"–":hm(e.promedio)+" h"),
     e.esperado!=null ? kpi("Esperado", hm(e.esperado)+" h") : null, e.diferencia!=null ? kpi("Diferencia", difTxt(e.diferencia)+" h", e.diferencia<0?"neg":"pos") : null));
   const avisos = [];
   if (e.incompletos) avisos.push(`${e.incompletos} día(s) incompleto(s): no se suman hasta que se corrijan.`);
@@ -4818,7 +4859,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz20";
+const APP_V = "3.9zz21";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
