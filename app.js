@@ -2463,13 +2463,12 @@ function pintarPlan39(box, cargar){
     const ult = c.ultima && c.ultima.sinPago ? el("p",{class:"notice bad",text:`🔴 Sin pagos desde la última factura (${c.ultima.factura}, ${fd(c.ultima.fecha)}): le falta abonar ${money(c.ultima.falta)}${c.sena?" (el 50 % de lo que se llevó)":""}.`}) : null;
     const tb = el("tbody"); c.movimientos.slice().reverse().forEach(m=>tb.append(el("tr",{class:m.tipo==="pago"?"mov-pago39":"mov-fac39"},
       el("td",{text:fd(m.fecha)}), el("td",{}, m.tipo==="pago"?"💵 ":"📦 ", m.detalle, m.tipo==="factura"?el("small",{class:"hint",text:` · debe abonar ${money(m.aPagar)} · ${(EST_FAC39[m.estado]||"").replace(/^\S+\s/,"").toLowerCase()}`}):null),
-      el("td",{class:"n"+(m.tipo==="pago"?" ok-t":""),text:(m.tipo==="pago"?"− ":"")+money(m.monto)}), el("td",{class:"n",text:m.tipo==="pago"?money(m.queda):""}))));
+      el("td",{class:"n"+(m.tipo==="pago"?" ok-t":""),text:(m.tipo==="pago"?"− ":"")+money(m.monto)}), el("td",{class:"n",text:m.tipo==="pago"?money(c.pedido-m.queda):""}))));
     box.append(el("details",{class:"card det39",open:c.faltaAbonar>0?"":null},
-      el("summary",{}, el("b",{text:c.granCuenta}), ` · queda por pagar ${moneyK(c.saldoPedido)} · `, el("b",{class:c.faltaAbonar?"bad-t":"ok-t",text:c.faltaAbonar?`hoy debe ${moneyK(c.faltaAbonar)}`:"al día"})),
+      el("summary",{}, el("b",{text:c.granCuenta}), " · ", el("b",{class:c.faltaAbonar?"bad-t":"ok-t",text:c.faltaAbonar?`hoy debe ${moneyK(c.faltaAbonar)}`:"al día"})),
       el("div",{class:"plan-res39"},
         el("div",{}, el("small",{text:"Pedido inicial"}), el("b",{text:money(c.pedido)})),
         el("div",{}, el("small",{text:"Abonó"}), el("b",{class:"ok-t",text:money(c.abono)})),
-        el("div",{}, el("small",{text:"Queda por pagar"}), el("b",{text:money(c.saldoPedido)})),
         el("div",{}, el("small",{text:"Se llevó"}), el("b",{text:money(c.seLlevo)})),
         el("div",{}, el("small",{text:"Falta enviar"}), el("b",{text:money(c.faltaEnviar)})),
         el("div",{}, el("small",{text:"Hoy debe"}), el("b",{class:c.faltaAbonar?"bad-t":"ok-t",text:c.faltaAbonar?money(c.faltaAbonar):"$ 0"}))),
@@ -2477,7 +2476,7 @@ function pintarPlan39(box, cargar){
       ult,
       el("h3",{text:"Estado de cuenta"}), tablaCuenta39(c),
       el("h3",{text:"Pagos y entregas, por fecha"}),
-      c.movimientos.length ? el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Fecha","Movimiento","Importe","Queda por pagar"].map((h,i)=>el("th",{class:i>=2?"n":null,text:h})))), tb)) : el("p",{class:"hint",text:"Sin pagos ni facturas todavía."}),
+      c.movimientos.length ? el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Fecha","Movimiento","Importe","Total abonado a esa fecha"].map((h,i)=>el("th",{class:i>=2?"n":null,text:h})))), tb)) : el("p",{class:"hint",text:"Sin pagos ni facturas todavía."}),
       el("p",{class:"hint",text:c.regla}),
       (()=>{ const x = el("button",{class:"btn sm",type:"button",text:`⬇️ Excel de ${c.granCuenta}`}), p = el("button",{class:"btn sm",type:"button",text:`⬇️ PDF de ${c.granCuenta}`});
         x.onclick = ()=>bajarPlan39(x,"xlsx",[c],false); p.onclick = ()=>bajarPlan39(p,"pdf",[c],false); return el("div",{class:"row descargas37"}, x, p); })()));
@@ -2554,7 +2553,7 @@ async function xlsxPlan39(R, cuentas, general){
   cuentas.forEach(c=>{
     const ws = wb.addWorksheet(String(c.granCuenta).replace(/[\\\/\?\*\[\]:]/g," ").slice(0,31), {pageSetup:{orientation:"landscape",paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0}});
     titulo(ws, `${String(c.granCuenta).toUpperCase()} · Estado de cuenta SS27`, 7);
-    const tiles = [["Pedido inicial",c.pedido,COL39.azulF],["Entregado (SS27)",c.seLlevo,COL39.gris],["Abonado total",c.abono,COL39.ok],["Debe hoy",c.faltaAbonar,c.faltaAbonar?COL39.pen:COL39.ok],["Falta entregar",c.faltaEnviar,COL39.gris],["Queda por pagar del pedido",c.saldoPedido,COL39.azulF]];
+    const tiles = [["Pedido inicial",c.pedido,COL39.azulF],["Entregado (SS27)",c.seLlevo,COL39.gris],["Abonado total",c.abono,COL39.ok],["Debe hoy",c.faltaAbonar,c.faltaAbonar?COL39.pen:COL39.ok],["Falta entregar",c.faltaEnviar,COL39.gris]];
     tiles.forEach(([t,v,col],i)=>{ const a = ws.getCell(4,i+1), b = ws.getCell(5,i+1); a.value = t; a.font = {bold:true,size:9,color:{argb:COL39.txt}}; b.value = v; b.numFmt = $f; b.font = {bold:true,size:13};
       [a,b].forEach(x=>{ x.fill = fill(col); x.border = borde; x.alignment = {horizontal:"center",vertical:"middle",wrapText:true}; }); });
     ws.getRow(5).height = 24; let r = 7;
@@ -2567,9 +2566,9 @@ async function xlsxPlan39(R, cuentas, general){
     [4,5,6].forEach(j=>{ const res = filasPlan39(c).reduce((a,f)=>a+[0,0,0,f.aPagar,f.pagos,f.falta][j-1],0); tr.getCell(j).value = {formula:`SUM(${L(j)}${r0}:${L(j)}${r-1})`, result:res}; tr.getCell(j).numFmt = $f; });
     for (let j=1;j<=7;j++){ const x = tr.getCell(j); x.font = {bold:true}; x.fill = fill(COL39.azulF); x.border = borde; } r += 2;
     const pagos = (c.movimientos||[]).filter(m=>m.tipo==="pago");
-    cab(ws, r, ["Fecha","Pago","Importe","Queda por pagar del pedido"]); r++;
+    cab(ws, r, ["Fecha","Pago","Importe","Total abonado a esa fecha"]); r++;
     if (!pagos.length){ ws.getCell(r,1).value = "Sin pagos registrados."; r++; }
-    pagos.forEach(m=>{ const row = ws.getRow(r); row.values = [fdd39(m.fecha), m.detalle, m.monto, m.queda]; [3,4].forEach(j=>row.getCell(j).numFmt = $f); for (let j=1;j<=4;j++){ row.getCell(j).border = borde; row.getCell(j).fill = fill(COL39.ok); } r++; });
+    pagos.forEach(m=>{ const row = ws.getRow(r); row.values = [fdd39(m.fecha), m.detalle, m.monto, c.pedido - m.queda]; [3,4].forEach(j=>row.getCell(j).numFmt = $f); for (let j=1;j<=4;j++){ row.getCell(j).border = borde; row.getCell(j).fill = fill(COL39.ok); } r++; });
     r++; [c.regla].concat(c.avisos||[]).forEach(t=>{ ws.mergeCells(r,1,r,7); const x = ws.getCell(r,1); x.value = t; x.alignment = {wrapText:true}; x.font = {italic:true,size:9,color:{argb:COL39.txt}}; ws.getRow(r).height = Math.max(16, Math.ceil(t.length/120)*14); r++; });
     [14,40,22,18,18,18,16].forEach((w,i)=>ws.getColumn(i+1).width = w);
   });
@@ -2606,8 +2605,8 @@ async function pdfPlan39(R, cuentas, general){
   }
   cuentas.forEach(c=>{
     nueva(); cabeza(`${String(c.granCuenta).toUpperCase()} · Estado de cuenta SS27`);
-    const tiles = [["Pedido inicial",c.pedido,CF.ant],["Entregado (SS27)",c.seLlevo,[237,237,237]],["Abonado total",c.abono,CF.ok],["Debe hoy",c.faltaAbonar,c.faltaAbonar?CF.pen:CF.ok],["Falta entregar",c.faltaEnviar,[237,237,237]],["Queda por pagar",c.saldoPedido,CF.ant]];
-    const tw = (W-2*M-5*6)/6; tiles.forEach(([t,v,col],i)=>{ const x = M+i*(tw+6); doc.setFillColor(...col); doc.roundedRect(x, 72, tw, 38, 4, 4, "F");
+    const tiles = [["Pedido inicial",c.pedido,CF.ant],["Entregado (SS27)",c.seLlevo,[237,237,237]],["Abonado total",c.abono,CF.ok],["Debe hoy",c.faltaAbonar,c.faltaAbonar?CF.pen:CF.ok],["Falta entregar",c.faltaEnviar,[237,237,237]]];
+    const tw = (W-2*M-4*6)/5; tiles.forEach(([t,v,col],i)=>{ const x = M+i*(tw+6); doc.setFillColor(...col); doc.roundedRect(x, 72, tw, 38, 4, 4, "F");
       doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(95,95,104); doc.text(t, x+6, 84); doc.setFont("helvetica","bold"); doc.setFontSize(11.5); doc.setTextColor(20,20,22); doc.text(pl(v), x+6, 102); });
     let y = 122;
     if (c.ultima && c.ultima.sinPago){ doc.setFillColor(...CF.pen); doc.rect(M, y, W-2*M, 18, "F"); doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(192,0,0);
@@ -2619,8 +2618,8 @@ async function pdfPlan39(R, cuentas, general){
       columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"},5:{halign:"right",fontStyle:"bold"}},
       didParseCell:d=>{ if (d.section==="foot" && d.column.index>=2) d.cell.styles.halign = "right"; if (d.section!=="body") return; const f = F[d.row.index]; d.cell.styles.fillColor = f.anticipo ? CF.ant : CF[(EST39[f.estado]||EST39["sin pago"])[1]]; } }));
     const P = (c.movimientos||[]).filter(m=>m.tipo==="pago");
-    doc.autoTable(Object.assign({}, base, { startY:doc.lastAutoTable.finalY+14, head:[["Fecha","Pago","Importe","Queda por pagar del pedido"]],
-      body:P.length ? P.map(m=>[fdd39(m.fecha), String(m.detalle).replace(/·/g,"-"), pl(m.monto), pl(m.queda)]) : [[{content:"Sin pagos registrados.",colSpan:4}]], columnStyles:{2:{halign:"right"},3:{halign:"right"}},
+    doc.autoTable(Object.assign({}, base, { startY:doc.lastAutoTable.finalY+14, head:[["Fecha","Pago","Importe","Total abonado a esa fecha"]],
+      body:P.length ? P.map(m=>[fdd39(m.fecha), String(m.detalle).replace(/·/g,"-"), pl(m.monto), pl(c.pedido - m.queda)]) : [[{content:"Sin pagos registrados.",colSpan:4}]], columnStyles:{2:{halign:"right"},3:{halign:"right"}},
       didParseCell:d=>{ if (d.section==="body" && P.length) d.cell.styles.fillColor = CF.ok; } }));
     let yy = doc.lastAutoTable.finalY + 12; doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(95,95,104);
     [c.regla].concat(c.avisos||[]).forEach(t=>{ const ln = doc.splitTextToSize(t, W-2*M); if (yy + ln.length*10 > H-30){ doc.addPage(); yy = 40; } doc.text(ln, M, yy); yy += ln.length*10 + 3; }); doc.setTextColor(0);
@@ -4859,7 +4858,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz21";
+const APP_V = "3.9zz22";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
