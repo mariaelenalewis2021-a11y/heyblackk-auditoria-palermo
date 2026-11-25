@@ -2474,6 +2474,7 @@ function pintarPlan39(box, cargar){
         el("div",{}, el("small",{text:"Hoy debe"}), el("b",{class:c.faltaAbonar?"bad-t":"ok-t",text:c.faltaAbonar?money(c.faltaAbonar):"$ 0"}))),
       c.pedido ? el("div",{class:"plan39"}, el("span",{style:`width:${Math.min(100,Math.round(c.abono/c.pedido*100))}%`})) : null,
       ult,
+      c.ccSaldo!=null ? concil39(c) : null,
       el("h3",{text:"Estado de cuenta"}), tablaCuenta39(c),
       el("h3",{text:"Pagos y entregas, por fecha"}),
       c.movimientos.length ? el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("thead",{}, el("tr",{}, ...["Fecha","Movimiento","Importe","Total abonado a esa fecha"].map((h,i)=>el("th",{class:i>=2?"n":null,text:h})))), tb)) : el("p",{class:"hint",text:"Sin pagos ni facturas todavía."}),
@@ -2485,6 +2486,25 @@ function pintarPlan39(box, cargar){
   const bx = el("button",{class:"btn sm",type:"button",text:"⬇️ Excel general"}), bp = el("button",{class:"btn sm",type:"button",text:"⬇️ PDF general"});
   bx.onclick = ()=>bajarPlan39(bx, "xlsx", R.cuentas, true); bp.onclick = ()=>bajarPlan39(bp, "pdf", R.cuentas, true);
   box.append(el("div",{class:"row descargas37"}, el("span",{class:"hint",text:"Resumen general y una hoja por cliente:"}), bx, bp));
+}
+/* 3.9zz23 · Conciliación con la cuenta corriente (pedido de María): lo que pide la regla del 50 %, menos la seña adelantada de
+   lo que falta entregar, más los otros movimientos de la cuenta = saldo de la cuenta corriente. Con saldo a favor, se imputa con su saldo. */
+function concil39(c){
+  if (c.ccSaldo == null || !isFinite(c.ccSaldo)) return null;
+  const D = Math.round((c.debiaAbonar||0) - (c.abono||0)), S = c.senaPendiente||0, O = Math.round(c.ccSaldo - (D - S));
+  const fila = (t,v,cls) => el("tr",{class:cls||null}, el("td",{text:t}), el("td",{class:"n",text:v}));
+  const sg = v => v < 0 ? `${money(-v)} a favor` : money(v);
+  const rows = [fila(D >= 0 ? "Según la regla del 50 %, le faltaría abonar" : "Según la regla del 50 %, abonó de más", D >= 0 ? money(D) : "− "+money(-D))];
+  if (S) rows.push(fila(`− Seña adelantada de lo que falta entregar (50 % de ${money(c.faltaEnviar)})`, "− "+money(S)));
+  if (Math.abs(O) >= 1) rows.push(fila(`${O > 0 ? "+" : "−"} Otros movimientos de la cuenta corriente (saldo anterior a SS27, facturas o partes que no son SS27, notas de crédito, diferencias entre Contabilium y la planilla)`, (O > 0 ? "+ " : "− ")+money(Math.abs(O))));
+  rows.push(fila("= Saldo de la cuenta corriente", sg(c.ccSaldo), "tot38"));
+  rows.push(fila("Resta pagar del pedido total (saldo de la cuenta corriente + lo que falta entregar)", sg(c.restaPedido||0)));
+  return el("div",{},
+    el("h3",{text:"Conciliación con la cuenta corriente"}),
+    c.imputaConSaldo ? (c.faltaAbonar
+      ? el("p",{class:"notice warn",text:`Tiene ${money(-c.ccSaldo)} a favor en la cuenta corriente: se imputa contra los ${money(c.reglaFaltaAbonar)} que pide la regla del 50 %. No alcanza: hoy debe abonar ${money(c.faltaAbonar)}.`})
+      : el("p",{class:"notice ok",text:`Tiene ${money(-c.ccSaldo)} a favor en la cuenta corriente: alcanza para cubrir los ${money(c.reglaFaltaAbonar)} que pide la regla del 50 %. Hoy no tiene que abonar nada.`})) : null,
+    el("div",{class:"tablewrap"}, el("table",{class:"compact"}, el("tbody",{}, ...rows))));
 }
 /* ---------- 3.9zg · Resumen general (como la planilla) + descargas Excel/PDF general o por cliente ---------- */
 const fdd39 = f => f ? f.split("-").reverse().join("/") : "";
@@ -4858,7 +4878,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz22";
+const APP_V = "3.9zz23";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
