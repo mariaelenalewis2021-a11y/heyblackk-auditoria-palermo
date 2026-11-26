@@ -3649,12 +3649,13 @@ function tabGrandes(R){
   const out = [];
   { const cp = cardPlanPagos39(); if (cp) out.push(cp); }   // 3.9ze
   if (R.gcSS27 && R.gcSS27.cuentas.length){ const G = R.gcSS27;
-    const cab = el("tr",{}, ...["Gran cuenta","Pidió","Abonó","Falta pagar","Despachado","Hoy"].map((t,i)=>el("th",{class:i?"n":"",text:t})));
+    const cab = el("tr",{}, ...["Gran cuenta","Pidió","Abonó","Falta pagar","Despachado","Hoy","Saldo cta. cte."].map((t,i)=>el("th",{class:i?"n":"",text:t})));
     const filas = G.cuentas.map(c=>el("tr",{}, el("th",{scope:"row",text:c.granCuenta}), el("td",{class:"n",text:c.pedido?moneyK(c.pedido):"–"}),
       el("td",{class:"n",text:moneyK(c.abono)+(c.pct!=null?` · ${c.pct} %`:"")}), el("td",{class:"n"+(c.faltaPagar?" neg":""),text:c.pedido?moneyK(c.faltaPagar):"–"}),
-      el("td",{class:"n",text:moneyK(c.facturado)}), el("td",{class:"n"+(c.debe?" neg":""),text:c.debe?"debe "+moneyK(c.debe):c.aFavor?"a favor "+moneyK(c.aFavor):"al día"})));
+      el("td",{class:"n",text:moneyK(c.facturado)}), el("td",{class:"n"+(c.debe?" neg":""),text:c.debe?"debe "+moneyK(c.debe):c.aFavor?"a favor "+moneyK(c.aFavor):"al día"}),
+      el("td",{class:"n",text:c.ccSaldo==null?"–":c.ccSaldo<0?"a favor "+moneyK(-c.ccSaldo):c.ccSaldo>0?"debe "+moneyK(c.ccSaldo):"$ 0"})));
     filas.push(el("tr",{class:"tot38"}, el("th",{scope:"row",text:"Total"}), el("td",{class:"n",text:moneyK(G.pedido)}), el("td",{class:"n",text:moneyK(G.abono)+(G.pct!=null?` · ${G.pct} %`:"")}),
-      el("td",{class:"n",text:moneyK(G.faltaPagar)}), el("td",{class:"n",text:moneyK(G.facturado)}), el("td",{class:"n",text:G.debe?"debe "+moneyK(G.debe):""})));
+      el("td",{class:"n",text:moneyK(G.faltaPagar)}), el("td",{class:"n",text:moneyK(G.facturado)}), el("td",{class:"n",text:G.debe?"debe "+moneyK(G.debe):""}), el("td",{})));
     const av = [].concat(...G.cuentas.map(c=>c.avisos.map(t=>c.granCuenta+": "+t)));
     out.push(el("div",{class:"card"}, el("div",{class:"row"}, el("h2",{style:"margin:0",text:"🤝 Temporada SS27"}), el("span",{class:"spacer"}), el("span",{class:"pill",text:"🔒 Solo vos"})),
       el("div",{class:"hkpis",style:"margin-top:10px"}, hk("Pidieron", moneyK(G.pedido)), hk("Abonaron", moneyK(G.abono), G.pct!=null?G.pct+" % del pedido":"", "pos"), hk("Falta que paguen", moneyK(G.faltaPagar), "", G.faltaPagar?"neg":"")),
@@ -4878,7 +4879,7 @@ function cardFeriadosConfig(F, alCambiar){
 document.querySelectorAll("img.logo").forEach(i=>i.src=LOGO);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 /* 3.9g · Auto-actualización: si hay una versión nueva publicada, se borra la copia guardada y se recarga (una vez por versión). */
-const APP_V = "3.9zz23";
+const APP_V = "3.9zz24";
 (async()=>{ try{ const r = await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const v = (await r.json()).v;
   if (v && v !== APP_V){ let ya=null; try{ ya=sessionStorage.getItem("hb_upd"); }catch(e){} if (ya===v) return; try{ sessionStorage.setItem("hb_upd", v); }catch(e){}
     try{ if (navigator.serviceWorker){ const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(x=>x.unregister())); } }catch(e){}
